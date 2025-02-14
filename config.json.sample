@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "irc.example.com": {
+      "nick": "MyBotNick",
+      "nickserv_password": "your_password",
+      "use_tls": false,
+      "random_nick": true
+    }
+  },
+  "default_download_path": "./downloads",
+  "allowed_mimetypes": ["image/jpeg", "image/png", "text/plain"],
+  "max_file_size": 104857600,  // 100 MB
+  "idle_timeout": 300,  // 5 minutes
+  "cleanup_interval": 60  // 1 minute
+}
