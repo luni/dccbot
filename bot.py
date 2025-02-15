@@ -539,14 +539,17 @@ class IRCBot(AioSimpleIRCClient):
         elapsed_time = time.time() - transfer["start_time"]
         transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
 
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
-            logger.info(
-                f"Download complete: {transfer['file_name']}, size: {file_size} bytes, "
-                f"transfer rate: {transfer_rate:.2f} KB/s"
-            )
-        else:
+        if not os.path.exists(file_path):
             logger.error(f"Download failed: {file_path} does not exist")
+        else:
+            file_size = os.path.getsize(file_path)
+            if file_size != transfer["size"]:
+                logger.error("%s Download failed: size mismatch %s != %s", transfer["file_name"], file_size, transfer["size"])
+            else:
+                logger.info(
+                    f"Download complete: {transfer['file_name']}, size: {file_size} bytes, "
+                    f"transfer rate: {transfer_rate:.2f} KB/s"
+                )
         del self.dcc_transfers[dcc]
 
     def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event):
