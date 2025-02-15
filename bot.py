@@ -262,28 +262,28 @@ class IRCBot(AioSimpleIRCClient):
 
     def on_nosuchnick(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a NO SUCH NICK message from the server."""
-        logger.info("Failed to send message: " + event.arguments[0])
+        logger.info("Failed to send message: %s", event.arguments[0])
 
     def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a BANNEDFROMCHAN message from the server."""
-        logger.info("Banned from channel: " + event.arguments[0])
+        logger.info("Banned from channel %s: %s", event.target, event.arguments[0])
         self.banned_channels.add(event.arguments[0])
 
     def on_part(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a PART message from the server."""
-        logger.info("Left channel: " + event.target)
+        logger.info("Left channel %s: %s", event.target, event.arguments)
         if event.target in self.joined_channels:
             del self.joined_channels[event.target]
 
     def on_join(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot joins a channel."""
-        logger.info("Joined channel: " + event.target)
+        logger.info("Joined channel %s: %s", event.target, event.arguments)
         self.joined_channels[event.target] = time.time()
         self.banned_channels.discard(event.target)
 
     def on_kick(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot is kicked from a channel."""
-        logger.info("Kicked from channel: " + event.target)
+        logger.info("Kicked from channel %s: %s", event.target, event.arguments)
         if event.target in self.joined_channels:
             del self.joined_channels[event.target]
 
