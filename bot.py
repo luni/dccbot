@@ -459,7 +459,8 @@ class IRCBot(AioSimpleIRCClient):
             "offset": offset,
             "size": size,
             "percent": 0,
-            "completed": completed
+            "completed": completed,
+            "last_progress_update": None
         }
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
@@ -483,14 +484,14 @@ class IRCBot(AioSimpleIRCClient):
             dcc.disconnect()
             return
 
+        now = time.time()
         percent = int(100 * transfer['bytes_received'] / transfer['size'])
-        if transfer["percent"] + 10 <= percent:
+        if transfer["percent"] + 10 <= percent or now - transfer["last_progress_update"] > 10:
             transfer["percent"] = percent
-            elapsed_time = time.time() - transfer["start_time"]
+            elapsed_time = now - transfer["start_time"]
             transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
-            logger.info(
-                f"Downloaded {transfer['file_path']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s"
-            )
+            logger.info(f"Downloaded {transfer['file_path']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s")
+            transfer["last_progress_update"] = now
 
         file_path = transfer["file_path"]
         data = event.arguments[0]
