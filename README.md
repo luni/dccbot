@@ -10,18 +10,10 @@ Features
 *   send messages to channels or users
 *   part channels
 *   support for dcc connections
-*   support for sending and receiving files over dcc
+*   support for receiving files over dcc
 
 Usage
 -----
-
-### Installation
-
-    pip install dccbot
-
-### Running
-
-    dccbot
 
 ### Configuration
 
@@ -31,17 +23,21 @@ keys:
 
 *   `servers`: a list of servers the bot should connect to. Each server is an
     object with the following keys:
-    *   `host`: the hostname of the irc server
-    *   `port`: the port number to connect to
-    *   `password`: the password to use when connecting to the server (optional)
-    *   `nick`: the nickname to use when connecting to the server (optional)
-    *   `channels`: a list of channels to join after connecting to the server
-*   `dcc`: a list of dcc connections to accept. Each connection is an object with
-    the following keys:
-    *   `host`: the hostname of the user to accept dcc connections from
-    *   `port`: the port number to listen for dcc connections on
-    *   `nick`: the nickname of the user to accept dcc connections from (optional)
-    *   `password`: the password to use when accepting dcc connections (optional)
+    *   `nick`: the nickname to use when connecting to the server
+    *   `nickserv_password`: the password to use when connecting to the server, optional
+    *   `use_tls`: a boolean indicating whether to use tls when connecting to the
+        server
+    *   `random_nick`: a boolean indicating whether to use a random nickname when
+        connecting to the server
+*   `download_path`: the directory where the bot should download files
+*   `allowed_mimetypes`: a list of mimetypes the bot should allow to be sent
+    over dcc
+*   `max_file_size`: the maximum size of a file to be sent over dcc
+*   `channel_idle_timeout`: the number of seconds a channel can be idle before
+    the bot will part the channel
+ *  `server_idle_timeout`: the number of seconds a server can be idle before
+    the bot will disconnect from the server
+
 
 ### API
 
@@ -52,5 +48,4 @@ available at `http://localhost:8080/` by default.
 *   `POST /part`: part a channel
 *   `POST /msg`: send a message to a channel or user
 *   `POST /shutdown`: shutdown the bot
-*   `POST /update_server`: update a server configuration
-*   `POST /remove_server`: remove a server configuration
+

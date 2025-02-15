@@ -26,21 +26,21 @@ class IRCBot(AioSimpleIRCClient):
 
     def __init__(self,
                  server: str,
-                 nick: str,
-                 nickserv_password: Optional[str],
+                 server_config: dict,
                  download_path: str,
                  allowed_mimetypes: list,
-                 max_file_size: int,
-                 use_tls: bool,
-                 random_nick: bool):
+                 max_file_size: int):
         super().__init__()
         self.server = server
-        self.nick = self._generate_random_nick(nick) if random_nick else nick
-        self.nickserv_password = nickserv_password
+        self.server_config = server_config
+        if server_config.get("random_nick", False):
+            self.nick = self._generate_random_nick(server_config.get("nick", "dccbot"))
+        else:
+            self.nick = server_config.get("nick", "dccbot")
+
         self.download_path = download_path
         self.allowed_mimetypes = allowed_mimetypes
         self.max_file_size = max_file_size
-        self.use_tls = use_tls
         self.joined_channels = {}  # (channel) -> last active time
         self.dcc_transfers = {}  # track active DCC connections
         self.resume_queue = []
@@ -87,13 +87,13 @@ class IRCBot(AioSimpleIRCClient):
             self.connection = AioConnection(self.reactor)
             connect_factory = None
 
-            if self.use_tls:
+            if self.server_config.get("use_tls", False):
                 # Initialize AioConnection with the custom connect_factory
                 connect_factory = AioFactory(ssl=True)
-                port = 6697
+                port = self.server_config.get("port", 6697)
             else:
                 connect_factory = AioFactory()
-                port = 6667
+                port = self.server_config.get("port", 6667)
 
             await self.connection.connect(self.server, port, self.nick, connect_factory=connect_factory)
             logger.info(f"Connecting to server: {self.server} with nick: {self.nick}")
@@ -163,6 +163,22 @@ class IRCBot(AioSimpleIRCClient):
         logger.debug(f"Queued command: {data}")
 
     async def process_command_queue(self):
+        """
+        Process commands from the command queue.
+
+        This function runs an infinite loop that checks the command queue for new commands. If a command is found,
+        it will be processed according to the command. The commands can be one of the following:
+
+        - send: Send a message to the specified user/channel.
+        - join: Join the specified channel.
+        - part: Part the specified channel.
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
         while True:
             data = await self.command_queue.get()
             self.last_active = time.time()
@@ -191,13 +207,10 @@ class IRCBot(AioSimpleIRCClient):
         """
         Called when the bot receives the welcome message from the server.
 
-        This method is called by the IRC library when the bot receives the welcome
-        message from the server. The welcome message is sent by the server to the
-        bot when the bot connects to the server.
+        If the bot is configured to authenticate with NickServ, this method sends the
+        IDENTIFY command to NickServ.
 
-        This method starts the bot's event loop by calling the `process_command_queue`
-        method. The `process_command_queue` method processes the command queue and
-        sends messages to the channels specified in the command queue.
+        Also joins channels, of the bot is configured to join channels.
 
         Args:
             connection (irc.client_aio.AioConnection): The connection to the IRC server.
@@ -206,9 +219,13 @@ class IRCBot(AioSimpleIRCClient):
         logger.info(f"Connected to server: {self.server}")
 
         # Authenticate with NickServ
-        if self.nickserv_password:
-            self.connection.privmsg("NickServ", f"IDENTIFY {self.nickserv_password}")
+        if self.server_config.get("nickserv_password"):
+            self.connection.privmsg("NickServ", f"IDENTIFY {self.server_config['nickserv_password']}")
             logger.info("Sent NickServ IDENTIFY command")
+
+        # Join channels
+        for channel in self.server_config.get("channels", []):
+            asyncio.create_task(self.join_channel(channel))
 
         # Start processing the message queue
         asyncio.create_task(self.process_command_queue())
@@ -503,13 +520,10 @@ class IRCBotManager:
             server_config = self.config["servers"].get(server, {})
             bot = IRCBot(
                 server,
-                server_config.get("nick", "BotNick"),
-                server_config.get("nickserv_password", ""),
+                server_config,
                 self.config.get("default_download_path", "./downloads"),
                 self.config.get("allowed_mimetypes", []),
                 self.config.get("max_file_size", 100 * 1024 * 1024),  # Default: 100 MB
-                server_config.get("use_tls", False),
-                server_config.get("random_nick", False),
             )
             self.bots[server] = bot
             await bot.connect()

@@ -4,7 +4,9 @@
       "nick": "MyBotNick",
       "nickserv_password": "your_password",
       "use_tls": false,
-      "random_nick": true
+      "random_nick": true,
+      "channels": ["#channel"],
+      "port": 6667
     }
   },
   "default_download_path": "./downloads",
