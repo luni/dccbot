@@ -44,6 +44,7 @@ class IRCBot(AioSimpleIRCClient):
         self.max_file_size = max_file_size
         self.joined_channels = {}  # (channel) -> last active time
         self.dcc_transfers = {}  # track active DCC connections
+        self.banned_channels = set()
         self.resume_queue = set()
         self.command_queue = asyncio.Queue()
         self.mime_checker = magic.Magic(mime=True)
@@ -126,8 +127,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         self.connection.join(channel)
-        self.joined_channels[channel] = time.time()
-        logger.info(f"Joined channel: {channel}")
+        logger.info(f"Try to join channel: {channel}")
 
     async def part_channel(self, channel: str, reason: Optional[str] = None):
         """
@@ -144,7 +144,6 @@ class IRCBot(AioSimpleIRCClient):
         self.connection.part(channel)
         logger.info(f"Parted channel: {channel} ({reason})")
         self.last_active = time.time()
-        del self.joined_channels[channel]
 
     async def queue_command(self, data: dict):
         """
@@ -193,6 +192,22 @@ class IRCBot(AioSimpleIRCClient):
 
                 if not data.get('user') or not data.get('message'):
                     continue
+
+                # wait until bot joined channel
+                if data.get('channels'):
+                    waiting_channels = data['channels']
+                    retry = 0
+                    while retry < 10 and waiting_channels:
+                        for channel in list(waiting_channels):
+                            if channel in self.joined_channels:
+                                waiting_channels.remove(channel)
+
+                        await asyncio.sleep(1)
+                        retry += 1
+
+                    if waiting_channels:
+                        logger.warning(f"Failed to join channels {', '.join(waiting_channels)} after 10 seconds")
+                        continue
 
                 try:
                     self.connection.privmsg(data.get('user'), data.get('message'))
@@ -245,9 +260,32 @@ class IRCBot(AioSimpleIRCClient):
         # logger.info(event.arguments[0])
         pass
 
-    def on_nosuchnick(self, connection, event):
+    def on_nosuchnick(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a NO SUCH NICK message from the server."""
         logger.info("Failed to send message: " + event.arguments[0])
+
+    def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Called when the bot receives a BANNEDFROMCHAN message from the server."""
+        logger.info("Banned from channel: " + event.arguments[0])
+        self.banned_channels.add(event.arguments[0])
+
+    def on_part(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Called when the bot receives a PART message from the server."""
+        logger.info("Left channel: " + event.target)
+        if event.target in self.joined_channels:
+            del self.joined_channels[event.target]
+
+    def on_join(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Called when the bot joins a channel."""
+        logger.info("Joined channel: " + event.target)
+        self.joined_channels[event.target] = time.time()
+        self.banned_channels.discard(event.target)
+
+    def on_kick(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Called when the bot is kicked from a channel."""
+        logger.info("Kicked from channel: " + event.target)
+        if event.target in self.joined_channels:
+            del self.joined_channels[event.target]
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event):
         """
