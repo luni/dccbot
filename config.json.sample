@@ -8,8 +8,22 @@
     }
   },
   "default_download_path": "./downloads",
-  "allowed_mimetypes": ["image/jpeg", "image/png", "text/plain"],
-  "max_file_size": 104857600,  // 100 MB
-  "idle_timeout": 300,  // 5 minutes
-  "cleanup_interval": 60  // 1 minute
+  "allowed_mimetypes": [
+    "image/jpeg",
+    "image/png",
+    "video/x-matroska",
+    "video/x-msvideo",
+    "video/mp4",
+    "video/webm",
+    "application/zip",
+    "application/x-tar",
+    "audio/mpeg",
+    "audio/mp4",
+    "text/plain",
+    "application/gzip",
+    "application/x-rar"
+  ],
+  "max_file_size": 8589934592,
+  "channel_idle_timeout": 10,
+  "server_idle_timeout": 300
 }
