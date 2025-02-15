@@ -352,7 +352,11 @@ class IRCBot(AioSimpleIRCClient):
 
             self.init_dcc_connection(item[0], peer_port, file_name, item[4], resume_position, False)
 
-        if event.arguments[1].startswith("SEND "):
+        if event.arguments[1].startswith("SEND ") or event.arguments[1].startswith("SSEND "):
+            use_ssl = False
+            if event.arguments[1].startswith("SSEND "):
+                use_ssl = True
+
             payload = event.arguments[1]
             parts = shlex.split(payload)
             if len(parts) != 5:
@@ -411,10 +415,10 @@ class IRCBot(AioSimpleIRCClient):
                 else:
                     logger.info(f"Send DCC RESUME {file_name} starting at {local_size} bytes")
                     self.connection.ctcp_reply(event.source.nick, shlex.join(["DCC", "RESUME", file_name, str(peer_port), str(local_size)]))
-                    self.resume_queue.add((peer_address, peer_port, file_name, local_size, size))
+                    self.resume_queue.add((peer_address, peer_port, file_name, local_size, size, use_ssl))
                     return
 
-            self.init_dcc_connection(peer_address, peer_port, file_name, size, None, completed)
+            self.init_dcc_connection(peer_address, peer_port, file_name, size, None, completed, use_ssl)
 
     def init_dcc_connection(self,
                             peer_address: str,
@@ -422,7 +426,8 @@ class IRCBot(AioSimpleIRCClient):
                             file_name: str,
                             size: int,
                             offset: Optional[int] = None,
-                            completed: Optional[bool] = None):
+                            completed: Optional[bool] = None,
+                            use_ssl: Optional[bool] = False):
         """
         Initialize a DCC connection to a peer.
 
@@ -437,9 +442,10 @@ class IRCBot(AioSimpleIRCClient):
             size (int): The size of the file.
             offset (int): The offset of the file to resume from.
             completed (bool): Whether the file transfer is completed.
+            use_ssl (bool): Whether to use SSL.
         """
-        download_path = os.path.join(self.download_path, file_name)
-        logger.info(f"Receiving DCC file {file_name} from {peer_address}:{peer_port}, size: {size} bytes")
+        logger.info("Receiving file via DCC " if not use_ssl else "Receiving file via SSL DCC ",
+                    f"{file_name} from {peer_address}:{peer_port}, size: {size} bytes")
 
         # Convert the port to an integer
         logger.info("Connecting to %s:%s", peer_address, peer_port)
@@ -447,17 +453,22 @@ class IRCBot(AioSimpleIRCClient):
         # Create a new DCC connection
         dcc: AIODCCConnection = self.dcc('raw')
 
+        connect_factory = AIOFactory()
+        if use_ssl:
+            connect_factory = AioFactory(ssl=True)
+
         # Schedule the connection to be established
-        self.loop.create_task(dcc.connect(peer_address, peer_port))
+        self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory))
 
         # Store the information about the file transfer
         self.dcc_transfers[dcc] = {
-            "file_path": download_path,
+            "file_path": os.path.join(self.download_path, file_name),
             "file_name": file_name,
             "start_time": time.time(),
             "bytes_received": 0,
             "offset": offset,
             "size": size,
+            "ssl": use_ssl,
             "percent": 0,
             "completed": completed,
             "last_progress_update": None
