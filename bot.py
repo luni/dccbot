@@ -8,6 +8,7 @@ import random
 import string
 import shlex
 import struct
+import re
 from aiohttp import web
 from irc.connection import AioFactory
 from irc.client_aio import AioSimpleIRCClient, AioConnection
@@ -43,7 +44,7 @@ class IRCBot(AioSimpleIRCClient):
         self.max_file_size = max_file_size
         self.joined_channels = {}  # (channel) -> last active time
         self.dcc_transfers = {}  # track active DCC connections
-        self.resume_queue = []
+        self.resume_queue = set()
         self.command_queue = asyncio.Queue()
         self.mime_checker = magic.Magic(mime=True)
         self.loop = asyncio.get_event_loop()  # Ensure the loop is set
@@ -241,7 +242,8 @@ class IRCBot(AioSimpleIRCClient):
             connection (irc.client_aio.AioConnection): The connection to the IRC server.
             event (irc.client_aio.Event): The event that triggered this method to be called.
         """
-        logger.info(event.arguments[0])
+        # logger.info(event.arguments[0])
+        pass
 
     def on_nosuchnick(self, connection, event):
         """Called when the bot receives a NO SUCH NICK message from the server."""
@@ -283,27 +285,79 @@ class IRCBot(AioSimpleIRCClient):
                 return
 
             file_name, peer_port, resume_position = parts[1:]
-            for peer_address, peer_port, file_name, resume_position, size in self.resume_queue:
-                if file_name != file_name or peer_port != peer_port or resume_position != resume_position:
+
+            try:
+                resume_position = int(resume_position)
+                peer_port = int(peer_port)
+
+                if peer_port < 1 or peer_port > 65535:
+                    logger.warning("Invalid DCC SEND command (invalid port)")
+                    return
+
+                if resume_position < 1:
+                    logger.warning("Invalid DCC SEND command (invalid resume_position)")
+                    return
+            except ValueError:
+                logger.warning("Invalid DCC SEND command (invalid size or port)")
+                return
+
+            for item in self.resume_queue:
+                logging.info("item: %s", item)
+                if file_name != item[2] or peer_port != item[1] or resume_position != item[3]:
                     continue
-                self.resume_queue.remove((peer_address, peer_port, file_name, resume_position, size))
+
+                self.resume_queue.remove(item)
                 break
             else:
                 logger.warning("DCC ACCEPT command for unknown file: %s", event)
                 return
 
-            self.init_dcc_connection(peer_address, peer_port, file_name, size, resume_position, False)
+            self.init_dcc_connection(item[0], peer_port, file_name, item[4], resume_position, False)
 
         if event.arguments[1].startswith("SEND "):
             payload = event.arguments[1]
             parts = shlex.split(payload)
             if len(parts) != 5:
-                logger.warning("Invalid DCC SEND command")
+                logger.warning("Invalid DCC SEND command (not enough arguments)")
                 return
 
             file_name, peer_address, peer_port, size = parts[1:]
 
-            size = int(size)
+            # handle v6
+            if ':' in peer_address:
+                # Validate the IP address
+                try:
+                    ipaddress.ip_address(peer_address)
+                except ValueError:
+                    logger.warning(f"Rejected {file_name}: Invalid IP address {peer_address}")
+                    return
+            else:
+                try:
+                    # Convert the IP address to a quad-dotted form
+                    peer_address = irc.client.ip_numstr_to_quad(peer_address)
+                except ValueError:
+                    logger.warning(f"Rejected {file_name}: Invalid IP address {peer_address}")
+                    return
+
+            # validate file name
+            if not re.match(r'^[a-zA-Z0-9\s\._\-]+$', file_name):
+                logger.warning("Invalid DCC SEND command (file name contains invalid characters)")
+                return
+
+            try:
+                size = int(size)
+                peer_port = int(peer_port)
+
+                if peer_port < 1 or peer_port > 65535:
+                    logger.warning("Invalid DCC SEND command (invalid port)")
+                    return
+
+                if size < 1:
+                    logger.warning("Invalid DCC SEND command (invalid size)")
+                    return
+            except ValueError:
+                logger.warning("Invalid DCC SEND command (invalid size or port)")
+                return
 
             if size > self.max_file_size:
                 logger.warning(f"Rejected {file_name}: File size exceeds limit ({size} > {self.max_file_size})")
@@ -312,17 +366,63 @@ class IRCBot(AioSimpleIRCClient):
             download_path = os.path.join(self.download_path, file_name)
             completed = False
             if os.path.exists(download_path):
-                offset = os.path.getsize(download_path)
-                if offset == int(size):
+                local_size = os.path.getsize(download_path)
+                if local_size >= size:
                     logger.warning(f"Rejected {file_name}: File already complete")
                     completed = True
                 else:
-                    logger.info(f"Send DCC RESUME {file_name} from {offset} bytes")
-                    self.connection.ctcp_reply(event.source.nick, shlex.join(["DCC", "RESUME", file_name, str(peer_port), str(offset)]))
-                    self.resume_queue.append((peer_address, peer_port, file_name, offset, size))
+                    logger.info(f"Send DCC RESUME {file_name} starting at {local_size} bytes")
+                    self.connection.ctcp_reply(event.source.nick, shlex.join(["DCC", "RESUME", file_name, str(peer_port), str(local_size)]))
+                    self.resume_queue.add((peer_address, peer_port, file_name, local_size, size))
                     return
 
             self.init_dcc_connection(peer_address, peer_port, file_name, size, None, completed)
+
+    def init_dcc_connection(self,
+                            peer_address: str,
+                            peer_port: int,
+                            file_name: str,
+                            size: int,
+                            offset: Optional[int] = None,
+                            completed: Optional[bool] = None):
+        """
+        Initialize a DCC connection to a peer.
+
+        This method sets up a DCC connection to the peer, creates the
+        file to receive the data and stores the information in the
+        `dcc_transfers` dictionary.
+
+        Args:
+            peer_address (str): The address of the peer.
+            peer_port (int): The port of the peer.
+            file_name (str): The name of the file to receive.
+            size (int): The size of the file.
+            offset (int): The offset of the file to resume from.
+            completed (bool): Whether the file transfer is completed.
+        """
+        download_path = os.path.join(self.download_path, file_name)
+        logger.info(f"Receiving DCC file {file_name} from {peer_address}:{peer_port}, size: {size} bytes")
+
+        # Convert the port to an integer
+        logger.info("Connecting to %s:%s", peer_address, peer_port)
+
+        # Create a new DCC connection
+        dcc: AIODCCConnection = self.dcc('raw')
+
+        # Schedule the connection to be established
+        self.loop.create_task(dcc.connect(peer_address, peer_port))
+
+        # Store the information about the file transfer
+        self.dcc_transfers[dcc] = {
+            "file_path": download_path,
+            "file_name": file_name,
+            "start_time": time.time(),
+            "bytes_received": 0,
+            "offset": offset,
+            "size": size,
+            "percent": 0,
+            "completed": completed
+        }
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """
@@ -346,7 +446,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         percent = int(100 * transfer['bytes_received'] / transfer['size'])
-        if transfer["percent"] + 10 >= percent:
+        if transfer["percent"] + 10 <= percent:
             transfer["percent"] = percent
             elapsed_time = time.time() - transfer["start_time"]
             transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
@@ -356,16 +456,17 @@ class IRCBot(AioSimpleIRCClient):
 
         file_path = transfer["file_path"]
         data = event.arguments[0]
-        transfer["bytes_received"] += len(data)
 
         # Check MIME type after first chunk
-        if transfer["bytes_received"] == len(data):
+        if transfer["bytes_received"] == 0 and not transfer.get('offset'):
             mime_type = self.mime_checker.from_buffer(data)
             if mime_type not in self.allowed_mimetypes:
                 logger.warning(f"Rejected {file_path}: Invalid MIME type ({mime_type})")
                 del self.dcc_transfers[dcc]
                 dcc.disconnect()
                 return
+
+        transfer["bytes_received"] += len(data)
 
         try:
             with open(file_path, "ab") as f:
@@ -376,6 +477,8 @@ class IRCBot(AioSimpleIRCClient):
             dcc.disconnect()
 
         dcc.send_bytes(struct.pack("!I", transfer["bytes_received"]))
+        if transfer["completed"] < 0:
+            dcc.disconnect()
 
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event):
         """
@@ -408,6 +511,9 @@ class IRCBot(AioSimpleIRCClient):
             logger.error(f"Download failed: {file_path} does not exist")
         del self.dcc_transfers[dcc]
 
+    def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event):
+        return self.on_privmsg(connection, event)
+
     def on_privmsg(self, connection: AioConnection, event: irc.client_aio.Event):
         """
         Called when the bot receives a PRIVMSG message from the IRC server.
@@ -422,60 +528,7 @@ class IRCBot(AioSimpleIRCClient):
         self.last_active = time.time()
         sender = event.source.nick
         message = event.arguments[0]
-        logger.info(f"[PRIVATE MSG] {sender}: {message}")
-
-    def init_dcc_connection(self, peer_address: str, peer_port: int, file_name: str, size: int, offset: Optional[int] = None, completed: Optional[bool] = None):
-        """
-        Initialize a DCC connection to a peer.
-
-        This method sets up a DCC connection to the peer, creates the
-        file to receive the data and stores the information in the
-        `dcc_transfers` dictionary.
-
-        Args:
-            peer_address (str): The address of the peer.
-            peer_port (int): The port of the peer.
-            file_name (str): The name of the file to receive.
-            size (int): The size of the file.
-            offset (int): The offset of the file to resume from.
-            completed (bool): Whether the file transfer is completed.
-        """
-        download_path = os.path.join(self.download_path, file_name)
-        logger.info(f"Receiving DCC file {file_name} from {peer_address}:{peer_port}, size: {size} bytes")
-
-        # handle v6
-        if ':' in peer_address:
-            # Validate the IP address
-            try:
-                ipaddress.ip_address(peer_address)
-            except ValueError:
-                logger.warning(f"Rejected {file_name}: Invalid IP address {peer_address}")
-                return
-        else:
-            # Convert the IP address to a quad-dotted form
-            peer_address = irc.client.ip_numstr_to_quad(peer_address)
-
-        # Convert the port to an integer
-        peer_port = int(peer_port)
-        logger.info("Connecting to %s:%s", peer_address, peer_port)
-
-        # Create a new DCC connection
-        dcc: AIODCCConnection = self.dcc('raw')
-
-        # Schedule the connection to be established
-        self.loop.create_task(dcc.connect(peer_address, peer_port))
-
-        # Store the information about the file transfer
-        self.dcc_transfers[dcc] = {
-            "file_path": download_path,
-            "file_name": file_name,
-            "start_time": time.time(),
-            "bytes_received": 0,
-            "size": size,
-            "offset": offset,
-            "percent": 0,
-            "completed": completed
-        }
+        logger.info(f"[{sender}] {message}")
 
 
 class IRCBotManager:
