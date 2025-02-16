@@ -341,7 +341,7 @@ class IRCBot(AioSimpleIRCClient):
 
             for item in self.resume_queue:
                 logging.info("item: %s", item)
-                if file_name != item[2] or peer_port != item[1] or resume_position != item[3]:
+                if file_name != item[3] or peer_port != item[2] or resume_position != item[4]:
                     continue
 
                 self.resume_queue.remove(item)
@@ -350,7 +350,7 @@ class IRCBot(AioSimpleIRCClient):
                 logger.warning("DCC ACCEPT command for unknown file: %s", event)
                 return
 
-            self.init_dcc_connection(item[0], peer_port, file_name, item[4], resume_position, False)
+            self.init_dcc_connection(item[0], item[1], peer_port, file_name, item[5], resume_position, False)
 
         if event.arguments[1].startswith("SEND ") or event.arguments[1].startswith("SSEND "):
             use_ssl = False
@@ -415,12 +415,13 @@ class IRCBot(AioSimpleIRCClient):
                 else:
                     logger.info(f"Send DCC RESUME {file_name} starting at {local_size} bytes")
                     self.connection.ctcp_reply(event.source.nick, shlex.join(["DCC", "RESUME", file_name, str(peer_port), str(local_size)]))
-                    self.resume_queue.add((peer_address, peer_port, file_name, local_size, size, use_ssl))
+                    self.resume_queue.add((event.source.nick, peer_address, peer_port, file_name, local_size, size, use_ssl))
                     return
 
-            self.init_dcc_connection(peer_address, peer_port, file_name, size, None, completed, use_ssl)
+            self.init_dcc_connection(event.source.nick, peer_address, peer_port, file_name, size, None, completed, use_ssl)
 
     def init_dcc_connection(self,
+                            peer_name: str,
                             peer_address: str,
                             peer_port: int,
                             file_name: str,
@@ -436,6 +437,7 @@ class IRCBot(AioSimpleIRCClient):
         `dcc_transfers` dictionary.
 
         Args:
+            peer_name (str): The name of the peer.
             peer_address (str): The address of the peer.
             peer_port (int): The port of the peer.
             file_name (str): The name of the file to receive.
@@ -462,6 +464,9 @@ class IRCBot(AioSimpleIRCClient):
 
         # Store the information about the file transfer
         self.dcc_transfers[dcc] = {
+            "peer_name": peer_name,
+            "peer_address": peer_address,
+            "peer_port": peer_port,
             "file_path": os.path.join(self.download_path, file_name),
             "file_name": file_name,
             "start_time": time.time(),
@@ -471,7 +476,8 @@ class IRCBot(AioSimpleIRCClient):
             "ssl": use_ssl,
             "percent": 0,
             "completed": completed,
-            "last_progress_update": None
+            "last_progress_update": None,
+            "last_progress_bytes_received": 0
         }
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
@@ -500,9 +506,12 @@ class IRCBot(AioSimpleIRCClient):
         if transfer["percent"] + 10 <= percent or now - transfer["last_progress_update"] > 10:
             transfer["percent"] = percent
             elapsed_time = now - transfer["start_time"]
-            transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
-            logger.info(f"Downloaded {transfer['file_path']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s")
+            transfer_rate_avg = (transfer["bytes_received"] / elapsed_time) / 1024 if elapsed_time > 0 else 0
+            transfer_rate = (transfer["last_progress_bytes_received"] / transfer["last_progress_update"]) / 1024 if transfer["last_progress_update"] > 0 else 0
+
+            logger.info(f"Downloaded {transfer['file_path']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s / {transfer_rate_avg:.2f} KB/s")
             transfer["last_progress_update"] = now
+            transfer["last_progress_bytes_received"] = transfer["bytes_received"]
 
         file_path = transfer["file_path"]
         data = event.arguments[0]
@@ -851,6 +860,89 @@ async def handle_shutdown(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_info(request: web.Request):
+    """
+    Handle a request to get information about all connections.
+
+    Returns a JSON response with the following format:
+    {
+        "networks": [
+            {
+                "server": str,
+                "connected": bool,
+                "nickname": str,
+                "channels": [
+                    {
+                        "name": str,
+                        "last_active": float
+                    }
+                ]
+            }
+        ],
+        "dcc_transfers": [
+            {
+                "server": str,
+                "filename": str,
+                "peer": str,
+                "size": int,
+                "received": int,
+                "speed": float,
+                "status": str
+            }
+        ]
+    }
+    """
+    try:
+        bot_manager = request.app["bot_manager"]
+        response = {
+            "networks": [],
+            "transfers": []
+        }
+
+        # Gather information about all networks and channels
+        for server, bot in bot_manager.bots.items():
+            network_info = {
+                "server": server,
+                "nickname": bot.nick,
+                "channels": []
+            }
+
+            # Add channel information
+            for channel, last_active in bot.joined_channels.items():
+                network_info["channels"].append({
+                    "name": channel,
+                    "last_active": last_active
+                })
+
+            response["networks"].append(network_info)
+
+            # Add DCC transfer information
+            for dcc_connection, transfer in bot.dcc_transfers.items():
+                current_time = time.time()
+                bytes_received = transfer['bytes_received']
+                transfer_time = current_time - transfer['start_time'] if transfer['start_time'] else 0
+                speed_avg = bytes_received / transfer_time if transfer_time > 0 else 0
+                speed = (transfer['last_progress_bytes_received'] / transfer['last_progress_update']) if transfer['last_progress_update'] > 0 else 0
+
+                transfer_info = {
+                    "server": server,
+                    "filename": transfer['filename'],
+                    "nick": transfer['peer_name'],
+                    "host": transfer['peer_address'] + ":" + str(transfer['peer_port']),
+                    "size": transfer['size'],
+                    "received": bytes_received,
+                    "speed": round(speed, 2),  # bytes per second
+                    "speed_avg": round(speed_avg, 2),  # bytes per second
+                    "status": "active" if not transfer.completed else "completed"
+                }
+                response["transfers"].append(transfer_info)
+
+        return web.json_response(response)
+    except Exception as e:
+        logger.error(f"Error in handle_info: {str(e)}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
 app = web.Application()
 app["bot_manager"] = IRCBotManager("config.json")
 app.on_startup.append(start_background_tasks)
@@ -858,6 +950,7 @@ app.on_cleanup.append(cleanup_background_tasks)
 
 app.router.add_post("/join", handle_join)
 app.router.add_post("/part", handle_part)
+app.router.add_get("/info", handle_info)
 app.router.add_post("/msg", handle_msg)
 app.router.add_post("/shutdown", handle_shutdown)
 
