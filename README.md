@@ -1,7 +1,7 @@
 dccbot
 ========
 
-An IRC XDCC download bot written in python with aiohttp and [https://github.com/jaraco/irc](irc.py).
+An IRC XDCC download bot written in python with aiohttp and [irc.py](https://github.com/jaraco/irc).
 
 Features
 --------
