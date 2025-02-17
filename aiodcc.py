@@ -12,7 +12,7 @@ class DCCProtocol(irc.client_aio.IrcProtocol):
     pass
 
 
-class AIODCCConnection(irc.client.DCCConnection):
+class AioDCCConnection(irc.client.DCCConnection):
     rector: "AioReactor"
     buffer_class = buffer.DecodingLineBuffer
 
@@ -43,8 +43,13 @@ class AIODCCConnection(irc.client.DCCConnection):
 
         self.connect_factory = connect_factory
         protocol_instance = self.protocol_class(self, self.reactor.loop)
-        connection = self.connect_factory(protocol_instance, (self.peeraddress, self.peerport))
-        transport, protocol = await connection
+        try:
+            connection = self.connect_factory(protocol_instance, (self.peeraddress, self.peerport))
+            transport, protocol = await connection
+        except Exception as e:
+            log.error("Connection error to %s:%s: %s", self.peeraddress, self.peerport, e)
+            self.connected = False
+            return self
 
         self.transport = transport
         self.protocol = protocol
@@ -136,7 +141,7 @@ class AIODCCConnection(irc.client.DCCConnection):
 
 
 class AioReactor(irc.client_aio.AioReactor):
-    dcc_connection_class = AIODCCConnection
+    dcc_connection_class = AioDCCConnection
 
     def dcc(self, dcctype="chat"):
         """Creates and returns a DCCConnection object.

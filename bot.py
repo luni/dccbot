@@ -14,11 +14,11 @@ from irc.connection import AioFactory
 from irc.client_aio import AioSimpleIRCClient, AioConnection
 import irc.client
 import magic
-from aiodcc import AioReactor, AIODCCConnection
+from aiodcc import AioReactor, AioDCCConnection
 from typing import Optional
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]%(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +45,7 @@ class IRCBot(AioSimpleIRCClient):
         self.joined_channels = {}  # (channel) -> last active time
         self.dcc_transfers = {}  # track active DCC connections
         self.banned_channels = set()
-        self.resume_queue = set()
+        self.resume_queue = {}
         self.command_queue = asyncio.Queue()
         self.mime_checker = magic.Magic(mime=True)
         self.loop = asyncio.get_event_loop()  # Ensure the loop is set
@@ -69,7 +69,7 @@ class IRCBot(AioSimpleIRCClient):
             str: The full nick with a random 3-digit suffix.
         """
         random_suffix = ''.join(random.choices(string.digits, k=3))
-        return f"{base_nick}_{random_suffix}"
+        return f"{base_nick}{random_suffix}"
 
     async def connect(self):
         """
@@ -144,6 +144,7 @@ class IRCBot(AioSimpleIRCClient):
         self.connection.part(channel)
         logger.info(f"Parted channel: {channel} ({reason})")
         self.last_active = time.time()
+        del self.joined_channels[channel.lower()]
 
     async def queue_command(self, data: dict):
         """
@@ -199,7 +200,7 @@ class IRCBot(AioSimpleIRCClient):
                     retry = 0
                     while retry < 10 and waiting_channels:
                         for channel in list(waiting_channels):
-                            if channel in self.joined_channels:
+                            if channel.lower() in self.joined_channels:
                                 waiting_channels.remove(channel)
 
                         await asyncio.sleep(1)
@@ -267,25 +268,38 @@ class IRCBot(AioSimpleIRCClient):
     def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a BANNEDFROMCHAN message from the server."""
         logger.info("Banned from channel %s: %s", event.target, event.arguments[0])
-        self.banned_channels.add(event.arguments[0])
+        channel_name = event.arguments[0].lower()
+        self.banned_channels.add(channel_name)
+        if channel_name in self.joined_channels:
+            del self.joined_channels[channel_name]
 
     def on_part(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot receives a PART message from the server."""
-        logger.info("Left channel %s: %s", event.target, event.arguments)
-        if event.target in self.joined_channels:
-            del self.joined_channels[event.target]
+        if event.source.nick != self.nick:
+            return
+
+        channel_name = event.target.lower()
+        if channel_name in self.joined_channels:
+            logger.info("Left channel %s: %s", event.target, event.arguments)
+            del self.joined_channels[channel_name]
 
     def on_join(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot joins a channel."""
-        logger.info("Joined channel %s: %s", event.target, event.arguments)
-        self.joined_channels[event.target] = time.time()
-        self.banned_channels.discard(event.target)
+        if event.source.nick != self.nick:
+            return
+
+        channel_name = event.target.lower()
+        if channel_name not in self.joined_channels:
+            logger.info("Joined channel %s: %s", event.target, event.arguments)
+            self.joined_channels[channel_name] = time.time()
+            self.banned_channels.discard(channel_name)
 
     def on_kick(self, connection: AioConnection, event: irc.client_aio.Event):
         """Called when the bot is kicked from a channel."""
         logger.info("Kicked from channel %s: %s", event.target, event.arguments)
-        if event.target in self.joined_channels:
-            del self.joined_channels[event.target]
+        channel_name = event.target.lower()
+        if channel_name in self.joined_channels:
+            del self.joined_channels[channel_name]
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event):
         """
@@ -316,41 +330,45 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         if event.arguments[1].startswith("ACCEPT "):
-            payload = event.arguments[1]
-            parts = shlex.split(payload)
-            if len(parts) != 4:
+            if event.source.nick not in self.resume_queue:
+                logger.warning("DCC ACCEPT not in queue: %s", event)
+                return
+
+            f = re.search(r"(\d+) (\d+)$", event.arguments[1])
+            if not f:
                 logger.warning("Invalid DCC ACCEPT command: %s", event)
                 return
 
-            file_name, peer_port, resume_position = parts[1:]
-
             try:
-                resume_position = int(resume_position)
-                peer_port = int(peer_port)
+                peer_port = int(f.group(1))
+                resume_position = int(f.group(2))
 
                 if peer_port < 1 or peer_port > 65535:
-                    logger.warning("Invalid DCC SEND command (invalid port)")
+                    logger.warning("Invalid DCC SEND command (invalid port): %s", event.arguments)
                     return
 
                 if resume_position < 1:
-                    logger.warning("Invalid DCC SEND command (invalid resume_position)")
+                    logger.warning("Invalid DCC SEND command (invalid resume_position): %s", event.arguments)
                     return
             except ValueError:
-                logger.warning("Invalid DCC SEND command (invalid size or port)")
+                logger.warning("Invalid DCC SEND command (invalid size or port): %s", event.arguments)
                 return
 
-            for item in self.resume_queue:
+            for item in self.resume_queue[event.source.nick]:
                 logging.info("item: %s", item)
-                if file_name != item[3] or peer_port != item[2] or resume_position != item[4]:
+                if peer_port != item[1] or resume_position != item[3]:
                     continue
 
-                self.resume_queue.remove(item)
+                self.resume_queue[event.source.nick].remove(item)
                 break
             else:
                 logger.warning("DCC ACCEPT command for unknown file: %s", event)
                 return
 
-            self.init_dcc_connection(item[0], item[1], peer_port, file_name, item[5], resume_position, False)
+            if not self.resume_queue[event.source.nick]:
+                del self.resume_queue[event.source.nick]
+
+            self.init_dcc_connection(event.source.nick, item[0], peer_port, item[2], item[4], resume_position, False)
 
         if event.arguments[1].startswith("SEND ") or event.arguments[1].startswith("SSEND "):
             use_ssl = False
@@ -381,9 +399,29 @@ class IRCBot(AioSimpleIRCClient):
                     logger.warning(f"Rejected {file_name}: Invalid IP address {peer_address}")
                     return
 
+            def is_valid_filename(path: str, filename: str) -> bool:
+                if not filename:
+                    return False
+
+                file_path = os.path.join(path, filename)
+
+                if not os.path.isabs(file_path):
+                    return False
+
+                if '/' in filename or '\\' in filename:
+                    return False
+
+                # Optionally: Check for platform-specific invalid characters
+                # This is optional and depends on your target platform
+                invalid_chars = set('/\\:*?"<>|')  # Invalid on Windows
+                if any(char in invalid_chars for char in filename):
+                    return False
+
+                return True
+
             # validate file name
-            if not re.match(r'^[a-zA-Z0-9\s\._\-]+$', file_name):
-                logger.warning("Invalid DCC SEND command (file name contains invalid characters)")
+            if not is_valid_filename(self.download_path, file_name):
+                logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", file_name)
                 return
 
             try:
@@ -409,16 +447,22 @@ class IRCBot(AioSimpleIRCClient):
             completed = False
             if os.path.exists(download_path):
                 local_size = os.path.getsize(download_path)
-                if local_size >= size:
+                if local_size == size:
                     logger.warning(f"Rejected {file_name}: File already complete")
+                    completed = True
+                elif local_size > size:
+                    logger.warning(f"Rejected {file_name}: Local file larger then remote file ({local_size} > {size})")
                     completed = True
                 else:
                     logger.info(f"Send DCC RESUME {file_name} starting at {local_size} bytes")
-                    self.connection.ctcp_reply(event.source.nick, shlex.join(["DCC", "RESUME", file_name, str(peer_port), str(local_size)]))
-                    self.resume_queue.add((event.source.nick, peer_address, peer_port, file_name, local_size, size, use_ssl))
+                    self.connection.ctcp_reply(event.source.nick, ' '.join(["DCC", "RESUME", '"' + file_name.replace('"', '') + '"', str(peer_port), str(local_size)]))
+                    if event.source.nick not in self.resume_queue:
+                        self.resume_queue[event.source.nick] = set()
+
+                    self.resume_queue[event.source.nick].add((peer_address, peer_port, file_name, local_size, size, use_ssl))
                     return
 
-            self.init_dcc_connection(event.source.nick, peer_address, peer_port, file_name, size, None, completed, use_ssl)
+            self.init_dcc_connection(event.source.nick, peer_address, peer_port, file_name, size, 0, completed, use_ssl)
 
     def init_dcc_connection(self,
                             peer_name: str,
@@ -446,21 +490,27 @@ class IRCBot(AioSimpleIRCClient):
             completed (bool): Whether the file transfer is completed.
             use_ssl (bool): Whether to use SSL.
         """
-        logger.info("Receiving file via DCC " if not use_ssl else "Receiving file via SSL DCC ",
-                    f"{file_name} from {peer_address}:{peer_port}, size: {size} bytes")
+        dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
+        logger.info(f"{dcc_msg} {file_name} from {peer_address}:{peer_port}, size: {size} bytes")
 
         # Convert the port to an integer
         logger.info("Connecting to %s:%s", peer_address, peer_port)
 
         # Create a new DCC connection
-        dcc: AIODCCConnection = self.dcc('raw')
+        dcc: AioDCCConnection = self.dcc('raw')
 
-        connect_factory = AIOFactory()
+        connect_factory = None
         if use_ssl:
             connect_factory = AioFactory(ssl=True)
+        else:
+            connect_factory = AioFactory()
 
         # Schedule the connection to be established
-        self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory))
+        try:
+            self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory))
+        except Exception as e:
+            logger.error(f"Failed to connect to {peer_address}:{peer_port}: {e}")
+            return
 
         # Store the information about the file transfer
         self.dcc_transfers[dcc] = {
@@ -476,7 +526,7 @@ class IRCBot(AioSimpleIRCClient):
             "ssl": use_ssl,
             "percent": 0,
             "completed": completed,
-            "last_progress_update": None,
+            "last_progress_update": 0,
             "last_progress_bytes_received": 0
         }
 
@@ -502,14 +552,17 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         now = time.time()
-        percent = int(100 * transfer['bytes_received'] / transfer['size'])
-        if transfer["percent"] + 10 <= percent or now - transfer["last_progress_update"] > 10:
+        percent = int(100 * (transfer['bytes_received'] + transfer['offset']) / transfer['size'])
+        if transfer["percent"] + 10 <= percent or now - transfer["last_progress_update"] >= 5:
             transfer["percent"] = percent
             elapsed_time = now - transfer["start_time"]
             transfer_rate_avg = (transfer["bytes_received"] / elapsed_time) / 1024 if elapsed_time > 0 else 0
-            transfer_rate = (transfer["last_progress_bytes_received"] / transfer["last_progress_update"]) / 1024 if transfer["last_progress_update"] > 0 else 0
 
-            logger.info(f"Downloaded {transfer['file_path']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s / {transfer_rate_avg:.2f} KB/s")
+            elapsed_time = now - transfer["last_progress_update"]
+            transfered_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
+            transfer_rate = (transfered_bytes / elapsed_time) / 1024
+
+            logger.info(f"Downloading {transfer['file_name']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s / {transfer_rate_avg:.2f} KB/s")
             transfer["last_progress_update"] = now
             transfer["last_progress_bytes_received"] = transfer["bytes_received"]
 
@@ -536,8 +589,6 @@ class IRCBot(AioSimpleIRCClient):
             dcc.disconnect()
 
         dcc.send_bytes(struct.pack("!I", transfer["bytes_received"]))
-        if transfer["completed"] < 0:
-            dcc.disconnect()
 
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event):
         """
@@ -633,6 +684,8 @@ class IRCBotManager:
         """
         if server not in self.bots:
             server_config = self.config["servers"].get(server, {})
+            if not server_config:
+                raise ValueError(f"Unknown server: {server}")
             bot = IRCBot(
                 server,
                 server_config,
@@ -665,7 +718,7 @@ class IRCBotManager:
                     # Find idle channels
                     idle_channels = []
                     for channel, last_active in bot.joined_channels.items():
-                        if now - last_active > self.channel_idle_timeout:
+                        if self.channel_idle_timeout > 0 and now - last_active > self.channel_idle_timeout:
                             idle_channels.append(channel)
 
                     # Part idle channels
@@ -677,7 +730,7 @@ class IRCBotManager:
                         not bot.joined_channels
                         and not bot.dcc_transfers
                         and bot.command_queue.empty()
-                        and bot.last_active + self.server_idle_timeout < now
+                        and server_idle_timeout > 0 and bot.last_active + self.server_idle_timeout < now
                     ):
                         idle_servers.append(server)
 
@@ -918,27 +971,31 @@ async def handle_info(request: web.Request):
 
             # Add DCC transfer information
             for dcc_connection, transfer in bot.dcc_transfers.items():
-                current_time = time.time()
-                bytes_received = transfer['bytes_received']
-                transfer_time = current_time - transfer['start_time'] if transfer['start_time'] else 0
-                speed_avg = bytes_received / transfer_time if transfer_time > 0 else 0
-                speed = (transfer['last_progress_bytes_received'] / transfer['last_progress_update']) if transfer['last_progress_update'] > 0 else 0
+                now = time.time()
+
+                transfered_bytes = transfer['bytes_received']
+                transfer_time = now - transfer['start_time'] if transfer['start_time'] else 0
+                speed_avg = transfered_bytes / transfer_time / 1024 if transfer_time > 0 else 0
+
+                transfered_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
+                transfer_time = now - transfer["last_progress_update"]
+                speed = (transfered_bytes / transfer_time) / 1024
 
                 transfer_info = {
                     "server": server,
-                    "filename": transfer['filename'],
+                    "filename": transfer['file_name'],
                     "nick": transfer['peer_name'],
                     "host": transfer['peer_address'] + ":" + str(transfer['peer_port']),
                     "size": transfer['size'],
-                    "received": bytes_received,
+                    "received": transfer["bytes_received"],
                     "speed": round(speed, 2),  # bytes per second
-                    "speed_avg": round(speed_avg, 2),  # bytes per second
-                    "status": "active" if not transfer.completed else "completed"
+                    "speed_avg": round(speed_avg, 2)  # bytes per second
                 }
                 response["transfers"].append(transfer_info)
 
         return web.json_response(response)
     except Exception as e:
+        logging.exception(e)
         logger.error(f"Error in handle_info: {str(e)}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
