@@ -2,7 +2,7 @@ name: Python Code Checks
 
 on:
   pull_request:
-
+  push:
   workflow_dispatch:
 
 jobs:
@@ -24,6 +24,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install -r <(uv pip compile --all-extras pyproject.toml)
+          up pip install ruff tox
 
       - name: Run Ruff (PEP 8 Formatting)
         run: |
