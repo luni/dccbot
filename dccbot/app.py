@@ -16,8 +16,7 @@ def _clean_channel_list(l: List[str]) -> List[str]:
 
 @routes.post("/join")
 async def handle_join(request: web.Request) -> web.Response:
-    """
-    Handle a request to join a channel.
+    """Handle a request to join a channel.
 
     The request should contain the following JSON payload:
     {
@@ -40,13 +39,10 @@ async def handle_join(request: web.Request) -> web.Response:
     try:
         data: dict = await request.json()
         bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
-        if not data.get('channel'):
+        if not data.get("channel"):
             return web.json_response({"status": "error", "message": "Missing channel"}, status=400)
 
-        asyncio.create_task(bot.queue_command({
-            "command": "join",
-            "channels": _clean_channel_list(data.get('channels', [data.get('channel', '')]))
-        }))
+        asyncio.create_task(bot.queue_command({"command": "join", "channels": _clean_channel_list(data.get("channels", [data.get("channel", "")]))}))
         return web.json_response({"status": "ok"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -54,8 +50,7 @@ async def handle_join(request: web.Request) -> web.Response:
 
 @routes.post("/part")
 async def handle_part(request: web.Request) -> web.Response:
-    """
-    Handle a request to part a channel.
+    """Handle a request to part a channel.
 
     The request should contain the following JSON payload:
     {
@@ -78,13 +73,10 @@ async def handle_part(request: web.Request) -> web.Response:
     try:
         data: dict = await request.json()
         bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
-        if not data.get('channel'):
+        if not data.get("channel"):
             return web.json_response({"status": "error", "message": "Missing channel"}, status=400)
 
-        asyncio.create_task(bot.queue_command({
-            "command": "part",
-            "channels": _clean_channel_list(data.get('channels', [data.get('channel', '')]))
-        }))
+        asyncio.create_task(bot.queue_command({"command": "part", "channels": _clean_channel_list(data.get("channels", [data.get("channel", "")]))}))
         return web.json_response({"status": "ok"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -92,8 +84,7 @@ async def handle_part(request: web.Request) -> web.Response:
 
 @routes.post("/msg")
 async def handle_msg(request: web.Request) -> web.Response:
-    """
-    Handle a request to send a message to a user.
+    """Handle a request to send a message to a user.
 
     The request should contain the following JSON payload:
     {
@@ -117,16 +108,18 @@ async def handle_msg(request: web.Request) -> web.Response:
     """
     try:
         data: dict = await request.json()
-        if not data.get('user') or not data.get('message'):
+        if not data.get("user") or not data.get("message"):
             return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
         bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
-        asyncio.create_task(bot.queue_command({
-            "command": "send",
-            "channels": _clean_channel_list(data.get("channels", [data.get('channel', '')])),
-            "user": data["user"].lower().strip(),
-            "message": data["message"].strip()
-        }))
+        asyncio.create_task(
+            bot.queue_command({
+                "command": "send",
+                "channels": _clean_channel_list(data.get("channels", [data.get("channel", "")])),
+                "user": data["user"].lower().strip(),
+                "message": data["message"].strip(),
+            })
+        )
         return web.json_response({"status": "ok"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -134,8 +127,7 @@ async def handle_msg(request: web.Request) -> web.Response:
 
 @routes.post("/shutdown")
 async def handle_shutdown(request: web.Request) -> web.Response:
-    """
-    Handle a request to shut down the server.
+    """Handle a request to shut down the server.
 
     The request should not contain any payload.
 
@@ -156,8 +148,7 @@ async def handle_shutdown(request: web.Request) -> web.Response:
 
 @routes.get("/info")
 async def handle_info(request: web.Request):
-    """
-    Handle a request to get information about all connections.
+    """Handle a request to get information about all connections.
 
     Returns a JSON response with the following format:
     {
@@ -189,25 +180,15 @@ async def handle_info(request: web.Request):
     """
     try:
         bot_manager: IRCBotManager = request.app["bot_manager"]
-        response = {
-            "networks": [],
-            "transfers": []
-        }
+        response = {"networks": [], "transfers": []}
 
         # Gather information about all networks and channels
         for server, bot in bot_manager.bots.items():
-            network_info = {
-                "server": server,
-                "nickname": bot.nick,
-                "channels": []
-            }
+            network_info = {"server": server, "nickname": bot.nick, "channels": []}
 
             # Add channel information
             for channel, last_active in bot.joined_channels.items():
-                network_info["channels"].append({
-                    "name": channel,
-                    "last_active": last_active
-                })
+                network_info["channels"].append({"name": channel, "last_active": last_active})
 
             response["networks"].append(network_info)
 
@@ -215,8 +196,8 @@ async def handle_info(request: web.Request):
             for transfer in transfers:
                 now = time.time()
 
-                transferred_bytes = transfer['bytes_received']
-                transfer_time = now - transfer['start_time'] if transfer['start_time'] else 0
+                transferred_bytes = transfer["bytes_received"]
+                transfer_time = now - transfer["start_time"] if transfer["start_time"] else 0
                 speed_avg = transferred_bytes / transfer_time / 1024 if transfer_time > 0 else 0
 
                 transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
@@ -224,18 +205,18 @@ async def handle_info(request: web.Request):
                 speed = (transferred_bytes / transfer_time) / 1024
 
                 transfer_info = {
-                    "server": transfer['server'],
+                    "server": transfer["server"],
                     "filename": filename,
-                    "nick": transfer['nick'],
-                    "host": transfer['peer_address'] + ":" + str(transfer['peer_port']),
-                    "size": transfer['size'],
+                    "nick": transfer["nick"],
+                    "host": transfer["peer_address"] + ":" + str(transfer["peer_port"]),
+                    "size": transfer["size"],
                     "received": transfer["bytes_received"] + transfer["offset"],
                     "speed": round(speed, 2),
                     "speed_avg": round(speed_avg, 2),
-                    "md5": transfer.get('md5'),
-                    "file_md5": transfer.get('file_md5'),
-                    "status": "completed" if transfer.get('completed') else "in_progress",
-                    "connected": transfer.get('connected')
+                    "md5": transfer.get("md5"),
+                    "file_md5": transfer.get("file_md5"),
+                    "status": "completed" if transfer.get("completed") else "in_progress",
+                    "connected": transfer.get("connected"),
                 }
                 response["transfers"].append(transfer_info)
 
@@ -247,6 +228,16 @@ async def handle_info(request: web.Request):
 
 
 def get_app():
+    """Create an aiohttp application.
+
+    The application will be configured with an IRCBotManager instance,
+    the start_background_tasks and cleanup_background_tasks functions as
+    on_startup and on_cleanup handlers, and the routes defined above.
+
+    Returns:
+        The aiohttp application.
+
+    """
     app = web.Application()
     app["bot_manager"] = IRCBotManager("config.json")
     app.on_startup.append(start_background_tasks)

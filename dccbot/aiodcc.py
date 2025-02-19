@@ -9,11 +9,26 @@ log = logging.getLogger(__name__)
 
 
 class DCCProtocol(irc.client_aio.IrcProtocol):
-    pass
+    """Subclass of IrcProtocol handling DCC connections.
+
+    Note that unlike IrcProtocol, this class does not implement the
+    connection_made callback, as the connection is made by the user
+    when calling the dcc method of the reactor.
+    """
 
 
 class AioDCCConnection(irc.client.DCCConnection):
-    rector: "AioReactor"
+    """A subclass of DCCConnection that handles DCC connections with asyncio.
+
+    Attributes:
+        reactor: The reactor that created this object.
+        buffer_class: The buffer class to use for incoming data.
+        passive: Whether this is a passive connection.
+        peeraddress: The address of the peer.
+        peerport: The port of the peer.
+
+    """
+
     buffer_class = buffer.DecodingLineBuffer
 
     protocol_class = DCCProtocol
@@ -21,20 +36,21 @@ class AioDCCConnection(irc.client.DCCConnection):
     protocol: DCCProtocol
     socket: None
     connected: bool
-    passive: bool
     peeraddress: str
     peerport: int
 
     async def connect(self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory()):
         """Connect/reconnect to a DCC peer.
 
-        Arguments:
-            address -- Host/IP address of the peer.
-            port -- The port number to connect to.
-            connect_factory -- A callable that takes the event loop and the
+        Args:
+            address: The address of the peer.
+            port: The port to connect to.
+            connect_factory: A callable that takes the event loop and the
               server address, and returns a connection (with a socket interface)
 
-        Returns the DCCConnection object.
+        Returns:
+            The DCCConnection object.
+
         """
         self.peeraddress = address
         self.peerport = port
@@ -67,15 +83,14 @@ class AioDCCConnection(irc.client.DCCConnection):
         The local IP address and port are available as
         self.peeraddress and self.peerport.
         """
-
         raise NotImplementedError()
 
     def disconnect(self, message: str = ""):
         """Hang up the connection and close the object.
 
-        Arguments:
+        Args:
+            message: Quit message.
 
-            message -- Quit message.
         """
         try:
             del self.connected
@@ -84,16 +99,16 @@ class AioDCCConnection(irc.client.DCCConnection):
 
         self.transport.close()
 
-        self.reactor._handle_event(
-            self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message])
-        )
+        self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
         self.reactor._remove_connection(self)
 
     def process_data(self, new_data: bytes):
-        """
-        handles incoming data from the `DCCProtocol` connection.
-        """
+        """Handle incoming data from the `DCCProtocol` connection.
 
+        Args:
+            new_data: The data to process.
+
+        """
         if self.passive and not self.connected:
             raise NotImplementedError()
             # TODO: implement passive DCC connection
@@ -105,9 +120,7 @@ class AioDCCConnection(irc.client.DCCConnection):
 
             if len(self.buffer) > 2**14:
                 # Bad peer! Naughty peer!
-                log.info(
-                    "Received >16k from a peer without a newline; " "disconnecting."
-                )
+                log.info("Received >16k from a peer without a newline; disconnecting.")
                 self.disconnect()
                 return
         else:
@@ -129,9 +142,12 @@ class AioDCCConnection(irc.client.DCCConnection):
             event = irc.client.Event(command, prefix, target, arguments)
             self.reactor._handle_event(self, event)
 
-    def send_bytes(self, bytes):
-        """
-        Send data to DCC peer.
+    def send_bytes(self, bytes: bytes):
+        """Send data to DCC peer.
+
+        Args:
+            bytes: The data to send.
+
         """
         try:
             self.transport.write(bytes)
@@ -141,17 +157,31 @@ class AioDCCConnection(irc.client.DCCConnection):
 
 
 class AioReactor(irc.client_aio.AioReactor):
+    """Asynchronous IRC client reactor with DCC support.
+
+    This reactor is used by the IRC client to handle incoming and outgoing
+    data. It also provides the ability to create DCC connections.
+
+    Attributes:
+        dcc_connection_class: The class to use for creating DCCConnection
+            objects. Defaults to AioDCCConnection.
+
+    """
+
     dcc_connection_class = AioDCCConnection
 
     def dcc(self, dcctype="chat"):
-        """Creates and returns a DCCConnection object.
+        """Create a and return a DCCConnection object.
 
-        Arguments:
+        Args:
+            dcctype (str): The type of DCC connection to create. Defaults to
+                "chat". If "chat", incoming data will be split in
+                newline-separated chunks. If "raw", incoming data is not
+                touched.
 
-            dcctype -- "chat" for DCC CHAT connections or "raw" for
-                       DCC SEND (or other DCC types). If "chat",
-                       incoming data will be split in newline-separated
-                       chunks. If "raw", incoming data is not touched.
+        Returns:
+            dccbot.aiodcc.AioDCCConnection: The created DCCConnection object.
+
         """
         with self.mutex:
             conn = self.dcc_connection_class(self, dcctype)

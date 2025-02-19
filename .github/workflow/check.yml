@@ -1,0 +1,37 @@
+name: Python Code Checks
+
+on:
+  pull_request:
+
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python environment
+        run: |
+          apt-get update && apt-get install python3-venv -y
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install uv
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install -r <(uv pip compile --all-extras pyproject.toml)
+
+      - name: Run Ruff (PEP 8 Formatting)
+        run: |
+          source .venv/bin/activate
+          ruff format --check --diff
+
+      - name: Run Ruff (Linting + Docstrings)
+        run: |
+          source .venv/bin/activate
+          ruff check
+

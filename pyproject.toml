@@ -12,5 +12,22 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "autopep8>=2.3.2",
+    "ruff>=0.9.6",
+    "tox>=4.24.1",
 ]
+
+
+[tool.ruff]
+line-length = 160
+indent-width = 4  # Same as autopep8 default
+
+[tool.ruff.format]
+quote-style = "double"  # Or "single" if you prefer
+indent-style = "space"  # Use spaces instead of tabs
+line-ending = "lf"  # Keep consistency
+preview = true
+
+[tool.ruff.lint]
+select = ["E9", "F82", "D"]  # Syntax errors + docstrings
+ignore = ["D203", "D213", "D100", "F821"]  # Ignore specific docstring rules
+
