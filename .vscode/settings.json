@@ -1,3 +1,17 @@
 {
-    "python.languageServer": "None"
+    "python.languageServer": "None",
+    "cSpell.words": [
+        "aiodcc",
+        "bannedfromchan",
+        "CTCP",
+        "dccbot",
+        "dccmsg",
+        "ircbot",
+        "nickserv",
+        "nosuchnick",
+        "numstr",
+        "privmsg",
+        "privnotice",
+        "SSEND"
+    ]
 }

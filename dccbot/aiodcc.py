@@ -29,6 +29,7 @@ class AioDCCConnection(irc.client.DCCConnection):
 
     """
 
+    reactor: "AioReactor"
     buffer_class = buffer.DecodingLineBuffer
 
     protocol_class = DCCProtocol
