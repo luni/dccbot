@@ -7,6 +7,7 @@ import random
 import string
 import shlex
 import struct
+import ssl
 import re
 import uuid
 import irc.client_aio
