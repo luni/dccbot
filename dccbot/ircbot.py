@@ -769,7 +769,7 @@ class IRCBot(AioSimpleIRCClient):
 
         transfer["bytes_received"] += len(data)
         # Send 64bit ACK
-        if transfer['size'] >= 1024*1024*1024*4:
+        if transfer["size"] >= 1024 * 1024 * 1024 * 4:
             dcc.send_bytes(struct.pack("!Q", transfer["bytes_received"] + transfer["offset"]))
         else:
             dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
