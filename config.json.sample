@@ -12,7 +12,12 @@
       "nick": "MyBotNick",
       "use_tls": true,
       "port": 13371,
-      "verify_ssl": false
+      "verify_ssl": false,
+      "also_join": {
+        "#channel_a": [
+          "#channel_a_chat"
+        ]
+      }
     }
   },
   "default_server_config": {

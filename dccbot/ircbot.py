@@ -12,9 +12,9 @@ import re
 import uuid
 import irc.client_aio
 from irc.connection import AioFactory
-from irc.client_aio import AioSimpleIRCClient, AioConnection
+from irc.client_aio import AioSimpleIRCClient
 import irc.client
-from dccbot.aiodcc import AioReactor, AioDCCConnection
+from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
 import magic
 from typing import Optional, List, Dict, Any, Set
 
@@ -46,6 +46,8 @@ class IRCBot(AioSimpleIRCClient):
         banned_channels: The channels the bot is banned from.
         connection: The connection to the server.
         bot_manager: The parent IRCBotManager object.
+        authenticated_event: Event to signal when the bot is authenticated.
+        authenticated: Whether the bot is authenticated.
 
     """
 
@@ -63,6 +65,8 @@ class IRCBot(AioSimpleIRCClient):
     banned_channels: Set[str]
     connection: Optional[AioConnection]
     bot_manager: "IRCBotManager"
+    authenticated_event: asyncio.Event
+    authenticated: bool
 
     def __init__(
         self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[List[str]], max_file_size: int, bot_manager: "IRCBotManager"
@@ -105,6 +109,8 @@ class IRCBot(AioSimpleIRCClient):
         self.last_active = time.time()
         self.bot_channel_map = {}
         self.bot_manager = bot_manager
+        self.authenticated_event = asyncio.Event()
+        self.authenticated = False
 
     @staticmethod
     def get_version():
@@ -242,23 +248,41 @@ class IRCBot(AioSimpleIRCClient):
             None
 
         """
+        if self.server_config.get("nickserv_password") and self.authenticated is False:
+            logging.debug("Waiting for NickServ authentication")
+            try:
+                await asyncio.wait_for(self.authenticated_event.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.error("Timed out waiting for NickServ authentication")
+
+        # Join channels
+        for channel in self.server_config.get("channels", []):
+            asyncio.create_task(self.join_channel(channel))
+
         while True:
             data: Dict[str, Any] = await self.command_queue.get()
             self.last_active = time.time()
             if not data:
                 continue
 
+            waiting_channels = []
             if data["command"] in ("send", "join"):
                 if data.get("channels"):
                     for channel in data["channels"]:
                         await self.join_channel(channel)
+                        waiting_channels.append(channel)
+                        if channel in self.server_config.get("also_join", {}):
+                            for achannel in self.server_config["also_join"][channel]:
+                                await self.join_channel(achannel)
+                                waiting_channels.append(achannel)
 
                 if not data.get("user") or not data.get("message"):
                     continue
 
                 # wait until bot joined channel
-                if data.get("channels"):
-                    waiting_channels = data["channels"]
+                # would like to use asyncio.wait_for, but it doesn't work as
+                # the main code is not async
+                if waiting_channels:
                     retry = 0
                     while retry < 10 and waiting_channels:
                         for channel in list(waiting_channels):
@@ -270,7 +294,6 @@ class IRCBot(AioSimpleIRCClient):
 
                     if waiting_channels:
                         logger.warning(f"Failed to join channels {', '.join(waiting_channels)} after 10 seconds")
-                        continue
 
                 try:
                     self.connection.privmsg(data["user"], data["message"])
@@ -312,10 +335,6 @@ class IRCBot(AioSimpleIRCClient):
             self.connection.privmsg("NickServ", f"IDENTIFY {self.server_config['nickserv_password']}")
             logger.info("Sent NickServ IDENTIFY command")
 
-        # Join channels
-        for channel in self.server_config.get("channels", []):
-            asyncio.create_task(self.join_channel(channel))
-
         # Start processing the message queue
         asyncio.create_task(self.process_command_queue())
 
@@ -339,8 +358,34 @@ class IRCBot(AioSimpleIRCClient):
         logger.info("Banned from channel %s: %s", event.target, event.arguments[0])
         channel_name = event.arguments[0].lower()
         self.banned_channels.add(channel_name)
+
+    def on_nochanmodes(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Process operations after receiving a UMODE message from the server.
+
+        If the bot is not allowed to join (because of a channel mode), remove it from the list of joined channels.
+
+        Args:
+            connection (irc.client_aio.AioConnection): The connection to the IRC server.
+            event (irc.client_aio.Event): The event that triggered this method to be called.
+
+        """
+        logger.info("Not allowed to join channel %s: %s", event.arguments[0], event.arguments[1])
+        channel_name = event.arguments[0].lower()
         if channel_name in self.joined_channels:
+            logger.info("Removed from channel %s: %s", event.target, event.arguments)
             del self.joined_channels[channel_name]
+
+    def on_loggedin(self, connection: AioConnection, event: irc.client_aio.Event):
+        """Process operations after receiving a LOGGEDIN message from the server.
+
+        Args:
+            connection (irc.client_aio.AioConnection): The connection to the IRC server.
+            event (irc.client_aio.Event): The event that triggered this method to be called.
+
+        """
+        logger.info(event.arguments)
+        self.authenticated_event.set()
+        self.authenticated = True
 
     def on_part(self, connection: AioConnection, event: irc.client_aio.Event):
         """Process operations after receiving a PART message from the server.
