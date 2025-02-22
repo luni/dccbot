@@ -7,7 +7,18 @@
       "random_nick": true,
       "channels": ["#channel"],
       "port": 6667
+    },
+    "irc.buggyirc.net": {
+      "nick": "MyBotNick",
+      "use_tls": true,
+      "port": 13371,
+      "verify_ssl": false
     }
+  },
+  "default_server_config": {
+    "nick": "dccbot",
+    "use_tls": true,
+    "random_nick": false
   },
   "default_download_path": "./downloads",
   "allowed_mimetypes": [
@@ -27,5 +38,11 @@
   ],
   "max_file_size": 8589934592,
   "channel_idle_timeout": 10,
-  "server_idle_timeout": 300
+  "server_idle_timeout": 300,
+  "auto_md5sum": true,
+  "http": {
+    "bind_addr": "0.0.0.0",
+    "bind_port": 9999,
+    "socket": null
+  }
 }

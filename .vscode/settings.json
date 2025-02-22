@@ -12,6 +12,7 @@
         "numstr",
         "privmsg",
         "privnotice",
-        "SSEND"
+        "SSEND",
+        "XDCC"
     ]
 }

@@ -147,7 +147,13 @@ class IRCBot(AioSimpleIRCClient):
 
             if self.server_config.get("use_tls", False):
                 # Initialize AioConnection with the custom connect_factory
-                connect_factory = AioFactory(ssl=True)
+                if not self.server_config.get("verify_ssl", True):
+                    ssl_context = ssl.create_default_context()
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                else:
+                    ssl_context = True
+                connect_factory = AioFactory(ssl=ssl_context)
                 port = self.server_config.get("port", 6697)
             else:
                 connect_factory = AioFactory()
@@ -657,7 +663,13 @@ class IRCBot(AioSimpleIRCClient):
 
         connect_factory = None
         if use_ssl:
-            connect_factory = AioFactory(ssl=True)
+            # Create a new SSL context without hostname verification and disable certificate validation
+            # This is necessary because the server does not have a valid certificate
+            # SSL is only used for encryption, not for authentication of the sender
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connect_factory = AioFactory(ssl=ssl_context)
         else:
             connect_factory = AioFactory()
 
