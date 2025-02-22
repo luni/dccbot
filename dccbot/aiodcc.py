@@ -17,6 +17,33 @@ class DCCProtocol(irc.client_aio.IrcProtocol):
     """
 
 
+class NonStrictDecodingLineBuffer(buffer.DecodingLineBuffer):
+    """A subclass of DecodingLineBuffer that decodes the line using the replace error handler.
+
+    This class is used by AioDCCConnection to decode the incoming data. It
+    decodes the line using the replace error handler, which replaces invalid
+    characters with a replacement marker (such as '?').
+
+    Attributes:
+        errors (str): The error handler to use when decoding the line.
+
+    """
+
+    errors = "replace"
+
+
+class NonStrictAioConnection(irc.client_aio.AioConnection):
+    """A subclass of AioConnection that uses NonStrictDecodingLineBuffer for incoming data.
+
+    The NonStrictDecodingLineBuffer is a subclass of DecodingLineBuffer that
+    decodes the line using the replace error handler. This means that invalid
+    characters in the incoming data will be replaced with a replacement marker
+    (such as '?') instead of raising an error.
+    """
+
+    buffer_class = NonStrictDecodingLineBuffer
+
+
 class AioDCCConnection(irc.client.DCCConnection):
     """A subclass of DCCConnection that handles DCC connections with asyncio.
 
@@ -30,7 +57,7 @@ class AioDCCConnection(irc.client.DCCConnection):
     """
 
     reactor: "AioReactor"
-    buffer_class = buffer.DecodingLineBuffer
+    buffer_class = NonStrictDecodingLineBuffer
 
     protocol_class = DCCProtocol
     transport: irc.connection.AioFactory
