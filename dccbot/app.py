@@ -90,6 +90,7 @@ async def handle_msg(request: web.Request) -> web.Response:
     {
         "server": str,
         "channel": str,
+        "channels": List[str],
         "user": str,
         "message": str
     }
@@ -112,10 +113,19 @@ async def handle_msg(request: web.Request) -> web.Response:
             return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
         bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
+        channels = []
+
+        if data.get("channels"):
+            channels = _clean_channel_list(data["channels"])
+        elif data.get("channel"):
+            channels = _clean_channel_list([
+                data["channel"],
+            ])
+
         asyncio.create_task(
             bot.queue_command({
                 "command": "send",
-                "channels": _clean_channel_list(data.get("channels", [data.get("channel", "")])),
+                "channels": channels,
                 "user": data["user"].lower().strip(),
                 "message": data["message"].strip(),
             })
