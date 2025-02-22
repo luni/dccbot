@@ -768,7 +768,11 @@ class IRCBot(AioSimpleIRCClient):
                 dcc.disconnect()
 
         transfer["bytes_received"] += len(data)
-        dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
+        # Send 64bit ACK
+        if transfer['size'] >= 1024*1024*1024*4:
+            dcc.send_bytes(struct.pack("!Q", transfer["bytes_received"] + transfer["offset"]))
+        else:
+            dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
 
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event):
         """Handle DCC DISCONNECT messages.
