@@ -223,7 +223,7 @@ async def start_background_tasks(app: web.Application) -> None:
     """
     bot_manager: IRCBotManager = app["bot_manager"]
     app["cleanup_task"] = asyncio.create_task(bot_manager.cleanup())
-    app["queue_processor_task"] = asyncio.create_task(bot_manager.check_queue_processor(app.loop, bot_manager.md5_check_queue))
+    app["queue_processor_task"] = asyncio.create_task(bot_manager.check_queue_processor(asyncio.get_running_loop(), bot_manager.md5_check_queue))
 
 
 async def cleanup_background_tasks(app: web.Application) -> None:
