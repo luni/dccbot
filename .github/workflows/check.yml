@@ -50,5 +50,5 @@ jobs:
       - name: Run pytest
         run: |
           source .venv/bin/activate
-          cp config.json.example config.json
+          cp config.json.sample config.json
           pytest
