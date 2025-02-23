@@ -1,6 +1,6 @@
 from aiohttp import web
 from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
-from marshmallow import Schema, fields
+from marshmallow import Schema, fields, ValidationError
 import logging
 from typing import List
 from dccbot.ircbot import IRCBot
@@ -149,7 +149,7 @@ class IRCBotAPI:
         try:
             data = request["data"]
             if not data.get("channel") and not data.get("channels"):
-                return web.json_response({"channel": ["Missing data for required field."]}, status=422)
+                return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
             bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
             await bot.queue_command({"command": "join", "channels": self._clean_channel_list(data.get("channels", [data.get("channel", "")]))})
@@ -174,7 +174,7 @@ class IRCBotAPI:
         try:
             data = request["data"]
             if not data.get("channel") and not data.get("channels"):
-                return web.json_response({"channel": ["Missing data for required field."]}, status=422)
+                return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
             bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
             await bot.queue_command({

@@ -48,7 +48,7 @@ async def test_join_request_missing_channel_data(api_client):
     resp = await client.post("/join", json=payload)
     assert resp.status == 422
     data = await resp.json()
-    assert data == {"channel": ["Missing data for required field."]}
+    assert data == {"json": {"channel": ["Missing data for required field."]}}
 
     # Ensure no commands were queued
     mock_bot_manager.get_bot.assert_not_called()
@@ -63,7 +63,7 @@ async def test_join_request_missing_server_data(api_client):
     resp = await client.post("/join", json=payload)
     assert resp.status == 422
     data = await resp.json()
-    assert data == {"server": ["Missing data for required field."]}
+    assert data == {"json": {"server": ["Missing data for required field."]}}
 
     # Ensure no commands were queued
     mock_bot_manager.get_bot.assert_not_called()
@@ -159,7 +159,7 @@ async def test_part_request_missing_channel_data(api_client):
     resp = await client.post("/part", json=payload)
     assert resp.status == 422
     data = await resp.json()
-    assert data == {"channel": ["Missing data for required field."]}
+    assert data == {"json": {"channel": ["Missing data for required field."]}}
 
     # Ensure no commands were queued
     mock_bot_manager.get_bot.assert_not_called()
@@ -174,7 +174,7 @@ async def test_part_request_missing_server_data(api_client):
     resp = await client.post("/part", json=payload)
     assert resp.status == 422
     data = await resp.json()
-    assert data == {"server": ["Missing data for required field."]}
+    assert data == {"json": {"server": ["Missing data for required field."]}}
 
     # Ensure no commands were queued
     mock_bot_manager.get_bot.assert_not_called()
