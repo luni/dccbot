@@ -47,3 +47,7 @@ jobs:
           source .venv/bin/activate
           ruff check
 
+      - name: Run pytest
+        run: |
+          source .venv/bin/activate
+          pytest

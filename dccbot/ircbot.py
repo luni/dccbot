@@ -209,7 +209,7 @@ class IRCBot(AioSimpleIRCClient):
             # If the channel is empty or the bot is not in the channel, do nothing
             return
 
-        self.connection.part(channel)
+        self.connection.part(channel, reason)
         logger.info(f"Parted channel: {channel} ({reason})")
         self.last_active = time.time()
         del self.joined_channels[channel]
@@ -313,7 +313,7 @@ class IRCBot(AioSimpleIRCClient):
             elif data["command"] == "part":
                 if data.get("channels"):
                     for channel in data["channels"]:
-                        await self.part_channel(channel)
+                        await self.part_channel(channel, data.get("reason"))
 
     def on_welcome(self, connection: AioConnection, event: irc.client_aio.Event):
         """Process operations after receiving the welcome message from the server.

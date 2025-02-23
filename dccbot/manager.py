@@ -34,7 +34,7 @@ class IRCBotManager:
     md5_check_queue: asyncio.Queue
     transfers: Dict[str, List[Dict[str, Any]]]
 
-    def __init__(self, config_file):
+    def __init__(self, config_file: str):
         """Initialize an IRCBotManager object.
 
         The configuration is loaded from the file and stored in the
@@ -43,7 +43,7 @@ class IRCBotManager:
         not specified.
 
         Args:
-            config_file: The path to the JSON configuration file.
+            config_file (str): The path to the JSON configuration file.
 
         """
         self.config_file = config_file

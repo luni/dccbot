@@ -6,18 +6,25 @@ readme = "README.md"
 license = {text = "MIT License"}
 requires-python = ">=3.10"
 dependencies = [
+    "aiohttp-apispec>=2.2.3",
     "aiohttp>=3.11.12",
     "irc>=20.5.0",
+    "pytest-aiohttp>=1.1.0",
     "python-magic>=0.4.27",
+    "apispec>=3.3.2",
 ]
 
 [dependency-groups]
 dev = [
+    "pytest-aiohttp>=1.1.0",
+    "pytest>=8.3.4",
     "ruff>=0.9.6",
     "tox>=4.24.1",
+    "pytest-asyncio>=0.25.3",
 ]
 
 [tool.ruff]
+exclude = ["docs", "tests"]
 line-length = 160
 indent-width = 4  # Same as autopep8 default
 
@@ -30,4 +37,11 @@ preview = true
 [tool.ruff.lint]
 select = ["E9", "F82", "D"]  # Syntax errors + docstrings
 ignore = ["D203", "D213", "D100", "F821"]  # Ignore specific docstring rules
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
 

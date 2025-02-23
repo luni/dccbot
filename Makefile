@@ -3,7 +3,7 @@
 .PHONY: all format check validate
 
 # Default target: runs format and check
-all: validate
+all: validate test
 
 # Format the code using ruff
 format:
@@ -21,6 +21,9 @@ fix-ruff:
 
 fix: reformat-ruff fix-ruff
 	@echo "Updated code."
+
+test:
+	pytest
 
 # Validate the code (format + check)
 validate: format check
