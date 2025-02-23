@@ -15,28 +15,91 @@ logger = logging.getLogger(__name__)
 class JoinRequestSchema(Schema):
     """Schema for the /join endpoint."""
 
-    server = fields.Str(required=True, description="IRC server address")
-    channel = fields.Str(required=False, description="Channel to join")
-    channels = fields.List(fields.Str(), required=False, description="List of channels to join")
+    server = fields.Str(
+        required=True,
+        metadata={
+            "description": "IRC server address",
+        },
+    )
+    channel = fields.Str(
+        required=False,
+        metadata={
+            "description": "Channel to join",
+        },
+    )
+    channels = fields.List(
+        fields.Str(),
+        required=False,
+        metadata={
+            "description": "List of channels to join",
+        },
+    )
 
 
 class PartRequestSchema(Schema):
     """Schema for the /part endpoint."""
 
-    server = fields.Str(required=True, description="IRC server address")
-    channel = fields.Str(required=False, description="Channel to part")
-    channels = fields.List(fields.Str(), required=False, description="List of channels to join")
-    reason = fields.Str(required=False, description="Reason for parting the channel")
+    server = fields.Str(
+        required=True,
+        metadata={
+            "description": "IRC server address",
+        },
+    )
+    channel = fields.Str(
+        required=False,
+        metadata={
+            "description": "Channel to part",
+        },
+    )
+    channels = fields.List(
+        fields.Str(),
+        required=False,
+        metadata={
+            "description": "List of channels to join",
+        },
+    )
+    reason = fields.Str(
+        required=False,
+        metadata={
+            "description": "Reason for parting the channel",
+        },
+    )
 
 
 class MsgRequestSchema(Schema):
     """Schema for the /msg endpoint."""
 
-    server = fields.Str(required=True, description="IRC server address")
-    user = fields.Str(required=True, description="User to send the message to")
-    message = fields.Str(required=True, description="Message to send")
-    channel = fields.Str(required=False, description="Channel to send the message to")
-    channels = fields.List(fields.Str(), required=False, description="List of channels to send the message to")
+    server = fields.Str(
+        required=True,
+        metadata={
+            "description": "IRC server address",
+        },
+    )
+    user = fields.Str(
+        required=True,
+        metadata={
+            "description": "User to send the message to",
+        },
+    )
+    message = fields.Str(
+        required=True,
+        metadata={
+            "description": "Message to send",
+        },
+    )
+    channel = fields.Str(
+        required=False,
+        metadata={
+            "description": "Channel to send the message to",
+        },
+    )
+    channels = fields.List(
+        fields.Str(),
+        required=False,
+        metadata={
+            "description": "List of channels to send the message to",
+        },
+    )
 
 
 class ChannelInfo(Schema):
@@ -51,7 +114,9 @@ class NetworkInfo(Schema):
 
     server = fields.Str()
     nickname = fields.Str()
-    channels = fields.List(fields.Nested(ChannelInfo))
+    channels = fields.List(
+        fields.Nested(ChannelInfo),
+    )
 
 
 class TransferInfo(Schema):
@@ -65,8 +130,12 @@ class TransferInfo(Schema):
     received = fields.Int()
     speed = fields.Float()
     speed_avg = fields.Float()
-    md5 = fields.Str(allow_none=True)
-    file_md5 = fields.Str(allow_none=True)
+    md5 = fields.Str(
+        allow_none=True,
+    )
+    file_md5 = fields.Str(
+        allow_none=True,
+    )
     status = fields.Str()
     connected = fields.Bool()
 
@@ -74,8 +143,12 @@ class TransferInfo(Schema):
 class InfoResponseSchema(Schema):
     """Response Schema for the /info endpoint."""
 
-    networks = fields.List(fields.Nested(NetworkInfo))
-    transfers = fields.List(fields.Nested(TransferInfo))
+    networks = fields.List(
+        fields.Nested(NetworkInfo),
+    )
+    transfers = fields.List(
+        fields.Nested(TransferInfo),
+    )
 
 
 class DefaultResponseSchema(Schema):
