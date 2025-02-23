@@ -526,7 +526,7 @@ class IRCBot(AioSimpleIRCClient):
 
         for item in self.resume_queue[event.source.nick]:
             logger.info("item: %s", item)
-            if peer_port != item[1] or resume_position != item[4]:
+            if peer_port != item[1] or resume_position != item[5]:
                 continue
 
             self.resume_queue[event.source.nick].remove(item)
