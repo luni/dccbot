@@ -6,7 +6,8 @@
       "use_tls": false,
       "random_nick": true,
       "channels": ["#channel"],
-      "port": 6667
+      "port": 6667,
+      "rewrite_to_ssend": ["#channel"]
     },
     "irc.buggyirc.net": {
       "nick": "MyBotNick",
@@ -25,6 +26,7 @@
     "use_tls": true,
     "random_nick": false
   },
+  "ssend_map": {},
   "default_download_path": "./downloads",
   "allowed_mimetypes": [
     "image/jpeg",
@@ -47,6 +49,7 @@
   "resume_timeout": 30,
   "transfer_list_timeout": 86400,
   "auto_md5sum": true,
+  "incomplete_suffix": ".incomplete",
   "http": {
     "bind_addr": "0.0.0.0",
     "bind_port": 9999,

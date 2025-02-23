@@ -7,12 +7,15 @@
         "dccbot",
         "dccmsg",
         "ircbot",
+        "LOGGEDIN",
         "nickserv",
+        "NOCHANMODES",
         "nosuchnick",
         "numstr",
         "privmsg",
         "privnotice",
         "SSEND",
+        "UMODE",
         "XDCC"
     ],
     "python.testing.pytestArgs": [

@@ -1,11 +1,12 @@
 from aiohttp import web
 from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
-from marshmallow import Schema, fields, ValidationError
+from marshmallow import Schema, fields
 import logging
 from typing import List
 from dccbot.ircbot import IRCBot
 from dccbot.manager import IRCBotManager, start_background_tasks, cleanup_background_tasks
 import time
+import re
 import asyncio
 
 logger = logging.getLogger(__name__)
@@ -278,13 +279,25 @@ class IRCBotAPI:
             if not data.get("user") or not data.get("message"):
                 return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
-            bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
+            bot_manager = request.app["bot_manager"]
+            bot: IRCBot = await bot_manager.get_bot(data["server"])
             channels = []
 
             if data.get("channels"):
                 channels = self._clean_channel_list(data["channels"])
             elif data.get("channel"):
                 channels = self._clean_channel_list([data["channel"]])
+
+            # Check if we need to rewrite to ssend
+            if (
+                data["message"]
+                and (
+                    any(channel in bot.server_config.get("rewrite_to_ssend", []) for channel in channels)
+                    or data["user"].lower().strip() in bot_manager.config.get("ssend_map", {})
+                )
+                and re.match(r"^xdcc (send|batch) ", data["message"], re.I)
+            ):
+                data["message"] = re.sub(r"^xdcc (send|batch) ", r"xdcc s\1 ", data["message"], re.I)
 
             asyncio.create_task(
                 bot.queue_command({

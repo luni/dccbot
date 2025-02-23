@@ -67,6 +67,7 @@ class IRCBot(AioSimpleIRCClient):
     bot_manager: "IRCBotManager"
     authenticated_event: asyncio.Event
     authenticated: bool
+    config: dict
 
     def __init__(
         self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[List[str]], max_file_size: int, bot_manager: "IRCBotManager"
@@ -111,6 +112,7 @@ class IRCBot(AioSimpleIRCClient):
         self.bot_manager = bot_manager
         self.authenticated_event = asyncio.Event()
         self.authenticated = False
+        self.config = bot_manager.config
 
     @staticmethod
     def get_version():
@@ -272,9 +274,9 @@ class IRCBot(AioSimpleIRCClient):
                         await self.join_channel(channel)
                         waiting_channels.append(channel)
                         if channel in self.server_config.get("also_join", {}):
-                            for achannel in self.server_config["also_join"][channel]:
-                                await self.join_channel(achannel)
-                                waiting_channels.append(achannel)
+                            for also_join_channel in self.server_config["also_join"][channel]:
+                                await self.join_channel(also_join_channel)
+                                waiting_channels.append(also_join_channel)
 
                 if not data.get("user") or not data.get("message"):
                     continue
@@ -360,7 +362,7 @@ class IRCBot(AioSimpleIRCClient):
         self.banned_channels.add(channel_name)
 
     def on_nochanmodes(self, connection: AioConnection, event: irc.client_aio.Event):
-        """Process operations after receiving a UMODE message from the server.
+        """Process operations after receiving a NOCHANMODES message from the server.
 
         If the bot is not allowed to join (because of a channel mode), remove it from the list of joined channels.
 
@@ -536,7 +538,7 @@ class IRCBot(AioSimpleIRCClient):
         if not self.resume_queue[event.source.nick]:
             del self.resume_queue[event.source.nick]
 
-        self.init_dcc_connection(event.source.nick, item[0], peer_port, item[2], item[3], resume_position, item[5], item[6])
+        self.init_dcc_connection(event.source.nick, item[0], peer_port, item[2], item[3], item[4], resume_position, item[6], item[7])
 
     def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool):
         """Handle DCC SEND command.
@@ -601,30 +603,54 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning(f"Rejected {filename}: File size exceeds limit ({size} > {self.max_file_size})")
             return
 
-        download_path = os.path.join(self.download_path, filename)
-        local_size = 0
-        completed = False
-        if os.path.exists(download_path):
-            local_size = os.path.getsize(download_path)
-            if local_size > size:
-                logger.warning(f"Rejected {filename}: Local file larger then remote file ({local_size} > {size})")
+        # check if transfer for same file already running
+        for item in self.bot_manager.transfers.get(filename, []):
+            if item["size"] == size and item["connected"]:
+                logger.warning(f"Rejected {filename}: Download of file already in progress")
                 return
 
-            if local_size == size:
-                completed = True
-                logger.info(f"{filename}: File already completed")
-                local_size -= 1
+        local_download_path = os.path.join(self.download_path, filename)
+        local_files = [local_download_path]
+        if self.config.get("incomplete_suffix"):
+            local_files.append(local_download_path + self.config["incomplete_suffix"])
+            local_download_path += self.config["incomplete_suffix"]
 
-            logger.info(f"Send DCC RESUME {filename} starting at {local_size} bytes")
-            self.connection.ctcp_reply(event.source.nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)]))
+        local_size = 0
+        completed = False
+        for download_path in local_files:
+            if os.path.exists(download_path):
+                local_size = os.path.getsize(download_path)
+                if local_size > size:
+                    logger.warning(f"Rejected {filename}: Local file larger then remote file ({local_size} > {size})")
+                    return
 
-            if event.source.nick not in self.resume_queue:
-                self.resume_queue[event.source.nick] = []
+                if local_size == size:
+                    completed = True
+                    logger.info(f"{filename}: File already completed")
+                    local_size -= 1
 
-            self.resume_queue[event.source.nick].append((peer_address, peer_port, filename, size, local_size, use_ssl, completed, time.time()))
-            return
+                logger.info(f"Send DCC RESUME {filename} starting at {local_size} bytes")
+                self.connection.ctcp_reply(
+                    event.source.nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)])
+                )
 
-        self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, size, local_size, use_ssl, completed)
+                if event.source.nick not in self.resume_queue:
+                    self.resume_queue[event.source.nick] = []
+
+                self.resume_queue[event.source.nick].append((
+                    peer_address,
+                    peer_port,
+                    filename,
+                    download_path,
+                    size,
+                    local_size,
+                    use_ssl,
+                    completed,
+                    time.time(),
+                ))
+                return
+
+        self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, download_path, size, local_size, use_ssl, completed)
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event):
         """Handle CTCP messages.
@@ -676,6 +702,7 @@ class IRCBot(AioSimpleIRCClient):
         peer_address: str,
         peer_port: int,
         filename: str,
+        download_path: str,
         size: int,
         offset: Optional[int] = None,
         use_ssl: Optional[bool] = False,
@@ -692,6 +719,7 @@ class IRCBot(AioSimpleIRCClient):
             peer_address (str): The address of the peer.
             peer_port (int): The port of the peer.
             filename (str): The name of the file to receive.
+            download_path (str): The path + filename to the file to store.
             size (int): The size of the file.
             offset (int): The offset of the file to resume from.
             use_ssl (bool): Whether to use SSL.
@@ -734,7 +762,7 @@ class IRCBot(AioSimpleIRCClient):
             "server": self.server,
             "peer_address": peer_address,
             "peer_port": peer_port,
-            "file_path": os.path.join(self.download_path, filename),
+            "file_path": download_path,
             "filename": filename,
             "start_time": now,
             "bytes_received": 0,
@@ -872,6 +900,15 @@ class IRCBot(AioSimpleIRCClient):
                 transfer["completed"] = time.time()
                 if transfer.get("md5"):
                     self.bot_manager.md5_check_job_queue.put(transfer)
+
+                if self.config.get("incomplete_suffix") and file_path.endswith(self.config["incomplete_suffix"]):
+                    target = file_path[: -len(self.config.get("incomplete_suffix"))]
+                    logger.info(f"Renaming {file_path} to {target}")
+                    try:
+                        os.rename(file_path, target)
+                        transfer["file_path"] = target
+                    except Exception as e:
+                        logger.error(f"Error renaming {file_path} to {target}: {e}")
 
         del self.current_transfers[dcc]
 

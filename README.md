@@ -33,6 +33,7 @@ keys:
     *   `port`: the port to connect to, default: 6667
     *   `channels`: a list of channels to join when connecting to the server, optional
     *   `also_join`: a dictionary of channels to join if the specific channel is joined
+    *   `rewrite_to_ssend`: a list of channels to rewrite xdcc send to ssend for users in this channels
 *   `default_server_config`: same as `servers`, used if the server connected to is not in `servers`
 *   `download_path`: the directory where the bot should download files
 *   `allowed_mimetypes`: a list of mimetypes the bot should allow to be sent
@@ -48,6 +49,10 @@ keys:
     from the transfer list in /info response
 *   `auto_md5sum`: a boolean indicating to verify the md5sum of the file if
     the bot sends the md5sum as message on start of transfer or after successful transfer
+    `incomplete_suffix`: a string that is appended to the filename while downloading.
+    If file was transferred successfully this suffix is removed.
+*   `ssend_map`: a dictionary of users which support ssend (secure send). xdcc send command is
+    replaced with ssend for these users.
 *   `http`: a dictionary with the following keys:
     *   `socket`: the path to the socket to use for the http server (instead of host and port)
     *   `port`: the port to bind the http server to, default: 8080
