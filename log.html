@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Logs</title>
+    <style>
+        /* Basic styling */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        #logs {
+            width: 100%;
+            height: 400px;
+            font-family: monospace;
+            font-size: 14px;
+            background-color: #000;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 10px;
+            box-sizing: border-box;
+            white-space: pre-wrap;
+            overflow-y: auto;
+        }
+
+        /* Colors for log levels */
+        .log-info {
+            color: #00ff00;
+            /* Green for INFO */
+        }
+
+        .log-warning {
+            color: #ffcc00;
+            /* Yellow for WARNING */
+        }
+
+        .log-error {
+            color: #ff0000;
+            /* Red for ERROR */
+        }
+
+        .log-debug {
+            color: #00ffff;
+            /* Cyan for DEBUG */
+        }
+
+        .log-critical {
+            color: #ff00ff;
+            /* Magenta for CRITICAL */
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebSocket Logs</h1>
+    <div id="logs" contenteditable="true"></div>
+
+    <script>
+        const logsElement = document.getElementById("logs");
+
+        // Construct the WebSocket URL dynamically
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const host = window.location.host; // Includes hostname and port
+        const wsUrl = `${protocol}//${host}/ws`;
+
+        // Connect to the WebSocket server
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log("WebSocket connection established");
+        };
+
+        ws.onmessage = (event) => {
+            // Parse the log message
+            const logEntry = JSON.parse(event.data);
+
+            // Format the log message with consistent padding
+            const timestamp = logEntry.timestamp;
+            const level = logEntry.level.padEnd(8); // Pad log level to 8 characters
+            const message = logEntry.message;
+
+            // Determine the CSS class based on the log level
+            let logClass = "";
+            switch (logEntry.level.toLowerCase()) {
+                case "info":
+                    logClass = "log-info";
+                    break;
+                case "warning":
+                    logClass = "log-warning";
+                    break;
+                case "error":
+                    logClass = "log-error";
+                    break;
+                case "debug":
+                    logClass = "log-debug";
+                    break;
+                case "critical":
+                    logClass = "log-critical";
+                    break;
+                default:
+                    logClass = "";
+            }
+
+            // Create the formatted log line
+            const logLine = `<span class="${logClass}">${timestamp} - ${level} - ${message}</span><br>`;
+
+            // Append the log line to the logs container
+            logsElement.innerHTML += logLine;
+
+            // Auto-scroll to the bottom
+            logsElement.scrollTop = logsElement.scrollHeight;
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket connection closed");
+        };
+    </script>
+</body>
+
+</html>

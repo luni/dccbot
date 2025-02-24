@@ -1,13 +1,15 @@
-from aiohttp import web
+from aiohttp import web, ClientWebSocketResponse
 from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
 from marshmallow import Schema, fields
 import logging
-from typing import List
+from typing import List, Set
 from dccbot.ircbot import IRCBot
 from dccbot.manager import IRCBotManager, start_background_tasks, cleanup_background_tasks
 import time
+import datetime
 import re
 import asyncio
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,51 @@ class DefaultResponseSchema(Schema):
     status = fields.Str()
 
 
+# Custom logging handler to send logs to WebSocket clients
+class WebSocketLogHandler(logging.Handler):
+    """Custom logging handler to send logs to connected WebSocket clients.
+
+    Attributes:
+        websockets (Set[ClientWebSocketResponse]): Set of WebSocket
+            connections to send log entries to.
+
+    """
+
+    websockets: Set[ClientWebSocketResponse]
+
+    def __init__(self, websockets: Set[ClientWebSocketResponse]):
+        """Initialize a WebSocketLogHandler.
+
+        Args:
+            websockets (Set[ClientWebSocketResponse]): Set of WebSocket
+                connections to send log entries to.
+
+        """
+        super().__init__()
+        self.websockets = websockets
+
+    def emit(self, record: logging.LogRecord):
+        """Send a log entry to connected WebSocket clients.
+
+        Args:
+            record (logging.LogRecord): The log record to send.
+
+        """
+        log_entry = {
+            "timestamp": record.asctime,
+            "level": record.levelname,
+            "message": self.format(record),
+        }
+        for ws in self.websockets:
+            try:
+                if ws.closed:
+                    self.websockets.remove(ws)
+                    continue
+                asyncio.create_task(ws.send_str(json.dumps(log_entry)))
+            except Exception as e:
+                pass
+
+
 class IRCBotAPI:
     """Main class for the IRC bot API.
 
@@ -167,6 +214,9 @@ class IRCBotAPI:
         bot_manager (IRCBotManager): The IRC bot manager.
 
     """
+
+    app: web.Application
+    websockets: Set[ClientWebSocketResponse]
 
     def __init__(self, config_file: str):
         """Initialize an IRCBotAPI object.
@@ -181,8 +231,55 @@ class IRCBotAPI:
         self.app["bot_manager"] = self.bot_manager
         self.app.on_startup.append(start_background_tasks)
         self.app.on_cleanup.append(cleanup_background_tasks)
+        self.websockets = set()
         self.setup_routes()
         self.setup_apispec()
+
+        ws_log_handler = WebSocketLogHandler(self.websockets)
+        ws_log_handler.setFormatter(logging.Formatter("%(message)s"))
+        root_logger = logging.getLogger()
+        root_logger.addHandler(ws_log_handler)
+
+    # WebSocket handler
+    async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
+        """Handle a WebSocket connection.
+
+        Establish a WebSocket connection and add it to the set of open connections.
+        When a message is received from the client, log it. When the connection is
+        closed (either by the client or due to an error), remove the connection from
+        the set and log the event.
+
+        Returns:
+            web.WebSocketResponse: The WebSocket response object.
+
+        """
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        # Add the new WebSocket connection to the set
+        self.websockets.add(ws)
+        logger.info("New WebSocket connection established")
+
+        try:
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    logging.info(f"Received message from client: {msg.data}")
+                elif msg.type == web.WSMsgType.ERROR:
+                    logging.error(f"WebSocket connection closed with exception: {ws.exception()}")
+        finally:
+            # Remove the WebSocket connection when it's closed
+            websockets.remove(ws)
+            logger.info("WebSocket connection closed")
+
+        return ws
+
+    async def log_html(self, request: web.Request) -> web.Response:
+        """Return the contents of index.html as a text/html response.
+
+        This endpoint serves the HTML for the WebSocket log viewer.
+        """
+        with open("log.html") as f:
+            return web.Response(text=f.read(), content_type="text/html")
 
     def setup_routes(self):
         """Set up routes for the aiohttp application."""
@@ -191,6 +288,8 @@ class IRCBotAPI:
         self.app.router.add_post("/msg", self.msg)
         self.app.router.add_post("/shutdown", self.shutdown)
         self.app.router.add_get("/info", self.info)
+        self.app.router.add_get("/ws", self.websocket_handler)
+        self.app.router.add_get("/log.html", self.log_html)
 
     def setup_apispec(self):
         """Configure aiohttp-apispec for API documentation."""
