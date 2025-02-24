@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DCCBot Transfers</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #1e1e1e;
+      margin: 0;
+      padding: 20px;
+      color: #e0e0e0;
+    }
+
+    h1 {
+        color: #dfdfdf;
+        margin: 0 0 0.5em 0;
+    }
+
+    .transfer-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .transfer {
+      background: #2d2d2d;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .transfer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .transfer-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: #ffffff;
+    }
+
+    .transfer-header .status {
+      font-size: 14px;
+      font-weight: bold;
+      padding: 4px 8px;
+      border-radius: 12px;
+      background: #444;
+      color: #e0e0e0;
+    }
+
+    .transfer-header .status.completed {
+      background: #4caf50;
+      color: #ffffff;
+    }
+
+    .transfer-header .status.in_progress {
+      background: #2196f3;
+      color: #ffffff;
+    }
+
+    .transfer-details {
+      display: flex;
+      gap: 20px;
+      font-size: 14px;
+      color: #b0b0b0;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 10px;
+      background: #444;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .progress {
+      height: 100%;
+      background: #4caf50;
+      transition: width 0.3s ease;
+    }
+
+    .speed {
+      font-size: 14px;
+      color: #b0b0b0;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Transfers</h1>
+  <div class="transfer-list" id="transfer-list"></div>
+
+  <script>
+    async function fetchTransferInfo() {
+      try {
+        const response = await fetch('info');
+        const data = await response.json();
+        updateTransfers(data.transfers);
+      } catch (error) {
+        console.error('Error fetching transfer info:', error);
+      }
+    }
+
+    function updateTransfers(transfers) {
+      const transferList = document.getElementById('transfer-list');
+      transferList.innerHTML = '';
+
+      // Filter and sort transfers
+      const completedTransfers = transfers
+        .filter(t => t.status === 'completed')
+        .slice(-10); // Get last 10 completed transfers
+      const inProgressTransfers = transfers.filter(t => t.status === 'in_progress');
+
+      // Combine and display transfers
+      const allTransfers = [...inProgressTransfers, ...completedTransfers];
+      allTransfers.forEach(transfer => {
+        const progress = (transfer.received / transfer.size) * 100;
+        const transferDiv = document.createElement('div');
+        transferDiv.className = 'transfer';
+        transferDiv.innerHTML = `
+          <div class="transfer-header">
+            <h3>${transfer.filename}</h3>
+            <div class="status ${transfer.status}">${transfer.status.replace('_', ' ')}</div>
+          </div>
+          <div class="transfer-details">
+            <div><strong>Server:</strong> ${transfer.server}</div>
+            <div><strong>User:</strong> ${transfer.nick}</div>
+            <div><strong>Size:</strong> ${(transfer.size / 1024 / 1024).toFixed(2)} MB</div>
+          </div>
+          ${transfer.status === 'in_progress' ? `
+            <div class="progress-bar">
+              <div class="progress" style="width: ${progress}%"></div>
+            </div>
+            <div class="speed">Speed: ${transfer.speed.toFixed(2)} KB/s</div>
+          ` : ''}
+        `;
+        transferList.appendChild(transferDiv);
+      });
+    }
+
+    // Poll the /info endpoint every 3 seconds
+    setInterval(fetchTransferInfo, 1000);
+
+    // Initial fetch
+    fetchTransferInfo();
+  </script>
+</body>
+
+</html>

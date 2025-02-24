@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DCCBot Log</title>
+    <style>
+        /* Basic styling */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1e1e1e;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh; /* Full viewport height */
+            box-sizing: border-box;
+            color: #e0e0e0;
+        }
+
+        h1 {
+            color: #dfdfdf;
+            margin: 0 0 0.5em 0;
+        }
+
+        #logs {
+            flex-grow: 1;
+            font-family: monospace;
+            font-size: 14px;
+            background-color: #000;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 10px;
+            box-sizing: border-box;
+            white-space: pre-wrap;
+            overflow-y: auto;
+        }
+        #command-input {
+            width: 100%;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 14px;
+            margin-top: 10px;
+            box-sizing: border-box;
+        }
+        /* Colors for log levels */
+        .log-info {
+            color: #cccccc;
+            /* Green for INFO */
+        }
+
+        .log-warning {
+            color: #ffcc00;
+            /* Yellow for WARNING */
+        }
+
+        .log-error {
+            color: #ff0000;
+            /* Red for ERROR */
+        }
+
+        .log-debug {
+            color: #00ffff;
+            /* Cyan for DEBUG */
+        }
+
+        .log-critical {
+            color: #ff00ff;
+            /* Magenta for CRITICAL */
+        }
+    </style>
+</head>
+
+<body>
+    <h1>DCCBot Log</h1>
+    <div id="logs" contenteditable="false"></div>
+    <input type="text" id="command-input" placeholder="Enter a command (e.g., /echo Hello)">
+
+    <script>
+        const logsElement = document.getElementById("logs");
+        const commandInput = document.getElementById("command-input");
+
+        // Construct the WebSocket URL dynamically
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const host = window.location.host; // Includes hostname and port
+        const wsUrl = `${protocol}//${host}` + window.location.pathname.replace('/log.html', '/ws');
+
+        // Connect to the WebSocket server
+        const ws = new WebSocket(wsUrl);
+        const commandHistory = [];
+        let historyIndex = -1; // Current position in history
+
+        ws.onopen = () => {
+            console.log("WebSocket connection established");
+        };
+
+        ws.onmessage = (event) => {
+            // Parse the log message
+            const logEntry = JSON.parse(event.data);
+            let logLine;
+
+            if (logEntry.status) {
+                logLine = `<span class="log-warning">${logEntry.status}: ${logEntry.message}</span><br>`;
+            } else {
+                // Format the log message with consistent padding
+                const timestamp = logEntry.timestamp;
+                const level = logEntry.level.padEnd(8); // Pad log level to 8 characters
+                const message = logEntry.message;
+
+                // Determine the CSS class based on the log level
+                let logClass = "";
+                switch (logEntry.level.toLowerCase()) {
+                    case "info":
+                        logClass = "log-info";
+                        break;
+                    case "warning":
+                        logClass = "log-warning";
+                        break;
+                    case "error":
+                        logClass = "log-error";
+                        break;
+                    case "debug":
+                        logClass = "log-debug";
+                        break;
+                    case "critical":
+                        logClass = "log-critical";
+                        break;
+                    default:
+                        logClass = "";
+                }
+
+                // Create the formatted log line
+                logLine = `<span class="${logClass}">${timestamp} - ${level} - ${message}</span><br>`;
+            }
+
+            // Append the log line to the logs container
+            logsElement.innerHTML += logLine;
+
+            // Auto-scroll to the bottom
+            logsElement.scrollTop = logsElement.scrollHeight;
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket connection closed");
+        };
+
+        // Handle command input
+        commandInput.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowUp") {
+                if (commandHistory.length > 0) {
+                    if (historyIndex > 0) {
+                        historyIndex--;
+                    }
+                    commandInput.value = commandHistory[historyIndex];
+                }
+            } else if (event.key === "ArrowDown") {
+                if (commandHistory.length > 0) {
+                    if (historyIndex < commandHistory.length - 1) {
+                        historyIndex++;
+                        commandInput.value = commandHistory[historyIndex];
+                    } else {
+                        historyIndex = commandHistory.length;
+                        commandInput.value = ""; // Clear the input when reaching the end
+                    }
+                }
+            }
+        });
+
+        commandInput.addEventListener("keyup", (event) => {
+            if (event.key === "Enter") {
+                const command = commandInput.value.trim();
+                if (command) {
+                    commandHistory.push(command);
+                    if (commandHistory.length > 20) {
+                        commandHistory.shift(); // Keep only the last 20 commands
+                    }
+                    historyIndex = commandHistory.length; // Reset history index
+
+                    ws.send(command); // Send the command to the server
+                    commandInput.value = ""; // Clear the input field
+                }
+            }
+        });
+    </script>
+</body>
+
+</html>

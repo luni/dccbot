@@ -525,7 +525,6 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         for item in self.resume_queue[event.source.nick]:
-            logger.info("item: %s", item)
             if peer_port != item[1] or resume_position != item[5]:
                 continue
 
@@ -871,7 +870,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        logger.info("DCC connection lost: %s", event)
+        logger.debug("DCC connection lost: %s", event)
         dcc = connection
         if dcc not in self.current_transfers:
             logger.debug("Received DCC disconnect from unknown connection")
@@ -903,9 +902,9 @@ class IRCBot(AioSimpleIRCClient):
 
                 if self.config.get("incomplete_suffix") and file_path.endswith(self.config["incomplete_suffix"]):
                     target = file_path[: -len(self.config.get("incomplete_suffix"))]
-                    logger.info(f"Renaming {file_path} to {target}")
                     try:
                         os.rename(file_path, target)
+                        logger.info(f"Renamed downloaded file to {transfer['filename']}")
                         transfer["file_path"] = target
                     except Exception as e:
                         logger.error(f"Error renaming {file_path} to {target}: {e}")

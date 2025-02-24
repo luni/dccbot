@@ -192,15 +192,16 @@ class WebSocketLogHandler(logging.Handler):
 
         """
         log_entry = {
-            "timestamp": record.asctime,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": record.levelname,
             "message": self.format(record),
         }
-        for ws in self.websockets:
+        for ws in list(self.websockets):
             try:
                 if ws.closed:
                     self.websockets.remove(ws)
                     continue
+
                 asyncio.create_task(ws.send_str(json.dumps(log_entry)))
             except Exception as e:
                 pass
@@ -237,8 +238,58 @@ class IRCBotAPI:
 
         ws_log_handler = WebSocketLogHandler(self.websockets)
         ws_log_handler.setFormatter(logging.Formatter("%(message)s"))
-        root_logger = logging.getLogger()
-        root_logger.addHandler(ws_log_handler)
+
+        logger.addHandler(ws_log_handler)
+        ircbot_logger = logging.getLogger("dccbot.ircbot")
+        ircbot_logger.addHandler(ws_log_handler)
+
+    async def handle_ws_command(self, command: str, args: List[str], ws: ClientWebSocketResponse):
+        """Handle a WebSocket command.
+
+        Args:
+            command (str): The command to handle.
+            args (List[str]): The arguments for the command.
+            ws (ClientWebSocketResponse): The WebSocket connection to send the
+                response to.
+
+        """
+        try:
+            logging.info(f"Received command from client: {command} {args}")
+            if command == "help":
+                await ws.send_json({"status": "ok", "message": "Available commands: part, join, msg"})
+            elif command == "part":
+                if len(args) < 2:
+                    raise RuntimeError("Not enough arguments")
+                server = args.pop(0)
+                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                await bot.queue_command({
+                    "command": "part",
+                    "channels": self._clean_channel_list(args),
+                })
+            elif command == "join":
+                if len(args) < 2:
+                    raise RuntimeError("Not enough arguments")
+                server = args.pop(0)
+                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                await bot.queue_command({
+                    "command": "join",
+                    "channels": self._clean_channel_list(args),
+                })
+            elif command == "msg":
+                if len(args) < 3:
+                    raise RuntimeError("Not enough arguments")
+                server = args.pop(0)
+                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                target = args.pop(0)
+                await bot.queue_command({
+                    "command": "msg",
+                    "user": target,
+                    "message": " ".join(args),
+                })
+        except RuntimeError as e:
+            await ws.send_json({"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.exception(e)
 
     # WebSocket handler
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -258,27 +309,38 @@ class IRCBotAPI:
 
         # Add the new WebSocket connection to the set
         self.websockets.add(ws)
-        logger.info("New WebSocket connection established")
 
         try:
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
-                    logging.info(f"Received message from client: {msg.data}")
+                    data = msg.data.strip()
+                    if data.startswith("/"):  # Check if it's a command
+                        parts = data.split()
+                        command = parts[0][1:]  # Remove the leading '/'
+                        args = parts[1:] if len(parts) > 1 else []
+                        await self.handle_ws_command(command, args, ws)
+                    else:
+                        logging.info(f"Received message from client: {data}")
                 elif msg.type == web.WSMsgType.ERROR:
                     logging.error(f"WebSocket connection closed with exception: {ws.exception()}")
         finally:
             # Remove the WebSocket connection when it's closed
-            websockets.remove(ws)
-            logger.info("WebSocket connection closed")
+            try:
+                self.websockets.remove(ws)
+            except Exception as e:
+                pass
 
         return ws
 
-    async def log_html(self, request: web.Request) -> web.Response:
+    async def _return_static_html(self, request: web.Request) -> web.Response:
         """Return the contents of index.html as a text/html response.
 
         This endpoint serves the HTML for the WebSocket log viewer.
         """
-        with open("log.html") as f:
+        # use request uri to get the filename
+        filename = request.rel_url.path.split("/")[-1]
+
+        with open(f"static/{filename}", "r", encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
     def setup_routes(self):
@@ -289,7 +351,8 @@ class IRCBotAPI:
         self.app.router.add_post("/shutdown", self.shutdown)
         self.app.router.add_get("/info", self.info)
         self.app.router.add_get("/ws", self.websocket_handler)
-        self.app.router.add_get("/log.html", self.log_html)
+        self.app.router.add_get("/log.html", self._return_static_html)
+        self.app.router.add_get("/info.html", self._return_static_html)
 
     def setup_apispec(self):
         """Configure aiohttp-apispec for API documentation."""
