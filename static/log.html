@@ -149,6 +149,15 @@
             console.log("WebSocket connection closed");
         };
 
+        // Handle ping and pong frames (optional)
+        ws.onping = () => {
+            console.log("Received ping from server");
+        };
+
+        ws.onpong = () => {
+            console.log("Received pong from server");
+        };
+
         // Handle command input
         commandInput.addEventListener("keydown", (event) => {
             if (event.key === "ArrowUp") {

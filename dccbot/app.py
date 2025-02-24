@@ -311,6 +311,17 @@ class IRCBotAPI:
         self.websockets.add(ws)
 
         try:
+            # Send periodic ping frames to keep the connection alive
+            async def send_ping():
+                while True:
+                    await asyncio.sleep(10)  # Send a ping every 10 seconds
+                    if ws.closed:
+                        break
+                    await ws.ping()
+
+            # Start the ping task
+            ping_task = asyncio.create_task(send_ping())
+
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
                     data = msg.data.strip()
@@ -321,6 +332,8 @@ class IRCBotAPI:
                         await self.handle_ws_command(command, args, ws)
                     else:
                         logging.info(f"Received message from client: {data}")
+                elif msg.type == web.WSMsgType.PONG:
+                    logging.debug("Received pong from client")
                 elif msg.type == web.WSMsgType.ERROR:
                     logging.error(f"WebSocket connection closed with exception: {ws.exception()}")
         finally:
@@ -329,6 +342,7 @@ class IRCBotAPI:
                 self.websockets.remove(ws)
             except Exception as e:
                 pass
+            ping_task.cancel()  # Stop the ping task
 
         return ws
 

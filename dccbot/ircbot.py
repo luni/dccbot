@@ -556,11 +556,12 @@ class IRCBot(AioSimpleIRCClient):
         """
         payload = event.arguments[1]
         parts = shlex.split(payload)
-        if len(parts) != 5:
-            logger.warning("Invalid DCC SEND command (not enough arguments)")
+
+        if len(parts) < 5:
+            logger.warning("Invalid DCC SEND command (not enough arguments): %s", event.arguments)
             return
 
-        filename, peer_address, peer_port, size = parts[1:]
+        filename, peer_address, peer_port, size = parts[1:5]
 
         # handle v6
         if ":" in peer_address:
@@ -586,6 +587,10 @@ class IRCBot(AioSimpleIRCClient):
         try:
             size = int(size)
             peer_port = int(peer_port)
+
+            if peer_port == 0:
+                logger.warning("Passive DCC transfers are not supported yet.")
+                return
 
             if peer_port < 1 or peer_port > 65535:
                 logger.warning("Invalid DCC SEND command (invalid port)")
