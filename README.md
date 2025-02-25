@@ -70,7 +70,9 @@ available at `http://localhost:8080/` by default.
 *   `POST /shutdown`: shutdown the bot
 *   `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers)
 
-Addtional browser features:
+### Addtional browser features:
 
-*   `GET /log.html`: show log file via websocket, limit to 500 lines
-*   `GET /info.html`: show current transfers page
+*   `/log.html`: show log file via websocket, limit to 500 lines.
+    ![dccbot log example](./static/dccbot_log.png)
+*   `/info.html`: show current transfers page
+    ![dccbot transfer example](./static/dccbot_info.png)
