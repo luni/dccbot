@@ -1,6 +1,6 @@
 from aiohttp import web, ClientWebSocketResponse
 from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
-from marshmallow import Schema, fields
+from marshmallow import Schema, fields, validate
 import logging
 from typing import List, Set
 from dccbot.ircbot import IRCBot
@@ -139,7 +139,13 @@ class TransferInfo(Schema):
     file_md5 = fields.Str(
         allow_none=True,
     )
-    status = fields.Str()
+    status = fields.Str(
+        validate=validate.OneOf(["in_progress", "completed", "failed", "error"]),
+    )
+    error = fields.Str(
+        allow_none=True,
+    )
+    resumed = fields.Bool()
     connected = fields.Bool()
 
 
@@ -559,7 +565,9 @@ class IRCBotAPI:
                         "speed_avg": round(speed_avg, 2),
                         "md5": transfer.get("md5"),
                         "file_md5": transfer.get("file_md5"),
-                        "status": "completed" if transfer.get("completed") else "in_progress",
+                        "status": transfer.get("status"),
+                        "error": transfer.get("error"),
+                        "resumed": transfer.get("offset") > 0,
                         "connected": transfer.get("connected"),
                     }
                     response["transfers"].append(transfer_info)

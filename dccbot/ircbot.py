@@ -630,8 +630,8 @@ class IRCBot(AioSimpleIRCClient):
 
                 if local_size == size:
                     completed = True
-                    logger.info(f"{filename}: File already completed")
-                    local_size -= 1
+                    logger.info(f"{filename}: File already completed, send resume command for last 4096 to complete transfer request.")
+                    local_size -= 4096
 
                 logger.info(f"Send DCC RESUME {filename} starting at {local_size} bytes")
                 self.connection.ctcp_reply(
@@ -777,6 +777,7 @@ class IRCBot(AioSimpleIRCClient):
             "last_progress_update": 0,
             "last_progress_bytes_received": 0,
             "completed": completed,
+            "status": "started",
         }
 
         # Store the information about the file transfer
@@ -813,6 +814,7 @@ class IRCBot(AioSimpleIRCClient):
 
         transfer = self.current_transfers[dcc]
         transfer["connected"] = True
+        transfer["status"] = "in_progress"
         data = event.arguments[0]
 
         # If file is already completed, ignore data
@@ -846,7 +848,14 @@ class IRCBot(AioSimpleIRCClient):
                 if mime_type not in self.allowed_mimetypes:
                     logger.warning(f"[{transfer['nick']}] Reject {transfer['filename']}: Invalid MIME type ({mime_type})")
                     dcc.disconnect()
-                    del self.current_transfers[dcc]
+                    transfer["status"] = "error"
+                    transfer["error"] = f"Invalid MIME type ({mime_type})"
+                    transfer["connected"] = False
+                    dcc.disconnect()
+                    try:
+                        del self.current_transfers[dcc]
+                    except KeyError:
+                        pass
                     return
 
             try:
@@ -854,8 +863,14 @@ class IRCBot(AioSimpleIRCClient):
                     f.write(data)
             except Exception as e:
                 logger.error(f"Error writing to file {transfer['file_path']}: {e}")
-                del self.current_transfers[dcc]
+                transfer["status"] = "error"
+                transfer["error"] = f"Error writing to file {transfer['file_path']}: {e}"
+                transfer["connected"] = False
                 dcc.disconnect()
+                try:
+                    del self.current_transfers[dcc]
+                except KeyError:
+                    pass
 
         transfer["bytes_received"] += len(data)
         # Send 64bit ACK
@@ -895,13 +910,20 @@ class IRCBot(AioSimpleIRCClient):
 
         if not os.path.exists(file_path):
             logger.error(f"[{transfer['nick']}] Download failed: {file_path} does not exist")
+            if transfer["status"] != "error":
+                transfer["status"] = "error"
+                transfer["error"] = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
         else:
             file_size = os.path.getsize(file_path)
             if file_size != transfer["size"]:
                 logger.error(f"[{transfer['nick']}] Download {transfer['filename']} failed: size mismatch {file_size} != {transfer['size']}")
+                if transfer["status"] != "error":
+                    transfer["status"] = "failed"
+                    transfer["error"] = f"size mismatch {file_size} != {transfer['size']}"
             else:
                 logger.info(f"[{transfer['nick']}] Download {transfer['filename']} complete - size: {file_size} bytes, {transfer_rate:.2f} KB/s")
                 transfer["completed"] = time.time()
+                transfer["status"] = "completed"
                 if transfer.get("md5"):
                     self.bot_manager.md5_check_job_queue.put(transfer)
 
@@ -970,6 +992,11 @@ class IRCBot(AioSimpleIRCClient):
                 self.bot_manager.transfers[filename] = []
 
             self.bot_manager.transfers[filename].append({"nick": sender, "server": self.server, "start_time": now, "completed": False, "md5": f.group(3)})
+
+        f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
+        if f:
+            error = f.group(1)
+            logger.error(f"[{sender}] XDCC SEND denied: {error}")
 
         logger.info(f"[{sender}] {message}")
 

@@ -66,11 +66,26 @@
       color: #ffffff;
     }
 
-    .transfer-details {
+    .transfer-header .status.failed {
+      background: #f4d836;
+      color: #2b2b2b;
+    }
+
+    .transfer-header .status.error {
+      background: #f44336;
+      color: #ffffff;
+    }
+
+    .transfer-details, .transfer-error {
       display: flex;
       gap: 20px;
       font-size: 14px;
       color: #b0b0b0;
+    }
+
+    .transfer-error {
+      color: #f44336;
+      font-weight: bold;
     }
 
     .progress-bar {
@@ -115,7 +130,7 @@
 
       // Filter and sort transfers
       const completedTransfers = transfers
-        .filter(t => t.status === 'completed')
+        .filter(t => t.status !== 'in_progress')
         .slice(-10); // Get last 10 completed transfers
       const inProgressTransfers = transfers.filter(t => t.status === 'in_progress');
 
@@ -135,6 +150,11 @@
             <div><strong>User:</strong> ${transfer.nick}</div>
             <div><strong>Size:</strong> ${(transfer.size / 1024 / 1024).toFixed(2)} MB</div>
           </div>
+          ${transfer.error ? `
+            <div class="transfer-error">
+              ${transfer.error}
+            </div>
+          ` : ''}
           ${transfer.status === 'in_progress' ? `
             <div class="progress-bar">
               <div class="progress" style="width: ${progress}%"></div>

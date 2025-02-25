@@ -25,6 +25,9 @@ fix: reformat-ruff fix-ruff
 test:
 	pytest
 
+complexity:
+	radon cc . -a -nc
+
 # Validate the code (format + check)
-validate: format check
+validate: format check complexity
 	@echo "Validation passed. Your code is ready to push."

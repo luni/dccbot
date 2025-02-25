@@ -95,6 +95,13 @@
             console.log("WebSocket connection established");
         };
 
+        function trimLogs() {
+            const logs = logsElement.innerHTML.split("<br>");
+            if (logs.length > 300) {
+                logsElement.innerHTML = logs.slice(-300).join("<br>");
+            }
+        }
+
         ws.onmessage = (event) => {
             // Parse the log message
             const logEntry = JSON.parse(event.data);
@@ -136,6 +143,9 @@
 
             // Append the log line to the logs container
             logsElement.innerHTML += logLine;
+
+            // Trim logs to a maximum of 300 lines
+            trimLogs();
 
             // Auto-scroll to the bottom
             logsElement.scrollTop = logsElement.scrollHeight;
