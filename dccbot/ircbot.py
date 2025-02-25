@@ -16,7 +16,10 @@ from irc.client_aio import AioSimpleIRCClient
 import irc.client
 from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
 import magic
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dccbot.manager import IRCBotManager
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +58,15 @@ class IRCBot(AioSimpleIRCClient):
     download_path: str
     allowed_mimetypes: Optional[List[str]]
     max_file_size: int
-    bot_channel_map: Dict[str, str]
-    resume_queue: Dict[str, List[List[Any]]]
+    bot_channel_map: Dict[str, Set[str]]
+    resume_queue: Dict[str, List[Tuple[str, int, str, str, int, int, bool, bool, float]]]
     command_queue: asyncio.Queue
     loop: asyncio.AbstractEventLoop
     last_active: float
     joined_channels: Dict[str, float]
     current_transfers: Dict[AioDCCConnection, Dict[str, Any]]
     banned_channels: Set[str]
-    connection: Optional[AioConnection]
+    connection: AioConnection
     bot_manager: "IRCBotManager"
     authenticated_event: asyncio.Event
     authenticated: bool
@@ -134,10 +137,10 @@ class IRCBot(AioSimpleIRCClient):
             str: The full nick with a random 3-digit suffix.
 
         """
-        random_suffix = "".join(random.choices(string.digits, k=3))
+        random_suffix = "".join(random.choices(string.digits, k=3))  # nosec
         return f"{base_nick}{random_suffix}"
 
-    async def connect(self):
+    async def connect(self):  # type: ignore
         """Establish a connection to the IRC server.
 
         If a TLS connection is configured (``use_tls=True``), the connection
@@ -180,7 +183,7 @@ class IRCBot(AioSimpleIRCClient):
             reason (Optional[str]): Optional quit message to send to the server.
 
         """
-        self.connection.disconnect(reason)
+        self.connection.disconnect(reason or "")
         logger.info(f"Disconnected from server {self.server} ({reason})")
 
     async def join_channel(self, channel: str):
@@ -211,7 +214,7 @@ class IRCBot(AioSimpleIRCClient):
             # If the channel is empty or the bot is not in the channel, do nothing
             return
 
-        self.connection.part(channel, reason)
+        self.connection.part(channel, reason or "")
         logger.info(f"Parted channel: {channel} ({reason})")
         self.last_active = time.time()
         del self.joined_channels[channel]
@@ -302,9 +305,9 @@ class IRCBot(AioSimpleIRCClient):
                     logger.info(f"Sent message to {data.get('user')}: {data.get('message')}")
                     if data.get("channels"):
                         if data["user"] not in self.bot_channel_map:
-                            self.bot_channel_map[data["user"]] = set(data.get("channels"))
+                            self.bot_channel_map[data["user"]] = set(data["channels"])
                         else:
-                            self.bot_channel_map[data["user"]] |= set(data.get("channels"))
+                            self.bot_channel_map[data["user"]] |= set(data["channels"])
 
                     if data["user"] in self.bot_channel_map:
                         for channel in self.bot_channel_map[data["user"]]:
@@ -654,7 +657,7 @@ class IRCBot(AioSimpleIRCClient):
                 ))
                 return
 
-        self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, download_path, size, local_size, use_ssl, completed)
+        self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, local_files[-1], size, local_size, use_ssl, completed)
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event):
         """Handle CTCP messages.
@@ -737,7 +740,7 @@ class IRCBot(AioSimpleIRCClient):
         logger.info("[%s] Connecting to %s:%s", nick, peer_address, peer_port)
 
         # Create a new DCC connection
-        dcc: AioDCCConnection = self.dcc("raw")
+        dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
 
         connect_factory = None
         if use_ssl:
@@ -783,7 +786,7 @@ class IRCBot(AioSimpleIRCClient):
         # Store the information about the file transfer
         # check if we already have an entry by the CTCP message from XDCC bot
         for item in self.bot_manager.transfers.get(filename, []):
-            if item.get("peer_address") is None and item.get("start_time") >= now - 30 and item.get("nick") == nick and item.get("server") == self.server:
+            if item.get("peer_address") is None and item["start_time"] >= now - 30 and item["nick"] == nick and item["server"] == self.server:
                 item.update(transfer_item)
                 transfer_item = item
                 break
@@ -879,6 +882,18 @@ class IRCBot(AioSimpleIRCClient):
         else:
             dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
 
+    async def _add_md5_check_queue_item(self, transfer: dict):
+        """Add a transfer to the MD5 check queue.
+
+        This method adds a transfer to the MD5 check queue.
+        The file will be processed by the MD5 processor thread in the bot manager.
+
+        Args:
+            transfer (dict): The transfer to add to the MD5 check queue.
+
+        """
+        await self.bot_manager.md5_check_queue.put(transfer)
+
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event):
         """Handle DCC DISCONNECT messages.
 
@@ -925,10 +940,11 @@ class IRCBot(AioSimpleIRCClient):
                 transfer["completed"] = time.time()
                 transfer["status"] = "completed"
                 if transfer.get("md5"):
-                    self.bot_manager.md5_check_job_queue.put(transfer)
+                    loop = asyncio.get_event_loop()
+                    loop.run_until_complete(self._add_md5_check_queue_item(transfer))
 
                 if self.config.get("incomplete_suffix") and file_path.endswith(self.config["incomplete_suffix"]):
-                    target = file_path[: -len(self.config.get("incomplete_suffix"))]
+                    target = file_path[: -len(self.config["incomplete_suffix"])]
                     try:
                         os.rename(file_path, target)
                         logger.info(f"Renamed downloaded file to {transfer['filename']}")

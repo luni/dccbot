@@ -1,6 +1,7 @@
 import irc.client
 import irc.connection
 import irc.client_aio
+from asyncio.transports import Transport
 from jaraco.stream import buffer
 import logging
 
@@ -60,14 +61,14 @@ class AioDCCConnection(irc.client.DCCConnection):
     buffer_class = NonStrictDecodingLineBuffer
 
     protocol_class = DCCProtocol
-    transport: irc.connection.AioFactory
+    transport: Transport
     protocol: DCCProtocol
     socket: None
     connected: bool
     peeraddress: str
     peerport: int
 
-    async def connect(self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory()):
+    async def connect(self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory()):  # type: ignore
         """Connect/reconnect to a DCC peer.
 
         Args:
@@ -103,7 +104,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         return self
 
     # TODO: implement listen() in asyncio way
-    async def listen(self, addr=None):
+    async def listen(self, addr=None):  # type: ignore
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
@@ -130,7 +131,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
         self.reactor._remove_connection(self)
 
-    def process_data(self, new_data: bytes):
+    def process_data(self, new_data: bytes):  # type: ignore
         """Handle incoming data from the `DCCProtocol` connection.
 
         Args:

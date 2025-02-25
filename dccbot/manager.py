@@ -105,6 +105,55 @@ class IRCBotManager:
             await bot.connect()
         return self.bots[server]
 
+    async def _cleanup_transfers(self):
+        """Clean up the transfer list.
+
+        This method is called periodically to clean up the transfer list.
+        It removes all transfers that have been inactive for more than
+        self.transfer_list_timeout seconds.
+
+        """
+        now = time.time()
+
+        expired_transfer_names = []
+        for filename, transfers in self.transfers.items():
+            for transfer in list(transfers):
+                if transfer.get("start_time", 0) + self.transfer_list_timeout < now:
+                    transfers.append(transfer)
+
+            if not transfers:
+                expired_transfer_names.append(filename)
+
+        for filename in expired_transfer_names:
+            del self.transfers[filename]
+
+    async def _cleanup_bots(self):
+        """Clean up idle servers and channels.
+
+        This method is called periodically to clean up idle servers and channels.
+        It checks each server for idleness and disconnects it if it is idle
+        and the idle timeout is set.
+
+        """
+        now = time.time()
+
+        idle_servers = []
+        for server, bot in self.bots.items():
+            if (
+                not bot.joined_channels
+                and not bot.current_transfers
+                and bot.command_queue.empty()
+                and self.server_idle_timeout > 0
+                and bot.last_active + self.server_idle_timeout < now
+            ):
+                idle_servers.append(server)
+            else:
+                await bot.cleanup(self.server_idle_timeout, self.resume_timeout)
+
+        for server in idle_servers:
+            await self.bots[server].disconnect("Idle timeout")
+            del self.bots[server]
+
     async def cleanup(self) -> None:
         """Clean up idle bots and channels.
 
@@ -117,41 +166,8 @@ class IRCBotManager:
         """
         while True:
             try:
-                # Get the current time
-                now = time.time()
-
-                # Find idle servers and channels
-                idle_servers = []
-                for server, bot in self.bots.items():
-                    await bot.cleanup(self.server_idle_timeout, self.resume_timeout)
-
-                    # Check if the server is idle
-                    if (
-                        not bot.joined_channels
-                        and not bot.current_transfers
-                        and bot.command_queue.empty()
-                        and self.server_idle_timeout > 0
-                        and bot.last_active + self.server_idle_timeout < now
-                    ):
-                        idle_servers.append(server)
-
-                # Disconnect idle servers
-                for server in idle_servers:
-                    await self.bots[server].disconnect("Idle timeout")
-                    del self.bots[server]
-
-                # Clean up transfers
-                expired_transfer_names = []
-                for filename, transfers in self.transfers.items():
-                    for transfer in list(transfers):
-                        if transfer.get("start_time", 0) + self.transfer_list_timeout < now:
-                            transfers.append(transfer)
-
-                    if not transfers:
-                        expired_transfer_names.append(filename)
-
-                for filename in expired_transfer_names:
-                    del self.transfers[filename]
+                await self._cleanup_bots()
+                await self._cleanup_transfers()
 
                 # Wait 1 second before checking again
                 await asyncio.sleep(1)
@@ -172,7 +188,7 @@ class IRCBotManager:
 
         """
         logger.info(f"Calculating MD5 for {filename}")
-        hasher = hashlib.md5()
+        hasher = hashlib.md5()  # nosec
         with open(filename, "rb") as f:
             while data := f.read(8192):
                 hasher.update(data)

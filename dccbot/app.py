@@ -1,4 +1,4 @@
-from aiohttp import web, ClientWebSocketResponse
+from aiohttp import web
 from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
 from marshmallow import Schema, fields, validate
 import logging
@@ -173,18 +173,18 @@ class WebSocketLogHandler(logging.Handler):
     """Custom logging handler to send logs to connected WebSocket clients.
 
     Attributes:
-        websockets (Set[ClientWebSocketResponse]): Set of WebSocket
+        websockets (Set[web.WebSocketResponse]): Set of WebSocket
             connections to send log entries to.
 
     """
 
-    websockets: Set[ClientWebSocketResponse]
+    websockets: Set[web.WebSocketResponse]
 
-    def __init__(self, websockets: Set[ClientWebSocketResponse]):
+    def __init__(self, websockets: Set[web.WebSocketResponse]):
         """Initialize a WebSocketLogHandler.
 
         Args:
-            websockets (Set[ClientWebSocketResponse]): Set of WebSocket
+            websockets (Set[web.WebSocketResponse]): Set of WebSocket
                 connections to send log entries to.
 
         """
@@ -204,14 +204,11 @@ class WebSocketLogHandler(logging.Handler):
             "message": self.format(record),
         }
         for ws in list(self.websockets):
-            try:
-                if ws.closed:
-                    self.websockets.remove(ws)
-                    continue
+            if ws.closed:
+                self.websockets.remove(ws)
+                continue
 
-                asyncio.create_task(ws.send_str(json.dumps(log_entry)))
-            except Exception as e:
-                pass
+            asyncio.create_task(ws.send_str(json.dumps(log_entry)))
 
 
 class IRCBotAPI:
@@ -224,7 +221,7 @@ class IRCBotAPI:
     """
 
     app: web.Application
-    websockets: Set[ClientWebSocketResponse]
+    websockets: Set[web.WebSocketResponse]
 
     def __init__(self, config_file: str):
         """Initialize an IRCBotAPI object.
@@ -250,7 +247,7 @@ class IRCBotAPI:
         ircbot_logger = logging.getLogger("dccbot.ircbot")
         ircbot_logger.addHandler(ws_log_handler)
 
-    async def handle_ws_command(self, command: str, args: List[str], ws: ClientWebSocketResponse):
+    async def handle_ws_command(self, command: str, args: List[str], ws: web.WebSocketResponse):
         """Handle a WebSocket command.
 
         Args:
@@ -317,6 +314,7 @@ class IRCBotAPI:
         # Add the new WebSocket connection to the set
         self.websockets.add(ws)
 
+        ping_task = None
         try:
             # Send periodic ping frames to keep the connection alive
             async def send_ping():
@@ -347,9 +345,10 @@ class IRCBotAPI:
             # Remove the WebSocket connection when it's closed
             try:
                 self.websockets.remove(ws)
-            except Exception as e:
+            except ValueError:
                 pass
-            ping_task.cancel()  # Stop the ping task
+            if ping_task:
+                ping_task.cancel()  # Stop the ping task
 
         return ws
 
@@ -465,12 +464,7 @@ class IRCBotAPI:
 
             bot_manager = request.app["bot_manager"]
             bot: IRCBot = await bot_manager.get_bot(data["server"])
-            channels = []
-
-            if data.get("channels"):
-                channels = self._clean_channel_list(data["channels"])
-            elif data.get("channel"):
-                channels = self._clean_channel_list([data["channel"]])
+            channels = self._clean_channel_list(data.get("channels", [data.get("channel", [])]))
 
             # Check if we need to rewrite to ssend
             if (
@@ -483,14 +477,12 @@ class IRCBotAPI:
             ):
                 data["message"] = re.sub(r"^xdcc (send|batch) ", r"xdcc s\1 ", data["message"], re.I)
 
-            asyncio.create_task(
-                bot.queue_command({
-                    "command": "send",
-                    "channels": channels,
-                    "user": data["user"].lower().strip(),
-                    "message": data["message"].strip(),
-                })
-            )
+            await bot.queue_command({
+                "command": "send",
+                "channels": channels,
+                "user": data["user"].lower().strip(),
+                "message": data["message"].strip(),
+            })
             return web.json_response({"status": "ok"})
         except Exception as e:
             logger.exception(e)
@@ -569,7 +561,7 @@ class IRCBotAPI:
                         "file_md5": transfer.get("file_md5"),
                         "status": transfer.get("status"),
                         "error": transfer.get("error"),
-                        "resumed": transfer.get("offset") > 0,
+                        "resumed": transfer.get("offset", 0) > 0,
                         "connected": transfer.get("connected"),
                     }
                     response["transfers"].append(transfer_info)

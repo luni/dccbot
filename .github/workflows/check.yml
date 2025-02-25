@@ -38,20 +38,35 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install -r <(uv pip compile --all-extras pyproject.toml)
-          uv pip install ruff tox
+          uv pip install ruff tox xenon bandit pyright
 
       - name: Run Ruff (PEP 8 Formatting)
         run: |
           source .venv/bin/activate
-          ruff format --check --diff
+          make format
 
       - name: Run Ruff (Linting + Docstrings)
         run: |
           source .venv/bin/activate
-          ruff check
+          make check
 
-      - name: Run pytest
+      - name: Run xenon (Cyclomatic Complexity)
+        run: |
+          source .venv/bin/activate
+          make xenon
+
+      - name: Run bandit (Security)
+        run: |
+          source .venv/bin/activate
+          make bandit
+
+      - name: Run pyright (Type Checking)
+        run: |
+          source .venv/bin/activate
+          make pyright
+
+      - name: Run pytest (Test Suite)
         run: |
           source .venv/bin/activate
           cp config.json.sample config.json
-          pytest
+          make test

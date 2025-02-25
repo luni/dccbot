@@ -28,6 +28,15 @@ test:
 complexity:
 	radon cc . -a -nc
 
+xenon:
+	xenon -b D -m B -a B .
+
+bandit:
+	bandit -r dccbot bot.py
+
+pyright:
+	pyright dccbot bot.py
+
 # Validate the code (format + check)
-validate: format check complexity
+validate: format check complexity bandit pyright
 	@echo "Validation passed. Your code is ready to push."
