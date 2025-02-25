@@ -10,6 +10,7 @@ import datetime
 import re
 import asyncio
 import json
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -359,8 +360,9 @@ class IRCBotAPI:
         """
         # use request uri to get the filename
         filename = request.rel_url.path.split("/")[-1]
+        fullpath = os.path.normpath(os.path.join("static/", filename))
 
-        with open(f"static/{filename}", "r", encoding="utf-8") as f:
+        with open(fullpath, "r", encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
     def setup_routes(self):
