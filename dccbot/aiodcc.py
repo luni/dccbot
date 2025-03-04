@@ -69,9 +69,9 @@ class AioDCCConnection(irc.client.DCCConnection):
     peeraddress: str
     peerport: int
 
-    async def connect(
+    async def connect(  # type: ignore
         self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: Optional[dict] = None
-    ):  # type: ignore
+    ):
         """Connect/reconnect to a DCC peer.
 
         Args:
