@@ -15,8 +15,8 @@
     }
 
     h1 {
-        color: #dfdfdf;
-        margin: 0 0 0.5em 0;
+      color: #dfdfdf;
+      margin: 0 0 0.5em 0;
     }
 
     .transfer-list {
@@ -76,7 +76,8 @@
       color: #ffffff;
     }
 
-    .transfer-details, .transfer-error {
+    .transfer-details,
+    .transfer-error {
       display: flex;
       gap: 20px;
       font-size: 14px;
@@ -139,11 +140,24 @@
       allTransfers.forEach(transfer => {
         const progress = (transfer.received / transfer.size) * 100;
         const transferDiv = document.createElement('div');
+        let transfer_status_class = transfer.status,
+          transfer_status_text = transfer.status.replace('_', ' ');
+
+        if (transfer.status === 'completed' && transfer.md5) {
+          if (!transfer.file_md5) {
+            transfer_status_class = 'in_progress';
+            transfer_status_text += ', MD5 calculating...';
+          } else {
+            transfer_status_class = transfer.md5 === transfer.file_md5 ? 'completed' : 'failed';
+            transfer_status_text += transfer.md5 === transfer.file_md5 ? ', MD5 matched' : ', MD5 mismatch';
+          }
+        }
+
         transferDiv.className = 'transfer';
         transferDiv.innerHTML = `
           <div class="transfer-header">
             <h3>${transfer.filename}</h3>
-            <div class="status ${transfer.status}">${transfer.status.replace('_', ' ')}</div>
+            <div class="status ${transfer_status_class}">${transfer_status_text}</div>
           </div>
           <div class="transfer-details">
             <div><strong>Server:</strong> ${transfer.server}</div>
