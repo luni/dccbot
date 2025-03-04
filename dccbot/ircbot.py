@@ -471,15 +471,7 @@ class IRCBot(AioSimpleIRCClient):
 
         file_path = os.path.join(path, filename)
 
-        if not os.path.isabs(file_path):
-            return False
-
-        if any(char in filename for char in (os.path.sep, os.path.altsep or "")):
-            return False
-
-        # Optionally: Check for platform-specific invalid characters
-        invalid_chars = set('/\\:*?"<>|')  # Invalid on Windows
-        if any(char in invalid_chars for char in filename):
+        if re.search(r"[/\\:\*?\"<>\|]", filename):  # Check for invalid characters
             return False
 
         # Check if the file is within the given path
