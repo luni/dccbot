@@ -23,7 +23,7 @@ dev = [
     "tox>=4.24.1",
     "pytest-asyncio>=0.25.3",
     "radon>=6.0.1",
-    "xenon>=0.9.3",
+    "xenon>=0.9.3"
 ]
 
 [tool.ruff]
@@ -48,3 +48,8 @@ addopts = [
 pythonpath = ["."]
 asyncio_default_fixture_loop_scope = "function"
 
+[tool.pyright]
+exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv", "**/.venv"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]

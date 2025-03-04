@@ -32,10 +32,10 @@ xenon:
 	xenon -b D -m B -a B .
 
 bandit:
-	bandit -r dccbot bot.py
+	bandit -c pyproject.toml -r .
 
 pyright:
-	pyright dccbot bot.py
+	pyright
 
 # Validate the code (format + check)
 validate: format check complexity bandit pyright

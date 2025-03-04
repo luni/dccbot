@@ -454,6 +454,7 @@ class IRCBot(AioSimpleIRCClient):
         2. It does not contain any invalid characters (e.g. slash, backslash, :, *, ?, ", <, >, |)
         3. It does not contain any directory separators (e.g. slash, backslash)
         4. It is an absolute path
+        5. It is not outside of the given path
 
         This function is used to validate filenames when downloading files from IRC.
 
@@ -473,13 +474,16 @@ class IRCBot(AioSimpleIRCClient):
         if not os.path.isabs(file_path):
             return False
 
-        if "/" in filename or "\\" in filename:
+        if any(char in filename for char in (os.path.sep, os.path.altsep or "")):
             return False
 
         # Optionally: Check for platform-specific invalid characters
-        # This is optional and depends on your target platform
         invalid_chars = set('/\\:*?"<>|')  # Invalid on Windows
         if any(char in invalid_chars for char in filename):
+            return False
+
+        # Check if the file is within the given path
+        if not os.path.abspath(file_path).startswith(path + os.path.sep):
             return False
 
         return True
@@ -612,7 +616,7 @@ class IRCBot(AioSimpleIRCClient):
 
         # check if transfer for same file already running
         for item in self.bot_manager.transfers.get(filename, []):
-            if item["size"] == size and item["connected"]:
+            if item["size"] == size and item.get("connected", False):
                 logger.warning(f"Rejected {filename}: Download of file already in progress")
                 return
 
@@ -754,13 +758,6 @@ class IRCBot(AioSimpleIRCClient):
         else:
             connect_factory = AioFactory()
 
-        # Schedule the connection to be established
-        try:
-            self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory))
-        except Exception as e:
-            logger.error(f"[{nick}]Failed to connect to {peer_address}:{peer_port}: {e}")
-            return
-
         now = time.time()
 
         transfer_item = {
@@ -798,6 +795,9 @@ class IRCBot(AioSimpleIRCClient):
             self.bot_manager.transfers[filename].append(transfer_item)
 
         self.current_transfers[dcc] = transfer_item
+
+        # Schedule the connection to be established
+        self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item))
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle DCC messages.

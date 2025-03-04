@@ -3,6 +3,7 @@ import irc.connection
 import irc.client_aio
 from asyncio.transports import Transport
 from jaraco.stream import buffer
+from typing import Optional
 import logging
 
 
@@ -68,7 +69,7 @@ class AioDCCConnection(irc.client.DCCConnection):
     peeraddress: str
     peerport: int
 
-    async def connect(self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory()):  # type: ignore
+    async def connect(self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: Optional[dict] = None):  # type: ignore
         """Connect/reconnect to a DCC peer.
 
         Args:
@@ -76,6 +77,7 @@ class AioDCCConnection(irc.client.DCCConnection):
             port: The port to connect to.
             connect_factory: A callable that takes the event loop and the
               server address, and returns a connection (with a socket interface)
+            transfer_item: The transfer item dictionary to set status after connection is established
 
         Returns:
             The DCCConnection object.
@@ -93,6 +95,9 @@ class AioDCCConnection(irc.client.DCCConnection):
             transport, protocol = await connection
         except Exception as e:
             log.error("Connection error to %s:%s: %s", self.peeraddress, self.peerport, e)
+            if transfer_item:
+                transfer_item["error"] = str(e)
+                transfer_item["status"] = "error"
             self.connected = False
             return self
 
