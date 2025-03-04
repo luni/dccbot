@@ -483,7 +483,7 @@ class IRCBot(AioSimpleIRCClient):
             return False
 
         # Check if the file is within the given path
-        if not os.path.abspath(file_path).startswith(path + os.path.sep):
+        if not os.path.abspath(file_path).startswith(path):
             return False
 
         return True
