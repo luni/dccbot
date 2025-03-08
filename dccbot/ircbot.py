@@ -1033,7 +1033,7 @@ class IRCBot(AioSimpleIRCClient):
                 await self.part_channel(channel, "Idle timeout")
 
         for nick, resume_queue in self.resume_queue.items():
-            for resume in list(resume_queue):
-                requested_time = resume[-1]
+            for resume_item in list(resume_queue):
+                requested_time = resume_item[-1]
                 if now - requested_time > resume_timeout:
-                    self.resume_queue[nick].remove(resume)
+                    self.resume_queue[nick].remove(resume_item)

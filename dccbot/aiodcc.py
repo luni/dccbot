@@ -166,14 +166,12 @@ class AioDCCConnection(irc.client.DCCConnection):
         prefix = self.peeraddress
         target = None
         for chunk in chunks:
-            log.debug("FROM PEER: %s", chunk)
             arguments = [chunk]
             log.debug(
-                "command: %s, source: %s, target: %s, arguments: %s",
+                "command: %s, source: %s, target: %s",
                 command,
                 prefix,
                 target,
-                arguments,
             )
             event = irc.client.Event(command, prefix, target, arguments)
             self.reactor._handle_event(self, event)
@@ -187,7 +185,6 @@ class AioDCCConnection(irc.client.DCCConnection):
         """
         try:
             self.transport.write(bytes)
-            log.debug("TO PEER: %r\n", bytes)
         except OSError:
             self.disconnect("Connection reset by peer.")
 

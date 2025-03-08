@@ -214,6 +214,7 @@ class IRCBotManager:
         while True:
             try:
                 transfer_job = await md5_check_queue.get()
+                logging.debug(f"Checking MD5 for {transfer_job['filename']}")
                 md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
                 for transfer in self.transfers.get(transfer_job["filename"], []):
