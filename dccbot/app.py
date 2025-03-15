@@ -286,7 +286,7 @@ class IRCBotAPI:
                 bot: IRCBot = await self.app["bot_manager"].get_bot(server)
                 target = args.pop(0)
                 await bot.queue_command({
-                    "command": "msg",
+                    "command": "send",
                     "user": target,
                     "message": " ".join(args),
                 })
