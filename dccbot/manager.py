@@ -119,7 +119,7 @@ class IRCBotManager:
         for filename, transfers in self.transfers.items():
             for transfer in list(transfers):
                 if transfer.get("start_time", 0) + self.transfer_list_timeout < now:
-                    transfers.append(transfer)
+                    transfers.remove(transfer)
 
             if not transfers:
                 expired_transfer_names.append(filename)

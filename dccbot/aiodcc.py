@@ -167,12 +167,6 @@ class AioDCCConnection(irc.client.DCCConnection):
         target = None
         for chunk in chunks:
             arguments = [chunk]
-            log.debug(
-                "command: %s, source: %s, target: %s",
-                command,
-                prefix,
-                target,
-            )
             event = irc.client.Event(command, prefix, target, arguments)
             self.reactor._handle_event(self, event)
 
