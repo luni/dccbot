@@ -578,7 +578,7 @@ class IRCBot(AioSimpleIRCClient):
                 logger.warning(f"Rejected {filename}: Invalid IP address {peer_address}")
                 return
 
-        if ipaddress.ip_address(peer_address).is_private and not self.config.get('allow_private_ips'):
+        if ipaddress.ip_address(peer_address).is_private and not self.config.get("allow_private_ips"):
             logger.warning(f"Rejected {filename}: Private IP address {peer_address}")
             return
 
