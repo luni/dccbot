@@ -53,6 +53,7 @@ keys:
     If file was transferred successfully this suffix is removed.
 *   `ssend_map`: a dictionary of users which support ssend (secure send). xdcc send command is
     replaced with ssend for these users.
+*   `allow_private_ips`: a boolean indicating whether to allow private ips in dcc send command
 *   `http`: a dictionary with the following keys:
     *   `socket`: the path to the socket to use for the http server (instead of host and port)
     *   `port`: the port to bind the http server to, default: 8080

@@ -50,6 +50,7 @@
   "transfer_list_timeout": 86400,
   "auto_md5sum": true,
   "incomplete_suffix": ".incomplete",
+  "allow_private_ips": false,
   "http": {
     "bind_addr": "0.0.0.0",
     "bind_port": 9999,

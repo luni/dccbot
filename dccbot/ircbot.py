@@ -578,6 +578,10 @@ class IRCBot(AioSimpleIRCClient):
                 logger.warning(f"Rejected {filename}: Invalid IP address {peer_address}")
                 return
 
+        if ipaddress.ip_address(peer_address).is_private and not self.config.get('allow_private_ips'):
+            logger.warning(f"Rejected {filename}: Private IP address {peer_address}")
+            return
+
         # validate file name
         if not self.is_valid_filename(self.download_path, filename):
             logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
