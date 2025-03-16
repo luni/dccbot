@@ -610,6 +610,10 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning(f"Rejected {filename}: File size exceeds limit ({size} > {self.max_file_size})")
             return
 
+        if size < 1:
+            logger.warning(f"Rejected {filename}: File size is too small ({size})")
+            return
+
         # check if transfer for same file already running
         for item in self.bot_manager.transfers.get(filename, []):
             if item["size"] == size and item.get("connected", False):
