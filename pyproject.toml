@@ -23,7 +23,8 @@ dev = [
     "tox>=4.24.1",
     "pytest-asyncio>=0.25.3",
     "radon>=6.0.1",
-    "xenon>=0.9.3"
+    "xenon>=0.9.3",
+    "vulture>=2.14",
 ]
 
 [tool.ruff]
@@ -53,3 +54,12 @@ exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv"
 
 [tool.bandit]
 exclude_dirs = [".venv", "tests"]
+
+[tool.vulture]
+exclude = ["dist", "build", "venv", ".venv", "tests" ]
+ignore_decorators = ["@app.route", "@require_*"]
+ignore_names = ["visit_*", "do_*"]
+# make_whitelist = true
+min_confidence = 80
+paths = ["."]
+sort_by_size = true

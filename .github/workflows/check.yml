@@ -38,7 +38,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install -r <(uv pip compile --all-extras pyproject.toml)
-          uv pip install ruff tox xenon bandit pyright
+          uv pip install ruff tox xenon bandit pyright vulture
 
       - name: Run Ruff (PEP 8 Formatting)
         run: |

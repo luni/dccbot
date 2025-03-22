@@ -111,7 +111,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         return self
 
     # TODO: implement listen() in asyncio way
-    async def listen(self, addr=None):  # type: ignore
+    async def listen(self, addr=None):  # type: ignore # noqa: F841
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
