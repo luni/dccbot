@@ -25,7 +25,7 @@ fix: reformat-ruff fix-ruff
 test:
 	pytest
 
-deadcode:
+vulture:
 	vulture . --exclude .venv,migrations,tests --make-whitelist
 
 complexity:
@@ -41,5 +41,5 @@ pyright:
 	pyright
 
 # Validate the code (format + check)
-validate: format check complexity bandit pyright deadcode
+validate: format check complexity bandit pyright vulture
 	@echo "Validation passed. Your code is ready to push."

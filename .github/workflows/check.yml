@@ -50,6 +50,11 @@ jobs:
           source .venv/bin/activate
           make check
 
+      - name: Run vulture (Duplicate Code)
+        run: |
+          source .venv/bin/activate
+          make vulture
+
       - name: Run xenon (Cyclomatic Complexity)
         run: |
           source .venv/bin/activate
