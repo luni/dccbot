@@ -10,12 +10,12 @@ import struct
 import ssl
 import re
 import uuid
+from typing import Optional, List, Dict, Any, Set, Tuple, TYPE_CHECKING
 import irc.client_aio
 from irc.connection import AioFactory
 from irc.client_aio import AioSimpleIRCClient
 import irc.client
 import magic
-from typing import Optional, List, Dict, Any, Set, Tuple, TYPE_CHECKING
 from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
 
 if TYPE_CHECKING:

@@ -1,10 +1,7 @@
+from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
-from aiohttp import web
-from aiohttp.test_utils import TestClient
-from unittest.mock import AsyncMock, patch
 from dccbot.app import IRCBotAPI
-from dccbot.manager import IRCBotManager
 from dccbot.ircbot import IRCBot
 
 
