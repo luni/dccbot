@@ -172,9 +172,9 @@ class IRCBot(AioSimpleIRCClient):
                 port = self.server_config.get("port", 6667)
 
             await self.connection.connect(self.server, port, self.nick, connect_factory=connect_factory)
-            logger.info(f"Connecting to server: {self.server} with nick: {self.nick}")
+            logger.info("Connecting to server: %s with nick: %s", self.server, self.nick)
         except Exception as e:
-            logger.error(f"Connection error to {self.server}: {e}")
+            logger.error("Connection error to %s: %s", self.server, e)
 
     async def disconnect(self, reason: Optional[str] = None):
         """Disconnect the bot from the IRC server.
@@ -184,7 +184,7 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         self.connection.disconnect(reason or "")
-        logger.info(f"Disconnected from server {self.server} ({reason})")
+        logger.info("Disconnected from server %s (%s)", self.server, reason)
 
     async def join_channel(self, channel: str):
         """Join the specified channel.
@@ -200,7 +200,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         self.connection.join(channel)
-        logger.info(f"Try to join channel: {channel}")
+        logger.info("Try to join channel: %s", channel)
 
     async def part_channel(self, channel: str, reason: Optional[str] = None):
         """Part the specified channel.
@@ -215,7 +215,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         self.connection.part(channel, reason or "")
-        logger.info(f"Parted channel: {channel} ({reason})")
+        logger.info("Parted channel: %s (%s)", channel, reason)
         self.last_active = time.time()
         del self.joined_channels[channel]
 
@@ -234,7 +234,7 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         await self.command_queue.put(data)
-        logger.debug(f"Queued command: {data}")
+        logger.debug("Queued command: %s", data)
 
     async def process_command_queue(self):
         """Process commands from the command queue.
@@ -298,11 +298,11 @@ class IRCBot(AioSimpleIRCClient):
                         retry += 1
 
                     if waiting_channels:
-                        logger.warning(f"Failed to join channels {', '.join(waiting_channels)} after 10 seconds")
+                        logger.warning("Failed to join channels %s after 10 seconds", ', '.join(waiting_channels))
 
                 try:
                     self.connection.privmsg(data["user"], data["message"])
-                    logger.info(f"Sent message to {data.get('user')}: {data.get('message')}")
+                    logger.info("Sent message to %s: %s", data.get('user'), data.get('message'))
                     if data.get("channels"):
                         if data["user"] not in self.bot_channel_map:
                             self.bot_channel_map[data["user"]] = set(data["channels"])
@@ -314,7 +314,7 @@ class IRCBot(AioSimpleIRCClient):
                             self.joined_channels[channel] = time.time()
 
                 except Exception as e:
-                    logger.error(f"Failed to send message to {data.get('user')}: {e}")
+                    logger.error("Failed to send message to %s: %s", data.get('user'), e)
             elif data["command"] == "part":
                 if data.get("channels"):
                     for channel in data["channels"]:
@@ -333,7 +333,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        logger.info(f"Connected to server: {self.server}")
+        logger.info("Connected to server: %s", self.server)
 
         # Authenticate with NickServ
         if self.server_config.get("nickserv_password"):
@@ -343,7 +343,7 @@ class IRCBot(AioSimpleIRCClient):
         # Start processing the message queue
         asyncio.create_task(self.process_command_queue())
 
-    def on_nosuchnick(self, connection: irc.client_aio.AioConnection, event: irc.client_aio.Event) -> None:
+    def on_nosuchnick(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Show an error message when the bot receives a NOSUCHNICK message from the server.
 
         Args:
@@ -568,18 +568,18 @@ class IRCBot(AioSimpleIRCClient):
             try:
                 ipaddress.ip_address(peer_address)
             except ValueError:
-                logger.warning(f"Rejected {filename}: Invalid IP address {peer_address}")
+                logger.warning("Rejected %s: Invalid IP address %s", filename, peer_address)
                 return
         else:
             try:
                 # Convert the IP address to a quad-dotted form
                 peer_address = irc.client.ip_numstr_to_quad(peer_address)
             except ValueError:
-                logger.warning(f"Rejected {filename}: Invalid IP address {peer_address}")
+                logger.warning("Rejected %s: Invalid IP address %s", filename, peer_address)
                 return
 
         if ipaddress.ip_address(peer_address).is_private and not self.config.get("allow_private_ips"):
-            logger.warning(f"Rejected {filename}: Private IP address {peer_address}")
+            logger.warning("Rejected %s: Private IP address %s", filename, peer_address)
             return
 
         # validate file name
@@ -607,17 +607,17 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         if size > self.max_file_size:
-            logger.warning(f"Rejected {filename}: File size exceeds limit ({size} > {self.max_file_size})")
+            logger.warning("Rejected %s: File size exceeds limit (%d > %d)", filename, size, self.max_file_size)
             return
 
         if size < 1:
-            logger.warning(f"Rejected {filename}: File size is too small ({size})")
+            logger.warning("Rejected %s: File size is too small (%d)", filename, size)
             return
 
         # check if transfer for same file already running
         for item in self.bot_manager.transfers.get(filename, []):
             if item["size"] == size and item.get("connected", False):
-                logger.warning(f"Rejected {filename}: Download of file already in progress")
+                logger.warning("Rejected %s: Download of file already in progress", filename)
                 return
 
         local_download_path = os.path.join(self.download_path, filename)
@@ -632,15 +632,15 @@ class IRCBot(AioSimpleIRCClient):
             if os.path.exists(download_path):
                 local_size = os.path.getsize(download_path)
                 if local_size > size:
-                    logger.warning(f"Rejected {filename}: Local file larger then remote file ({local_size} > {size})")
+                    logger.warning("Rejected %s: Local file larger then remote file (%d > %d)", filename, local_size, size)
                     return
 
                 if local_size == size:
                     completed = True
-                    logger.info(f"{filename}: File already completed, send resume command for last 4096 to complete transfer request.")
+                    logger.info("%s: File already completed, send resume command for last 4096 to complete transfer request.", filename)
                     local_size -= 4096
 
-                logger.info(f"Send DCC RESUME {filename} starting at {local_size} bytes")
+                logger.info("Send DCC RESUME %s starting at %d bytes", filename, local_size)
                 self.connection.ctcp_reply(
                     event.source.nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)])
                 )
@@ -738,7 +738,7 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
-        logger.info(f"[{nick}] {dcc_msg} {filename} from {peer_address}:{peer_port}, size: {size} bytes")
+        logger.info("[%s] %s %s from %s:%d, size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
 
         # Convert the port to an integer
         logger.info("[%s] Connecting to %s:%s", nick, peer_address, peer_port)
@@ -839,9 +839,7 @@ class IRCBot(AioSimpleIRCClient):
                 transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
                 transfer_rate = (transferred_bytes / elapsed_time) / 1024
 
-                logger.info(
-                    f"[{transfer['nick']}] Downloading {transfer['filename']} {transfer['percent']}% @ {transfer_rate:.2f} KB/s / {transfer_rate_avg:.2f} KB/s"
-                )
+                logger.info("[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s", transfer['nick'], transfer['filename'], transfer['percent'], transfer_rate, transfer_rate_avg)
                 transfer["last_progress_update"] = now
                 transfer["last_progress_bytes_received"] = transfer["bytes_received"]
 
@@ -849,7 +847,7 @@ class IRCBot(AioSimpleIRCClient):
             if transfer["bytes_received"] == 0 and not transfer.get("offset") and self.allowed_mimetypes:
                 mime_type = self.mime_checker.from_buffer(data)
                 if mime_type not in self.allowed_mimetypes:
-                    logger.warning(f"[{transfer['nick']}] Reject {transfer['filename']}: Invalid MIME type ({mime_type})")
+                    logger.warning("[%s] Reject %s: Invalid MIME type (%s)", transfer['nick'], transfer['filename'], mime_type)
                     dcc.disconnect()
                     transfer["status"] = "error"
                     transfer["error"] = f"Invalid MIME type ({mime_type})"
@@ -865,7 +863,7 @@ class IRCBot(AioSimpleIRCClient):
                 with open(transfer["file_path"], "ab") as f:
                     f.write(data)
             except Exception as e:
-                logger.error(f"Error writing to file {transfer['file_path']}: {e}")
+                logger.error("Error writing to file %s: %s", transfer['file_path'], e)
                 transfer["status"] = "error"
                 transfer["error"] = f"Error writing to file {transfer['file_path']}: {e}"
                 transfer["connected"] = False
@@ -924,19 +922,19 @@ class IRCBot(AioSimpleIRCClient):
         transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
 
         if not os.path.exists(file_path):
-            logger.error(f"[{transfer['nick']}] Download failed: {file_path} does not exist")
+            logger.error("[%s] Download failed: %s does not exist", transfer['nick'], file_path)
             if transfer["status"] != "error":
                 transfer["status"] = "error"
-                transfer["error"] = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
+                transfer["error"] = f"[%s] Download failed: %s does not exist" % (transfer['nick'], file_path)
         else:
             file_size = os.path.getsize(file_path)
             if file_size != transfer["size"]:
-                logger.error(f"[{transfer['nick']}] Download {transfer['filename']} failed: size mismatch {file_size} != {transfer['size']}")
+                logger.error("[%s] Download %s failed: size mismatch %d != %d", transfer['nick'], transfer['filename'], file_size, transfer['size'])
                 if transfer["status"] != "error":
                     transfer["status"] = "failed"
                     transfer["error"] = f"size mismatch {file_size} != {transfer['size']}"
             else:
-                logger.info(f"[{transfer['nick']}] Download {transfer['filename']} complete - size: {file_size} bytes, {transfer_rate:.2f} KB/s")
+                logger.info("[%s] Download %s complete - size: %d bytes, %.2f KB/s", transfer['nick'], transfer['filename'], file_size, transfer_rate)
                 transfer["completed"] = time.time()
                 transfer["status"] = "completed"
                 if transfer.get("md5"):
@@ -947,10 +945,10 @@ class IRCBot(AioSimpleIRCClient):
                     target = file_path[: -len(self.config["incomplete_suffix"])]
                     try:
                         os.rename(file_path, target)
-                        logger.info(f"Renamed downloaded file to {transfer['filename']}")
+                        logger.info("Renamed downloaded file to %s", transfer['filename'])
                         transfer["file_path"] = target
                     except Exception as e:
-                        logger.error(f"Error renaming {file_path} to {target}: {e}")
+                        logger.error("Error renaming %s to %s: %s", file_path, target, e)
 
         del self.current_transfers[dcc]
 
@@ -1012,9 +1010,9 @@ class IRCBot(AioSimpleIRCClient):
         f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
         if f:
             error = f.group(1)
-            logger.error(f"[{sender}] XDCC SEND denied: {error}")
+            logger.error("[%s] XDCC SEND denied: %s", sender, error)
 
-        logger.info(f"[{sender}] {message}")
+        logger.info("[%s] %s", sender, message)
 
     async def cleanup(self, channel_idle_timeout: int, resume_timeout: int):
         # Find idle channels

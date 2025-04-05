@@ -258,7 +258,7 @@ class IRCBotAPI:
 
         """
         try:
-            logging.info(f"Received command from client: {command} {args}")
+            logging.info("Received command from client: %s %s", command, args)
             if command == "help":
                 await ws.send_json({"status": "ok", "message": "Available commands: part, join, msg"})
             elif command == "part":
@@ -336,11 +336,11 @@ class IRCBotAPI:
                         args = parts[1:] if len(parts) > 1 else []
                         await self.handle_ws_command(command, args, ws)
                     else:
-                        logging.info(f"Received message from client: {data}")
+                        logging.info("Received message from client: %s", data)
                 elif msg.type == web.WSMsgType.PONG:
                     logging.debug("Received pong from client")
                 elif msg.type == web.WSMsgType.ERROR:
-                    logging.error(f"WebSocket connection closed with exception: {ws.exception()}")
+                    logging.error("WebSocket connection closed with exception: %s", ws.exception())
         finally:
             # Remove the WebSocket connection when it's closed
             try:
@@ -569,7 +569,7 @@ class IRCBotAPI:
             return web.json_response(response)  # Return the response
         except Exception as e:
             logger.exception(e)
-            logger.error(f"Error in handle_info: {str(e)}")
+            logger.error("Error in handle_info: %s", str(e))
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 

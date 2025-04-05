@@ -20,6 +20,7 @@ class IRCBotManager:
         server_idle_timeout (int): The timeout for servers that are idle.
         channel_idle_timeout (int): The timeout for channels that are idle.
         resume_timeout (int): The timeout for resuming transfers.
+        transfer_list_timeout (int): The timeout for the transfer list.
         md5_check_queue (Queue): A queue for MD5 checks.
 
     """
@@ -69,7 +70,7 @@ class IRCBotManager:
                 raise ValueError("Missing 'servers' key in config")
             return config
         except Exception as e:
-            logger.error(f"Error loading config: {e}")
+            logger.error("Error loading config: %s", e)
             raise
 
     async def get_bot(self, server: str) -> IRCBot:
@@ -187,13 +188,13 @@ class IRCBotManager:
             The MD5 hash of the file as a string of hexadecimal digits.
 
         """
-        logger.info(f"Calculating MD5 for {filename}")
+        logger.info("Calculating MD5 for %s", filename)
         hasher = hashlib.md5()  # nosec
         with open(filename, "rb") as f:
             while data := f.read(8192):
                 hasher.update(data)
 
-        logger.info(f"MD5 for {filename} is {hasher.hexdigest()}")
+        logger.info("MD5 for %s is %s", filename, hasher.hexdigest())
         return hasher.hexdigest()
 
     async def check_queue_processor(self, loop: asyncio.AbstractEventLoop, md5_check_queue: asyncio.Queue):
@@ -214,7 +215,7 @@ class IRCBotManager:
         while True:
             try:
                 transfer_job = await md5_check_queue.get()
-                logging.debug(f"Checking MD5 for {transfer_job['filename']}")
+                logging.debug("Checking MD5 for %s", transfer_job['filename'])
                 md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
                 for transfer in self.transfers.get(transfer_job["filename"], []):
