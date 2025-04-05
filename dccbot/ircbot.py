@@ -14,9 +14,9 @@ import irc.client_aio
 from irc.connection import AioFactory
 from irc.client_aio import AioSimpleIRCClient
 import irc.client
-from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
 import magic
 from typing import Optional, List, Dict, Any, Set, Tuple, TYPE_CHECKING
+from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
 
 if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
@@ -298,11 +298,11 @@ class IRCBot(AioSimpleIRCClient):
                         retry += 1
 
                     if waiting_channels:
-                        logger.warning("Failed to join channels %s after 10 seconds", ', '.join(waiting_channels))
+                        logger.warning("Failed to join channels %s after 10 seconds", ", ".join(waiting_channels))
 
                 try:
                     self.connection.privmsg(data["user"], data["message"])
-                    logger.info("Sent message to %s: %s", data.get('user'), data.get('message'))
+                    logger.info("Sent message to %s: %s", data.get("user"), data.get("message"))
                     if data.get("channels"):
                         if data["user"] not in self.bot_channel_map:
                             self.bot_channel_map[data["user"]] = set(data["channels"])
@@ -314,7 +314,7 @@ class IRCBot(AioSimpleIRCClient):
                             self.joined_channels[channel] = time.time()
 
                 except Exception as e:
-                    logger.error("Failed to send message to %s: %s", data.get('user'), e)
+                    logger.error("Failed to send message to %s: %s", data.get("user"), e)
             elif data["command"] == "part":
                 if data.get("channels"):
                     for channel in data["channels"]:
@@ -839,7 +839,14 @@ class IRCBot(AioSimpleIRCClient):
                 transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
                 transfer_rate = (transferred_bytes / elapsed_time) / 1024
 
-                logger.info("[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s", transfer['nick'], transfer['filename'], transfer['percent'], transfer_rate, transfer_rate_avg)
+                logger.info(
+                    "[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s",
+                    transfer["nick"],
+                    transfer["filename"],
+                    transfer["percent"],
+                    transfer_rate,
+                    transfer_rate_avg,
+                )
                 transfer["last_progress_update"] = now
                 transfer["last_progress_bytes_received"] = transfer["bytes_received"]
 
@@ -847,7 +854,7 @@ class IRCBot(AioSimpleIRCClient):
             if transfer["bytes_received"] == 0 and not transfer.get("offset") and self.allowed_mimetypes:
                 mime_type = self.mime_checker.from_buffer(data)
                 if mime_type not in self.allowed_mimetypes:
-                    logger.warning("[%s] Reject %s: Invalid MIME type (%s)", transfer['nick'], transfer['filename'], mime_type)
+                    logger.warning("[%s] Reject %s: Invalid MIME type (%s)", transfer["nick"], transfer["filename"], mime_type)
                     dcc.disconnect()
                     transfer["status"] = "error"
                     transfer["error"] = f"Invalid MIME type ({mime_type})"
@@ -863,7 +870,7 @@ class IRCBot(AioSimpleIRCClient):
                 with open(transfer["file_path"], "ab") as f:
                     f.write(data)
             except Exception as e:
-                logger.error("Error writing to file %s: %s", transfer['file_path'], e)
+                logger.error("Error writing to file %s: %s", transfer["file_path"], e)
                 transfer["status"] = "error"
                 transfer["error"] = f"Error writing to file {transfer['file_path']}: {e}"
                 transfer["connected"] = False
@@ -922,19 +929,19 @@ class IRCBot(AioSimpleIRCClient):
         transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
 
         if not os.path.exists(file_path):
-            logger.error("[%s] Download failed: %s does not exist", transfer['nick'], file_path)
+            logger.error("[%s] Download failed: %s does not exist", transfer["nick"], file_path)
             if transfer["status"] != "error":
                 transfer["status"] = "error"
-                transfer["error"] = f"[%s] Download failed: %s does not exist" % (transfer['nick'], file_path)
+                transfer["error"] = f"[%s] Download failed: %s does not exist" % (transfer["nick"], file_path)
         else:
             file_size = os.path.getsize(file_path)
             if file_size != transfer["size"]:
-                logger.error("[%s] Download %s failed: size mismatch %d != %d", transfer['nick'], transfer['filename'], file_size, transfer['size'])
+                logger.error("[%s] Download %s failed: size mismatch %d != %d", transfer["nick"], transfer["filename"], file_size, transfer["size"])
                 if transfer["status"] != "error":
                     transfer["status"] = "failed"
                     transfer["error"] = f"size mismatch {file_size} != {transfer['size']}"
             else:
-                logger.info("[%s] Download %s complete - size: %d bytes, %.2f KB/s", transfer['nick'], transfer['filename'], file_size, transfer_rate)
+                logger.info("[%s] Download %s complete - size: %d bytes, %.2f KB/s", transfer["nick"], transfer["filename"], file_size, transfer_rate)
                 transfer["completed"] = time.time()
                 transfer["status"] = "completed"
                 if transfer.get("md5"):
@@ -945,7 +952,7 @@ class IRCBot(AioSimpleIRCClient):
                     target = file_path[: -len(self.config["incomplete_suffix"])]
                     try:
                         os.rename(file_path, target)
-                        logger.info("Renamed downloaded file to %s", transfer['filename'])
+                        logger.info("Renamed downloaded file to %s", transfer["filename"])
                         transfer["file_path"] = target
                     except Exception as e:
                         logger.error("Error renaming %s to %s: %s", file_path, target, e)

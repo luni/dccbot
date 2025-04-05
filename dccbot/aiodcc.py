@@ -1,10 +1,10 @@
+from asyncio.transports import Transport
+from typing import Optional
+import logging
 import irc.client
 import irc.connection
 import irc.client_aio
-from asyncio.transports import Transport
 from jaraco.stream import buffer
-from typing import Optional
-import logging
 
 
 log = logging.getLogger(__name__)

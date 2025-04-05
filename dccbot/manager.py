@@ -2,10 +2,10 @@ import hashlib
 import json
 import time
 import asyncio
-from dccbot.ircbot import IRCBot
 import logging
 from typing import Dict, Any, List
 from aiohttp import web
+from dccbot.ircbot import IRCBot
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ class IRCBotManager:
         while True:
             try:
                 transfer_job = await md5_check_queue.get()
-                logging.debug("Checking MD5 for %s", transfer_job['filename'])
+                logging.debug("Checking MD5 for %s", transfer_job["filename"])
                 md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
                 for transfer in self.transfers.get(transfer_job["filename"], []):

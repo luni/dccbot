@@ -1,9 +1,9 @@
 #!env python3
 
 import logging
-from dccbot.app import create_app
-from aiohttp import web
 import os
+from aiohttp import web
+from dccbot.app import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]%(message)s")
 

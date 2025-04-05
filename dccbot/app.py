@@ -1,16 +1,17 @@
-from aiohttp import web
-from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
-from marshmallow import Schema, fields, validate
 import logging
 from typing import List, Set
-from dccbot.ircbot import IRCBot
-from dccbot.manager import IRCBotManager, start_background_tasks, cleanup_background_tasks
 import time
 import datetime
 import re
 import asyncio
 import json
 import os
+from aiohttp import web
+from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
+from marshmallow import Schema, fields, validate
+
+from dccbot.ircbot import IRCBot
+from dccbot.manager import IRCBotManager, start_background_tasks, cleanup_background_tasks
 
 logger = logging.getLogger(__name__)
 
