@@ -71,7 +71,7 @@ class AioDCCConnection(irc.client.DCCConnection):
 
     async def connect(  # type: ignore
         self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: Optional[dict] = None
-    ):
+    ) -> "AioDCCConnection":
         """Connect/reconnect to a DCC peer.
 
         Args:
@@ -111,7 +111,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         return self
 
     # TODO: implement listen() in asyncio way
-    async def listen(self, addr=None):  # type: ignore # noqa: F841
+    async def listen(self, addr=None) -> "AioDCCConnection":  # type: ignore # noqa: F841
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
@@ -121,7 +121,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         """
         raise NotImplementedError()
 
-    def disconnect(self, message: str = ""):
+    def disconnect(self, message: str = "") -> None:
         """Hang up the connection and close the object.
 
         Args:
@@ -138,7 +138,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
         self.reactor._remove_connection(self)
 
-    def process_data(self, new_data: bytes):  # type: ignore
+    def process_data(self, new_data: bytes) -> None:  # type: ignore
         """Handle incoming data from the `DCCProtocol` connection.
 
         Args:
@@ -170,7 +170,7 @@ class AioDCCConnection(irc.client.DCCConnection):
             event = irc.client.Event(command, prefix, target, arguments)
             self.reactor._handle_event(self, event)
 
-    def send_bytes(self, bytes: bytes):
+    def send_bytes(self, bytes: bytes) -> None:
         """Send data to DCC peer.
 
         Args:
@@ -197,7 +197,7 @@ class AioReactor(irc.client_aio.AioReactor):
 
     dcc_connection_class = AioDCCConnection
 
-    def dcc(self, dcctype="chat"):
+    def dcc(self, dcctype="chat") -> AioDCCConnection:
         """Create a and return a DCCConnection object.
 
         Args:

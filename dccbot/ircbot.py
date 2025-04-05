@@ -74,7 +74,7 @@ class IRCBot(AioSimpleIRCClient):
 
     def __init__(
         self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[List[str]], max_file_size: int, bot_manager: "IRCBotManager"
-    ):
+    ) -> None:
         """Initialize an IRCBot object.
 
         Args:
@@ -118,7 +118,7 @@ class IRCBot(AioSimpleIRCClient):
         self.config = bot_manager.config
 
     @staticmethod
-    def get_version():
+    def get_version() -> str:
         """Return the bot version.
 
         Used when answering a CTCP VERSION request.
@@ -140,7 +140,7 @@ class IRCBot(AioSimpleIRCClient):
         random_suffix = "".join(random.choices(string.digits, k=3))  # nosec
         return f"{base_nick}{random_suffix}"
 
-    async def connect(self):  # type: ignore
+    async def connect(self) -> None:  # type: ignore
         """Establish a connection to the IRC server.
 
         If a TLS connection is configured (``use_tls=True``), the connection
@@ -176,7 +176,7 @@ class IRCBot(AioSimpleIRCClient):
         except Exception as e:
             logger.error("Connection error to %s: %s", self.server, e)
 
-    async def disconnect(self, reason: Optional[str] = None):
+    async def disconnect(self, reason: Optional[str] = None) -> None:
         """Disconnect the bot from the IRC server.
 
         Args:
@@ -186,7 +186,7 @@ class IRCBot(AioSimpleIRCClient):
         self.connection.disconnect(reason or "")
         logger.info("Disconnected from server %s (%s)", self.server, reason)
 
-    async def join_channel(self, channel: str):
+    async def join_channel(self, channel: str) -> None:
         """Join the specified channel.
 
         Args:
@@ -202,7 +202,7 @@ class IRCBot(AioSimpleIRCClient):
         self.connection.join(channel)
         logger.info("Try to join channel: %s", channel)
 
-    async def part_channel(self, channel: str, reason: Optional[str] = None):
+    async def part_channel(self, channel: str, reason: Optional[str] = None) -> None:
         """Part the specified channel.
 
         Args:
@@ -219,7 +219,7 @@ class IRCBot(AioSimpleIRCClient):
         self.last_active = time.time()
         del self.joined_channels[channel]
 
-    async def queue_command(self, data: dict):
+    async def queue_command(self, data: dict) -> None:
         """Queue a command to be processed by the bot.
 
         Args:
@@ -236,7 +236,7 @@ class IRCBot(AioSimpleIRCClient):
         await self.command_queue.put(data)
         logger.debug("Queued command: %s", data)
 
-    async def process_command_queue(self):
+    async def process_command_queue(self) -> None:
         """Process commands from the command queue.
 
         This function runs an infinite loop that checks the command queue for new commands. If a command is found,
@@ -320,7 +320,7 @@ class IRCBot(AioSimpleIRCClient):
                     for channel in data["channels"]:
                         await self.part_channel(channel, data.get("reason"))
 
-    def on_welcome(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_welcome(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving the welcome message from the server.
 
         If the bot is configured to authenticate with NickServ, this method sends the
@@ -352,7 +352,7 @@ class IRCBot(AioSimpleIRCClient):
 
         """
 
-    def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Add the channel to the list of banned channels and remove it from the list of joined channels.
 
         Args:
@@ -364,7 +364,7 @@ class IRCBot(AioSimpleIRCClient):
         channel_name = event.arguments[0].lower()
         self.banned_channels.add(channel_name)
 
-    def on_nochanmodes(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_nochanmodes(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a NOCHANMODES message from the server.
 
         If the bot is not allowed to join (because of a channel mode), remove it from the list of joined channels.
@@ -380,7 +380,7 @@ class IRCBot(AioSimpleIRCClient):
             logger.info("Removed from channel %s: %s", event.target, event.arguments)
             del self.joined_channels[channel_name]
 
-    def on_loggedin(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_loggedin(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a LOGGEDIN message from the server.
 
         Args:
@@ -392,7 +392,7 @@ class IRCBot(AioSimpleIRCClient):
         self.authenticated_event.set()
         self.authenticated = True
 
-    def on_part(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_part(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a PART message from the server.
 
         If the bot was parted from the channel, remove it from the list of joined channels.
@@ -410,7 +410,7 @@ class IRCBot(AioSimpleIRCClient):
             logger.info("Left channel %s: %s", event.target, event.arguments)
             del self.joined_channels[channel_name]
 
-    def on_join(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_join(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a JOIN message from the server.
 
         If the bot was joined the channel, add it to the list of joined channels.
@@ -429,7 +429,7 @@ class IRCBot(AioSimpleIRCClient):
             self.joined_channels[channel_name] = time.time()
             self.banned_channels.discard(channel_name)
 
-    def on_kick(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_kick(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a KICK message from the server.
 
         If the bot was kicked from the channel, remove it from the list of joined channels.
@@ -480,7 +480,7 @@ class IRCBot(AioSimpleIRCClient):
 
         return True
 
-    def on_dcc_accept(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_dcc_accept(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle DCC ACCEPT command.
 
         This method handles the DCC ACCEPT command, which is sent by the server to the bot when it
@@ -538,7 +538,7 @@ class IRCBot(AioSimpleIRCClient):
 
         self.init_dcc_connection(event.source.nick, item[0], peer_port, item[2], item[3], item[4], resume_position, item[6], item[7])
 
-    def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool):
+    def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool) -> None:
         """Handle DCC SEND command.
 
         The bot responds with a DCC RESUME command if the file already exists and the local file size is smaller than the remote file size.
@@ -663,7 +663,7 @@ class IRCBot(AioSimpleIRCClient):
 
         self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, local_files[-1], size, local_size, use_ssl, completed)
 
-    def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle CTCP messages.
 
         This method handles two types of CTCP messages: DCC and PING.
@@ -718,7 +718,7 @@ class IRCBot(AioSimpleIRCClient):
         offset: Optional[int] = None,
         use_ssl: Optional[bool] = False,
         completed: Optional[bool] = False,
-    ):
+    ) -> None:
         """Initialize a DCC connection to a peer.
 
         This method sets up a DCC connection to the peer, creates the
@@ -887,7 +887,7 @@ class IRCBot(AioSimpleIRCClient):
         else:
             dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
 
-    async def _add_md5_check_queue_item(self, transfer: dict):
+    async def _add_md5_check_queue_item(self, transfer: dict) -> None:
         """Add a transfer to the MD5 check queue.
 
         This method adds a transfer to the MD5 check queue.
@@ -899,7 +899,7 @@ class IRCBot(AioSimpleIRCClient):
         """
         await self.bot_manager.md5_check_queue.put(transfer)
 
-    def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle DCC DISCONNECT messages.
 
         This method handles the DCC DISCONNECT message, which is sent by the server to the bot when the bot
@@ -959,7 +959,7 @@ class IRCBot(AioSimpleIRCClient):
 
         del self.current_transfers[dcc]
 
-    def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle NOTICE messages.
 
         Redirects NOTICE messages to PRIVMSG.
@@ -971,7 +971,7 @@ class IRCBot(AioSimpleIRCClient):
         """
         return self.on_privmsg(connection, event)
 
-    def on_privmsg(self, connection: AioConnection, event: irc.client_aio.Event):
+    def on_privmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle PRIVMSG messages.
 
         This method handles the PRIVMSG message, which is sent by the server to the bot when it
@@ -1021,7 +1021,7 @@ class IRCBot(AioSimpleIRCClient):
 
         logger.info("[%s] %s", sender, message)
 
-    async def cleanup(self, channel_idle_timeout: int, resume_timeout: int):
+    async def cleanup(self, channel_idle_timeout: int, resume_timeout: int) -> None:
         # Find idle channels
         """Clean up idle channels and resume queue.
 
