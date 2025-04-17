@@ -1,6 +1,5 @@
 import logging
 from asyncio.transports import Transport
-from typing import Optional
 
 import irc.client
 import irc.client_aio
@@ -70,7 +69,7 @@ class AioDCCConnection(irc.client.DCCConnection):
     peerport: int
 
     async def connect(  # type: ignore
-        self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: Optional[dict] = None
+        self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: dict | None = None
     ) -> "AioDCCConnection":
         """Connect/reconnect to a DCC peer.
 

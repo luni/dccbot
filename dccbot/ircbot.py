@@ -10,7 +10,7 @@ import string
 import struct
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import irc.client
 import irc.client_aio
@@ -59,7 +59,7 @@ class IRCBot(AioSimpleIRCClient):
 
     reactor_class = AioReactor
     download_path: str
-    allowed_mimetypes: Optional[list[str]]
+    allowed_mimetypes: list[str] | None
     max_file_size: int
     bot_channel_map: dict[str, set[str]]
     resume_queue: dict[str, list[tuple[str, int, str, str, int, int, bool, bool, float]]]
@@ -76,7 +76,7 @@ class IRCBot(AioSimpleIRCClient):
     config: dict
 
     def __init__(
-        self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[list[str]], max_file_size: int, bot_manager: "IRCBotManager"
+        self, server: str, server_config: dict, download_path: str, allowed_mimetypes: list[str] | None, max_file_size: int, bot_manager: "IRCBotManager"
     ) -> None:
         """Initialize an IRCBot object.
 
@@ -179,11 +179,11 @@ class IRCBot(AioSimpleIRCClient):
         except Exception as e:
             logger.error("Connection error to %s: %s", self.server, e)
 
-    async def disconnect(self, reason: Optional[str] = None) -> None:
+    async def disconnect(self, reason: str | None = None) -> None:
         """Disconnect the bot from the IRC server.
 
         Args:
-            reason (Optional[str]): Optional quit message to send to the server.
+            reason (str): Optional quit message to send to the server.
 
         """
         self.connection.disconnect(reason or "")
@@ -205,12 +205,12 @@ class IRCBot(AioSimpleIRCClient):
         self.connection.join(channel)
         logger.info("Try to join channel: %s", channel)
 
-    async def part_channel(self, channel: str, reason: Optional[str] = None) -> None:
+    async def part_channel(self, channel: str, reason: str | None = None) -> None:
         """Part the specified channel.
 
         Args:
             channel (str): The channel to part.
-            reason (Optional[str]): Optional part message to send to the server.
+            reason (str): Optional part message to send to the server.
 
         """
         if channel not in self.joined_channels:
@@ -756,9 +756,9 @@ class IRCBot(AioSimpleIRCClient):
         filename: str,
         download_path: str,
         size: int,
-        offset: Optional[int] = None,
-        use_ssl: Optional[bool] = False,
-        completed: Optional[bool] = False,
+        offset: int | None = None,
+        use_ssl: bool | None = False,
+        completed: bool | None = False,
     ) -> None:
         """Initialize a DCC connection to a peer.
 

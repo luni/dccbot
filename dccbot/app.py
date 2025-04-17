@@ -578,7 +578,7 @@ def create_app(config_file: str) -> web.Application:
     """Create an aiohttp application with OpenAPI and Swagger UI support.
 
     Args:
-        config_file (Optional[str]): The path to the JSON configuration file.
+        config_file (str): The path to the JSON configuration file.
 
     Returns:
         web.Application: The aiohttp application.
