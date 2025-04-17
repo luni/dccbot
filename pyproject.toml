@@ -25,6 +25,7 @@ dev = [
     "radon>=6.0.1",
     "xenon>=0.9.3",
     "vulture>=2.14",
+    "pyright>=1.1.399",
 ]
 
 [tool.ruff]
@@ -39,6 +40,14 @@ line-ending = "lf"  # Keep consistency
 preview = true
 
 [tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+extend-select = [
+    "ANN",
+    "UP",
+    "UP042",
+    "I"
+]
 select = ["E9", "F82", "D"]  # Syntax errors + docstrings
 ignore = ["D203", "D213", "D100", "F821"]  # Ignore specific docstring rules
 

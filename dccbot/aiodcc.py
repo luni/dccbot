@@ -1,11 +1,11 @@
+import logging
 from asyncio.transports import Transport
 from typing import Optional
-import logging
-import irc.client
-import irc.connection
-import irc.client_aio
-from jaraco.stream import buffer
 
+import irc.client
+import irc.client_aio
+import irc.connection
+from jaraco.stream import buffer
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         return self
 
     # TODO: implement listen() in asyncio way
-    async def listen(self, addr=None) -> "AioDCCConnection":  # type: ignore # noqa: F841
+    async def listen(self, _addr=None) -> "AioDCCConnection":  # type: ignore # noqa: ANN001
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
@@ -197,7 +197,7 @@ class AioReactor(irc.client_aio.AioReactor):
 
     dcc_connection_class = AioDCCConnection
 
-    def dcc(self, dcctype="chat") -> AioDCCConnection:
+    def dcc(self, dcctype: str = "chat") -> AioDCCConnection:
         """Create a and return a DCCConnection object.
 
         Args:

@@ -2,7 +2,9 @@
 
 import logging
 import os
+
 from aiohttp import web
+
 from dccbot.app import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]%(message)s")

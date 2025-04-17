@@ -1,22 +1,25 @@
-import logging
 import asyncio
 import ipaddress
-import time
+import logging
 import os
 import random
-import string
-import shlex
-import struct
-import ssl
 import re
+import shlex
+import ssl
+import string
+import struct
+import time
 import uuid
-from typing import Optional, List, Dict, Any, Set, Tuple, TYPE_CHECKING
-import irc.client_aio
-from irc.connection import AioFactory
-from irc.client_aio import AioSimpleIRCClient
+from typing import TYPE_CHECKING, Any, Optional
+
 import irc.client
+import irc.client_aio
 import magic
-from dccbot.aiodcc import AioReactor, AioDCCConnection, NonStrictAioConnection as AioConnection
+from irc.client_aio import AioSimpleIRCClient
+from irc.connection import AioFactory
+
+from dccbot.aiodcc import AioDCCConnection, AioReactor
+from dccbot.aiodcc import NonStrictAioConnection as AioConnection
 
 if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
@@ -56,16 +59,16 @@ class IRCBot(AioSimpleIRCClient):
 
     reactor_class = AioReactor
     download_path: str
-    allowed_mimetypes: Optional[List[str]]
+    allowed_mimetypes: Optional[list[str]]
     max_file_size: int
-    bot_channel_map: Dict[str, Set[str]]
-    resume_queue: Dict[str, List[Tuple[str, int, str, str, int, int, bool, bool, float]]]
+    bot_channel_map: dict[str, set[str]]
+    resume_queue: dict[str, list[tuple[str, int, str, str, int, int, bool, bool, float]]]
     command_queue: asyncio.Queue
     loop: asyncio.AbstractEventLoop
     last_active: float
-    joined_channels: Dict[str, float]
-    current_transfers: Dict[AioDCCConnection, Dict[str, Any]]
-    banned_channels: Set[str]
+    joined_channels: dict[str, float]
+    current_transfers: dict[AioDCCConnection, dict[str, Any]]
+    banned_channels: set[str]
     connection: AioConnection
     bot_manager: "IRCBotManager"
     authenticated_event: asyncio.Event
@@ -73,7 +76,7 @@ class IRCBot(AioSimpleIRCClient):
     config: dict
 
     def __init__(
-        self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[List[str]], max_file_size: int, bot_manager: "IRCBotManager"
+        self, server: str, server_config: dict, download_path: str, allowed_mimetypes: Optional[list[str]], max_file_size: int, bot_manager: "IRCBotManager"
     ) -> None:
         """Initialize an IRCBot object.
 
@@ -236,23 +239,8 @@ class IRCBot(AioSimpleIRCClient):
         await self.command_queue.put(data)
         logger.debug("Queued command: %s", data)
 
-    async def process_command_queue(self) -> None:
-        """Process commands from the command queue.
-
-        This function runs an infinite loop that checks the command queue for new commands. If a command is found,
-        it will be processed according to the command. The commands can be one of the following:
-
-        - send: Send a message to the specified user/channel.
-        - join: Join the specified channel.
-        - part: Part the specified channel.
-
-        Args:
-            None
-
-        Returns:
-            None
-
-        """
+    async def _handle_authentication(self) -> None:
+        """Handle NickServ authentication if required."""
         if self.server_config.get("nickserv_password") and self.authenticated is False:
             logging.debug("Waiting for NickServ authentication")
             try:
@@ -260,65 +248,118 @@ class IRCBot(AioSimpleIRCClient):
             except asyncio.TimeoutError:
                 logger.error("Timed out waiting for NickServ authentication")
 
-        # Join channels
+    async def _join_channels(self, channels: list[str]) -> None:
+        """Join specified channels and update waiting channels list.
+
+        Args:
+            channels (list of str): The channels to join.
+
+        """
+        waiting_channels: list[str] = []
+        for channel in channels:
+            await self.join_channel(channel)
+            waiting_channels.append(channel)
+            if channel in self.server_config.get("also_join", {}):
+                for also_join_channel in self.server_config["also_join"][channel]:
+                    await self.join_channel(also_join_channel)
+                    waiting_channels.append(also_join_channel)
+
+        retry = 0
+        while retry < 10 and waiting_channels:
+            for channel in list(waiting_channels):
+                if channel in self.joined_channels:
+                    waiting_channels.remove(channel)
+
+            await asyncio.sleep(1)
+            retry += 1
+
+        if waiting_channels:
+            logger.warning("Failed to join channels %s after 10 seconds", ", ".join(waiting_channels))
+
+    def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
+        """Update bot's channel mapping for a user.
+
+        Args:
+            user (str): The user to update the channel mapping for.
+            channels (list of str): The channels to add to the user's channel mapping.
+
+        """
+        if user not in self.bot_channel_map:
+            self.bot_channel_map[user] = set(channels)
+        else:
+            self.bot_channel_map[user] |= set(channels)
+
+        if user in self.bot_channel_map:
+            for channel in self.bot_channel_map[user]:
+                self.joined_channels[channel] = time.time()
+
+    async def _handle_send_command(self, data: dict[str, Any]) -> None:
+        """Handle send command by joining channels and sending messages.
+
+        This method processes a send command by:
+        1. Joining specified channels
+        2. Waiting for channel joins
+        3. Sending the message
+        4. Updating channel mapping
+
+        Args:
+            data: Dictionary containing command data with keys:
+                - channels: List of channels to join
+                - user: User to send message to
+                - message: Message to send
+
+        """
+        if not data.get("user") or not data.get("message"):
+            return
+
+        if data.get("channels"):
+            await self._join_channels(data["channels"])
+
+        try:
+            self.connection.privmsg(data["user"], data["message"])
+            logger.info("Sent message to %s: %s", data["user"], data["message"])
+        except Exception as e:
+            logger.error("Failed to send message to %s: %s", data["user"], e)
+
+        if data.get("channels"):
+            self._update_channel_mapping(data["user"], data["channels"])
+
+    async def _handle_part_command(self, data: dict[str, Any]) -> None:
+        """Handle part command by parting specified channels.
+
+        Args:
+            data: Dictionary containing command data with keys:
+                - channels: List of channels to part
+                - reason: Optional reason for parting
+
+        """
+        if data.get("channels"):
+            for channel in data["channels"]:
+                await self.part_channel(channel, data.get("reason"))
+
+    async def process_command_queue(self) -> None:
+        """Process commands from the command queue.
+
+        This function runs an infinite loop that checks the command queue for new commands.
+        It will process commands according to their type (send, join, or part).
+
+        """
+        await self._handle_authentication()
+
         for channel in self.server_config.get("channels", []):
             asyncio.create_task(self.join_channel(channel))
 
         while True:
-            data: Dict[str, Any] = await self.command_queue.get()
+            data: dict[str, Any] = await self.command_queue.get()
             self.last_active = time.time()
+
             if not data:
                 continue
 
-            waiting_channels = []
-            if data["command"] in ("send", "join"):
-                if data.get("channels"):
-                    for channel in data["channels"]:
-                        await self.join_channel(channel)
-                        waiting_channels.append(channel)
-                        if channel in self.server_config.get("also_join", {}):
-                            for also_join_channel in self.server_config["also_join"][channel]:
-                                await self.join_channel(also_join_channel)
-                                waiting_channels.append(also_join_channel)
-
-                if not data.get("user") or not data.get("message"):
-                    continue
-
-                # wait until bot joined channel
-                # would like to use asyncio.wait_for, but it doesn't work as
-                # the main code is not async
-                if waiting_channels:
-                    retry = 0
-                    while retry < 10 and waiting_channels:
-                        for channel in list(waiting_channels):
-                            if channel in self.joined_channels:
-                                waiting_channels.remove(channel)
-
-                        await asyncio.sleep(1)
-                        retry += 1
-
-                    if waiting_channels:
-                        logger.warning("Failed to join channels %s after 10 seconds", ", ".join(waiting_channels))
-
-                try:
-                    self.connection.privmsg(data["user"], data["message"])
-                    logger.info("Sent message to %s: %s", data.get("user"), data.get("message"))
-                    if data.get("channels"):
-                        if data["user"] not in self.bot_channel_map:
-                            self.bot_channel_map[data["user"]] = set(data["channels"])
-                        else:
-                            self.bot_channel_map[data["user"]] |= set(data["channels"])
-
-                    if data["user"] in self.bot_channel_map:
-                        for channel in self.bot_channel_map[data["user"]]:
-                            self.joined_channels[channel] = time.time()
-
-                except Exception as e:
-                    logger.error("Failed to send message to %s: %s", data.get("user"), e)
+            if data["command"] == "send":
+                await self._handle_send_command(data)
             elif data["command"] == "part":
-                if data.get("channels"):
-                    for channel in data["channels"]:
-                        await self.part_channel(channel, data.get("reason"))
+                await self._handle_part_command(data)
 
     def on_welcome(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving the welcome message from the server.

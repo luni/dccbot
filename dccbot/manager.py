@@ -1,10 +1,12 @@
+import asyncio
 import hashlib
 import json
-import time
-import asyncio
 import logging
-from typing import Dict, Any, List
+import time
+from typing import Any
+
 from aiohttp import web
+
 from dccbot.ircbot import IRCBot
 
 logger = logging.getLogger(__name__)
@@ -26,16 +28,16 @@ class IRCBotManager:
     """
 
     config_file: str
-    config: Dict[str, Any]
-    bots: Dict[str, IRCBot]
+    config: dict[str, Any]
+    bots: dict[str, IRCBot]
     server_idle_timeout: int
     channel_idle_timeout: int
     resume_timeout: int
     transfer_list_timeout: int
     md5_check_queue: asyncio.Queue
-    transfers: Dict[str, List[Dict[str, Any]]]
+    transfers: dict[str, list[dict[str, Any]]]
 
-    def __init__(self, config_file: str):
+    def __init__(self, config_file: str) -> None:
         """Initialize an IRCBotManager object.
 
         The configuration is loaded from the file and stored in the
@@ -49,7 +51,7 @@ class IRCBotManager:
         """
         self.config_file = config_file
         self.config = self.load_config()
-        self.bots: Dict[str, IRCBot] = {}
+        self.bots: dict[str, IRCBot] = {}
         self.server_idle_timeout = self.config.get("server_idle_timeout", 1800)  # 30 minutes
         self.channel_idle_timeout = self.config.get("channel_idle_timeout", 1800)  # 30 minutes
         self.resume_timeout = self.config.get("resume_timeout", 30)  # Timeout until ACCEPT response send by server
@@ -64,7 +66,7 @@ class IRCBotManager:
         Raises a ValueError if the configuration is invalid.
         """
         try:
-            with open(self.config_file, "r") as f:
+            with open(self.config_file) as f:
                 config = json.load(f)
             if "servers" not in config:
                 raise ValueError("Missing 'servers' key in config")
@@ -106,7 +108,7 @@ class IRCBotManager:
             await bot.connect()
         return self.bots[server]
 
-    async def _cleanup_transfers(self):
+    async def _cleanup_transfers(self) -> None:
         """Clean up the transfer list.
 
         This method is called periodically to clean up the transfer list.
@@ -128,7 +130,7 @@ class IRCBotManager:
         for filename in expired_transfer_names:
             del self.transfers[filename]
 
-    async def _cleanup_bots(self):
+    async def _cleanup_bots(self) -> None:
         """Clean up idle servers and channels.
 
         This method is called periodically to clean up idle servers and channels.
@@ -197,7 +199,7 @@ class IRCBotManager:
         logger.info("MD5 for %s is %s", filename, hasher.hexdigest())
         return hasher.hexdigest()
 
-    async def check_queue_processor(self, loop: asyncio.AbstractEventLoop, md5_check_queue: asyncio.Queue):
+    async def check_queue_processor(self, loop: asyncio.AbstractEventLoop, md5_check_queue: asyncio.Queue) -> None:
         """Run a loop that processes jobs from the md5_check_queue.
 
         For each job, calculate the MD5 hash of the file and update the
@@ -251,9 +253,6 @@ async def cleanup_background_tasks(app: web.Application) -> None:
 
     Args:
         app: The aiohttp web application.
-
-    Returns:
-        None
 
     """
     # Cancel the background task, which will allow it to exit cleanly

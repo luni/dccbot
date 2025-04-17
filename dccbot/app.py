@@ -1,17 +1,17 @@
-import logging
-from typing import List, Set
-import time
-import datetime
-import re
 import asyncio
+import datetime
 import json
+import logging
 import os
+import re
+import time
+
 from aiohttp import web
-from aiohttp_apispec import docs, marshal_with, setup_aiohttp_apispec, request_schema, response_schema, validation_middleware
+from aiohttp_apispec import docs, marshal_with, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
 from dccbot.ircbot import IRCBot
-from dccbot.manager import IRCBotManager, start_background_tasks, cleanup_background_tasks
+from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +179,9 @@ class WebSocketLogHandler(logging.Handler):
 
     """
 
-    websockets: Set[web.WebSocketResponse]
+    websockets: set[web.WebSocketResponse]
 
-    def __init__(self, websockets: Set[web.WebSocketResponse]):
+    def __init__(self, websockets: set[web.WebSocketResponse]) -> None:
         """Initialize a WebSocketLogHandler.
 
         Args:
@@ -192,7 +192,7 @@ class WebSocketLogHandler(logging.Handler):
         super().__init__()
         self.websockets = websockets
 
-    def emit(self, record: logging.LogRecord):
+    def emit(self, record: logging.LogRecord) -> None:
         """Send a log entry to connected WebSocket clients.
 
         Args:
@@ -222,9 +222,9 @@ class IRCBotAPI:
     """
 
     app: web.Application
-    websockets: Set[web.WebSocketResponse]
+    websockets: set[web.WebSocketResponse]
 
-    def __init__(self, config_file: str):
+    def __init__(self, config_file: str) -> None:
         """Initialize an IRCBotAPI object.
 
         Args:
@@ -248,7 +248,7 @@ class IRCBotAPI:
         ircbot_logger = logging.getLogger("dccbot.ircbot")
         ircbot_logger.addHandler(ws_log_handler)
 
-    async def handle_ws_command(self, command: str, args: List[str], ws: web.WebSocketResponse):
+    async def handle_ws_command(self, command: str, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
 
         Args:
@@ -318,7 +318,7 @@ class IRCBotAPI:
         ping_task = None
         try:
             # Send periodic ping frames to keep the connection alive
-            async def send_ping():
+            async def send_ping() -> None:
                 while True:
                     await asyncio.sleep(10)  # Send a ping every 10 seconds
                     if ws.closed:
@@ -362,10 +362,10 @@ class IRCBotAPI:
         filename = request.rel_url.path.split("/")[-1]
         fullpath = os.path.normpath(os.path.join("static/", filename))
 
-        with open(fullpath, "r", encoding="utf-8") as f:
+        with open(fullpath, encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
-    def setup_routes(self):
+    def setup_routes(self) -> None:
         """Set up routes for the aiohttp application."""
         self.app.router.add_post("/join", self.join)
         self.app.router.add_post("/part", self.part)
@@ -376,7 +376,7 @@ class IRCBotAPI:
         self.app.router.add_get("/log.html", self._return_static_html)
         self.app.router.add_get("/info.html", self._return_static_html)
 
-    def setup_apispec(self):
+    def setup_apispec(self) -> None:
         """Configure aiohttp-apispec for API documentation."""
         setup_aiohttp_apispec(
             app=self.app,
@@ -387,7 +387,7 @@ class IRCBotAPI:
         )
 
     @staticmethod
-    def _clean_channel_list(l: List[str]) -> List[str]:
+    def _clean_channel_list(l: list[str]) -> list[str]:
         """Clean a list of channel names by stripping and lowercasing them."""
         return [x.lower().strip() for x in l]
 
@@ -521,7 +521,7 @@ class IRCBotAPI:
     )
     @marshal_with(InfoResponseSchema, 200)
     @response_schema(InfoResponseSchema(), 200)
-    async def info(self, request: web.Request):
+    async def info(self, request: web.Request) -> web.Response:
         """Handle an information request."""
         try:
             bot_manager: IRCBotManager = request.app["bot_manager"]
