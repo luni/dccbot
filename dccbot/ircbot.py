@@ -1090,4 +1090,4 @@ class IRCBot(AioSimpleIRCClient):
             for resume_item in list(resume_queue):
                 requested_time = resume_item[-1]
                 if now - requested_time > resume_timeout:
-                    self.resume_queue[nick].remove(resume_item)
+                    resume_queue.remove(resume_item)
