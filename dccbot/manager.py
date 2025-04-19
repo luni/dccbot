@@ -27,16 +27,6 @@ class IRCBotManager:
 
     """
 
-    config_file: str
-    config: dict[str, Any]
-    bots: dict[str, IRCBot]
-    server_idle_timeout: int
-    channel_idle_timeout: int
-    resume_timeout: int
-    transfer_list_timeout: int
-    md5_check_queue: asyncio.Queue
-    transfers: dict[str, list[dict[str, Any]]]
-
     def __init__(self, config_file: str) -> None:
         """Initialize an IRCBotManager object.
 
@@ -57,7 +47,45 @@ class IRCBotManager:
         self.resume_timeout = self.config.get("resume_timeout", 30)  # Timeout until ACCEPT response send by server
         self.transfer_list_timeout = self.config.get("transfer_list_timeout", 86400)  # 1 day
         self.md5_check_queue = asyncio.Queue()
-        self.transfers = {}
+        self.transfers: dict[str, list[dict[str, Any]]] = {}
+
+    async def cancel_transfer(self, server: str, nick: str, filename: str) -> bool:
+        """Cancel a running transfer by server, bot_name, and filename.
+
+        Returns True if cancelled, False if not found or not running.
+        """
+        # Find the bot
+        bot = self.bots.get(server)
+        if not bot:
+            return False
+
+        # Find the transfer in bot.current_transfers
+        for dcc, transfer in bot.current_transfers.items():
+            if transfer.get("filename") == filename and transfer.get("status") == "in_progress" and transfer.get("nick") == nick:
+                # Disconnect the DCC connection
+                try:
+                    dcc.disconnect("Cancelled by user")
+                except Exception:
+                    logger.error("Failed to disconnect DCC connection", exc_info=True)
+
+                transfer["status"] = "cancelled"
+                transfer["error"] = "Cancelled by user"
+                transfer["connected"] = False
+
+                # Remove from current_transfers
+                try:
+                    del bot.current_transfers[dcc]
+                except KeyError:
+                    pass
+
+                # Update in manager.transfers if present
+                for t in self.transfers.get(filename, []):
+                    if t.get("server") == server and t.get("status") == "in_progress" and t.get("nick") == nick:
+                        t["status"] = "cancelled"
+                        t["error"] = "Cancelled by user"
+                        t["connected"] = False
+                return True
+        return False
 
     def load_config(self) -> dict:
         """Load the configuration from a JSON file.

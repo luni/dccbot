@@ -158,6 +158,7 @@
           <div class="transfer-header">
             <h3>${transfer.filename}</h3>
             <div class="status ${transfer_status_class}">${transfer_status_text}</div>
+            ${(transfer.status === 'in_progress') ? `<button class="cancel-btn" data-server="${transfer.server}" data-nick="${transfer.nick}" data-filename="${transfer.filename}">Cancel</button>` : ''}
           </div>
           <div class="transfer-details">
             <div><strong>Server:</strong> ${transfer.server}</div>
@@ -176,6 +177,33 @@
             <div class="speed">Speed: ${transfer.speed.toFixed(2)} KB/s</div>
           ` : ''}
         `;
+        // Add cancel button handler if present
+        if (transfer.status === 'in_progress') {
+          const btn = transferDiv.querySelector('.cancel-btn');
+          btn.addEventListener('click', async function() {
+            btn.disabled = true;
+            btn.textContent = 'Cancelling...';
+            try {
+              const resp = await fetch('/cancel_transfer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  server: btn.getAttribute('data-server'),
+                  nick: transfer.nick,
+                  filename: btn.getAttribute('data-filename')
+                })
+              });
+              // Optionally handle response
+              if (!resp.ok) {
+                alert('Failed to cancel transfer.');
+              } else {
+                btn.parentNode.removeChild(btn);
+              }
+            } catch (e) {
+              alert('Failed to cancel transfer: ' + e);
+            }
+          });
+        }
         transferList.appendChild(transferDiv);
       });
     }

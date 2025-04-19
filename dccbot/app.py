@@ -7,7 +7,7 @@ import re
 import time
 
 from aiohttp import web
-from aiohttp_apispec import docs, marshal_with, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
+from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
 from dccbot.ircbot import IRCBot
@@ -16,7 +16,14 @@ from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_backgr
 logger = logging.getLogger(__name__)
 
 
-# Define Marshmallow Schemas for Request/Response Validation
+class CancelTransferRequestSchema(Schema):
+    """Schema for the /cancel_transfer endpoint."""
+
+    server = fields.Str(required=True, metadata={"description": "IRC server address"})
+    nick = fields.Str(required=True, metadata={"description": "Sender nickname (the user sending the file)"})
+    filename = fields.Str(required=True, metadata={"description": "Filename of the transfer to cancel"})
+
+
 class JoinRequestSchema(Schema):
     """Schema for the /join endpoint."""
 
@@ -142,7 +149,7 @@ class TransferInfo(Schema):
         allow_none=True,
     )
     status = fields.Str(
-        validate=validate.OneOf(["in_progress", "completed", "failed", "error"]),
+        validate=validate.OneOf(["in_progress", "completed", "failed", "error", "cancelled"]),
     )
     error = fields.Str(
         allow_none=True,
@@ -213,27 +220,20 @@ class WebSocketLogHandler(logging.Handler):
 
 
 class IRCBotAPI:
-    """Main class for the IRC bot API.
+    """Main class for the IRC bot API."""
 
-    Attributes:
-        app (web.Application): The aiohttp application.
-        bot_manager (IRCBotManager): The IRC bot manager.
-
-    """
-
-    app: web.Application
-    websockets: set[web.WebSocketResponse]
-
-    def __init__(self, config_file: str) -> None:
+    def __init__(self, config_file: str, bot_manager: IRCBotManager | None = None) -> None:
         """Initialize an IRCBotAPI object.
 
         Args:
             config_file (str): The path to the JSON configuration file.
+            bot_manager (IRCBotManager | None, optional): The bot manager to use.
+                Defaults to None.
 
         """
         self.app = web.Application()
         self.app.middlewares.append(validation_middleware)
-        self.bot_manager = IRCBotManager(config_file)
+        self.bot_manager = bot_manager or IRCBotManager(config_file)
         self.app["bot_manager"] = self.bot_manager
         self.app.on_startup.append(start_background_tasks)
         self.app.on_cleanup.append(cleanup_background_tasks)
@@ -266,7 +266,7 @@ class IRCBotAPI:
                 if len(args) < 2:
                     raise RuntimeError("Not enough arguments")
                 server = args.pop(0)
-                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                bot = await self.bot_manager.get_bot(server)
                 await bot.queue_command({
                     "command": "part",
                     "channels": self._clean_channel_list(args),
@@ -275,7 +275,7 @@ class IRCBotAPI:
                 if len(args) < 2:
                     raise RuntimeError("Not enough arguments")
                 server = args.pop(0)
-                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                bot = await self.bot_manager.get_bot(server)
                 await bot.queue_command({
                     "command": "join",
                     "channels": self._clean_channel_list(args),
@@ -284,7 +284,7 @@ class IRCBotAPI:
                 if len(args) < 3:
                     raise RuntimeError("Not enough arguments")
                 server = args.pop(0)
-                bot: IRCBot = await self.app["bot_manager"].get_bot(server)
+                bot = await self.bot_manager.get_bot(server)
                 target = args.pop(0)
                 await bot.queue_command({
                     "command": "send",
@@ -292,6 +292,7 @@ class IRCBotAPI:
                     "message": " ".join(args),
                 })
         except RuntimeError as e:
+            logger.error(str(e), exc_info=True)
             await ws.send_json({"status": "error", "message": str(e)})
         except Exception as e:
             logger.exception(e)
@@ -371,6 +372,7 @@ class IRCBotAPI:
         self.app.router.add_post("/part", self.part)
         self.app.router.add_post("/msg", self.msg)
         self.app.router.add_post("/shutdown", self.shutdown)
+        self.app.router.add_post("/cancel", self.cancel)
         self.app.router.add_get("/info", self.info)
         self.app.router.add_get("/ws", self.websocket_handler)
         self.app.router.add_get("/log.html", self._return_static_html)
@@ -409,7 +411,7 @@ class IRCBotAPI:
             if not data.get("channel") and not data.get("channels"):
                 return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
-            bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
+            bot = await self.bot_manager.get_bot(data["server"])
             await bot.queue_command({"command": "join", "channels": self._clean_channel_list(data.get("channels", [data.get("channel", "")]))})
             return web.json_response({"status": "ok"})
         except Exception as e:
@@ -434,7 +436,7 @@ class IRCBotAPI:
             if not data.get("channel") and not data.get("channels"):
                 return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
-            bot: IRCBot = await request.app["bot_manager"].get_bot(data["server"])
+            bot = await self.bot_manager.get_bot(data["server"])
             await bot.queue_command({
                 "command": "part",
                 "channels": self._clean_channel_list(data.get("channels", [data.get("channel", "")])),
@@ -463,8 +465,7 @@ class IRCBotAPI:
             if not data.get("user") or not data.get("message"):
                 return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
-            bot_manager = request.app["bot_manager"]
-            bot: IRCBot = await bot_manager.get_bot(data["server"])
+            bot = await self.bot_manager.get_bot(data["server"])
             channels = self._clean_channel_list(data.get("channels", [data.get("channel", [])]))
 
             # Check if we need to rewrite to ssend
@@ -472,7 +473,7 @@ class IRCBotAPI:
                 data["message"]
                 and (
                     any(channel in bot.server_config.get("rewrite_to_ssend", []) for channel in channels)
-                    or data["user"].lower().strip() in bot_manager.config.get("ssend_map", {})
+                    or data["user"].lower().strip() in self.bot_manager.config.get("ssend_map", {})
                 )
                 and re.match(r"^xdcc (send|batch) ", data["message"], re.I)
             ):
@@ -502,7 +503,7 @@ class IRCBotAPI:
         """Handle a shutdown request."""
         logger.info("Shutting down server...")
         try:
-            for bot in request.app["bot_manager"].bots.values():
+            for bot in self.bot_manager.bots.values():
                 await bot.disconnect("Shutting down")
             await request.app.shutdown()
             return web.json_response({"status": "ok"})
@@ -519,16 +520,14 @@ class IRCBotAPI:
             500: {"description": "Internal server error"},
         },
     )
-    @marshal_with(InfoResponseSchema, 200)
     @response_schema(InfoResponseSchema(), 200)
     async def info(self, request: web.Request) -> web.Response:
         """Handle an information request."""
         try:
-            bot_manager: IRCBotManager = request.app["bot_manager"]
             response = {"networks": [], "transfers": []}
 
             # Gather information about all networks and channels
-            for server, bot in bot_manager.bots.items():
+            for server, bot in self.bot_manager.bots.items():
                 network_info = {"server": server, "nickname": bot.nick, "channels": []}
 
                 # Add channel information
@@ -537,7 +536,7 @@ class IRCBotAPI:
 
                 response["networks"].append(network_info)
 
-            for filename, transfers in bot_manager.transfers.items():
+            for filename, transfers in self.bot_manager.transfers.items():
                 for transfer in transfers:
                     now = time.time()
 
@@ -573,6 +572,33 @@ class IRCBotAPI:
             logger.error("Error in handle_info: %s", str(e))
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
+    @docs(
+        tags=["Transfer Management"],
+        summary="Cancel a running transfer",
+        description="Cancel a running transfer by server and filename.",
+        responses={
+            200: {"description": "Successfully cancelled the transfer"},
+            400: {"description": "Invalid request or error cancelling transfer"},
+        },
+    )
+    @request_schema(CancelTransferRequestSchema())
+    @response_schema(DefaultResponseSchema(), 200)
+    async def cancel(self, request: web.Request) -> web.Response:
+        """Cancel a running transfer by server, nick, and filename."""
+        try:
+            data = request["data"]
+            server = data["server"]
+            nick = data["nick"]
+            filename = data["filename"]
+            cancelled = await self.bot_manager.cancel_transfer(server, nick, filename)
+            if cancelled:
+                return web.json_response({"status": "ok", "message": "Transfer cancelled."})
+            else:
+                return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
+        except Exception as e:
+            logger.exception(e)
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+
 
 def create_app(config_file: str) -> web.Application:
     """Create an aiohttp application with OpenAPI and Swagger UI support.
@@ -584,5 +610,5 @@ def create_app(config_file: str) -> web.Application:
         web.Application: The aiohttp application.
 
     """
-    api = IRCBotAPI(config_file)
-    return api.app
+    api = IRCBotAPI(config_file)    # pragma: no cover
+    return api.app                  # pragma: no cover

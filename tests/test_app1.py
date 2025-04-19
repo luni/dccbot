@@ -3,15 +3,19 @@ import pytest
 import pytest_asyncio
 from dccbot.app import IRCBotAPI
 from dccbot.ircbot import IRCBot
-
+import json
+import datetime
+from unittest.mock import MagicMock
+from dccbot.app import WebSocketLogHandler
+from aiohttp import web
+import asyncio
 
 # Fixture to initialize the IRCBotAPI application
 @pytest_asyncio.fixture
 async def api_client(aiohttp_client):
-    api = IRCBotAPI("config.json")
-    # Patch the bot manager with an AsyncMock
     mock_bot_manager = AsyncMock()
-    api.app["bot_manager"] = mock_bot_manager
+    # Patch the bot manager with an AsyncMock
+    api = IRCBotAPI(config_file="config.json", bot_manager=mock_bot_manager)
     client = await aiohttp_client(api.app)
     return client, mock_bot_manager
 
@@ -298,6 +302,44 @@ async def test_info_success_empty_bot_manager(api_client):
 
 
 @pytest.mark.asyncio
+async def test_cancel_transfer_success(api_client):
+    client, mock_bot_manager = api_client
+    mock_bot_manager.cancel_transfer.return_value = True
+    payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "ok"
+    assert "cancelled" in data["message"].lower()
+    mock_bot_manager.cancel_transfer.assert_awaited_once_with("irc.example.com", "sender_nick", "file.txt")
+
+
+@pytest.mark.asyncio
+async def test_cancel_transfer_not_found(api_client):
+    client, mock_bot_manager = api_client
+    mock_bot_manager.cancel_transfer.return_value = False
+    payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 400
+    data = await resp.json()
+    assert data["status"] == "error"
+    assert "not found" in data["message"].lower() or "not running" in data["message"].lower()
+    mock_bot_manager.cancel_transfer.assert_awaited_once_with("irc.example.com", "sender_nick", "file.txt")
+
+
+@pytest.mark.asyncio
+async def test_cancel_transfer_exception(api_client):
+    client, mock_bot_manager = api_client
+    mock_bot_manager.cancel_transfer.side_effect = Exception("Test exception")
+    payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 400
+    data = await resp.json()
+    assert data["status"] == "error"
+    assert "test exception" in data["message"].lower()
+    mock_bot_manager.cancel_transfer.assert_awaited_once_with("irc.example.com", "sender_nick", "file.txt")
+
+@pytest.mark.asyncio
 async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
     # Mock bot manager with bots and transfers
     client, mock_bot_manager = api_client
@@ -348,3 +390,209 @@ async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
     data = await resp.json()
     assert len(data["networks"]) == 2
     assert len(data["transfers"]) == 2
+
+@pytest.mark.asyncio
+async def test_cancel_missing_fields(api_client):
+    client, _ = api_client
+    # Missing 'nick'
+    payload = {"server": "irc.example.com", "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 422
+    data = await resp.json()
+    assert "nick" in data["json"]
+
+@pytest.mark.asyncio
+async def test_cancel_wrong_type(api_client):
+    client, _ = api_client
+    # 'nick' should be a string, not a list
+    payload = {"server": "irc.example.com", "nick": ["not", "a", "string"], "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 422
+    data = await resp.json()
+    assert "nick" in data["json"]
+
+@pytest.mark.asyncio
+async def test_cancel_internal_error(api_client):
+    client, mock_bot_manager = api_client
+    mock_bot_manager.cancel_transfer.side_effect = Exception("Internal error!")
+    payload = {"server": "irc.example.com", "nick": "nick", "filename": "file.txt"}
+    resp = await client.post("/cancel", json=payload)
+    assert resp.status == 400
+    data = await resp.json()
+    assert data["status"] == "error"
+    assert "internal error" in data["message"].lower()
+
+@pytest.mark.asyncio
+async def test_info_no_bots_no_transfers(api_client):
+    client, mock_bot_manager = api_client
+    mock_bot_manager.bots = {}
+    mock_bot_manager.transfers = {}
+    resp = await client.get("/info")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == {"networks": [], "transfers": []}
+
+
+@pytest.mark.asyncio
+async def test_websocket_log_handler_emit_sends_log(monkeypatch):
+    ws_mock = MagicMock()
+    ws_mock.closed = False
+    sent = {}
+
+    def fake_send_str(msg):
+        sent['msg'] = msg
+    ws_mock.send_str.side_effect = fake_send_str
+
+    handler = WebSocketLogHandler({ws_mock})
+
+    # Patch asyncio.create_task to run immediately for test
+    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
+
+    # Emit a log record
+    record = MagicMock()
+    record.levelname = "INFO"
+    record.getMessage.return_value = "Test log"
+    record.msg = "Test log"
+    record.args = ()
+    record.created = datetime.datetime.now().timestamp()
+    handler.format = lambda r: r.getMessage()
+
+    handler.emit(record)
+    # Check that the websocket received a JSON log message
+    assert "msg" in sent
+    log_entry = json.loads(sent["msg"])
+    assert log_entry["level"] == "INFO"
+    assert log_entry["message"] == "Test log"
+    assert "timestamp" in log_entry
+
+@pytest.mark.asyncio
+async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
+    ws_open = MagicMock()
+    ws_open.closed = False
+    ws_closed = MagicMock()
+    ws_closed.closed = True
+
+    handler = WebSocketLogHandler({ws_open, ws_closed})
+
+    # Patch asyncio.create_task to run immediately for test
+    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
+
+    record = MagicMock()
+    record.levelname = "WARNING"
+    record.getMessage.return_value = "Closed test"
+    handler.format = lambda r: r.getMessage()
+
+    handler.emit(record)
+    # ws_closed should be removed from handler.websockets
+    assert ws_closed not in handler.websockets
+    # ws_open should remain
+    assert ws_open in handler.websockets
+
+
+@pytest.mark.asyncio
+async def test_return_static_html_returns_html(api_client):
+    client, _ = api_client
+    # This assumes the route '/log.html' is mapped to _return_static_html
+    resp = await client.get("/log.html")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"].startswith("text/html")
+    text = await resp.text()
+    assert "<html" in text.lower()  # crude check for HTML content
+
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_lifecycle(api_client):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+
+    # Send a text message (not a command) and expect no crash
+    await ws.send_str("Hello world")
+    # Optionally, check if a log message is received if your frontend echoes logs
+
+    # Send a command (e.g., /help) and expect a JSON response
+    await ws.send_str("/help")
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "ok"
+    assert "Available commands" in data["message"]
+
+    # Close the websocket and ensure clean shutdown
+    await ws.close()
+    assert ws.closed
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_invalid_command(api_client):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    # Send an unknown command
+    await ws.send_str("/foobar")
+    # The server should not crash, but may not respond (depends on your handler)
+    # Optionally, check for logs or just ensure connection stays open
+    await ws.close()
+    assert ws.closed
+
+@pytest.mark.asyncio
+async def test_websocket_handler_part_not_enough_args(api_client):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    # Send /part with not enough args
+    await ws.send_str("/part onlyone")
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not enough arguments" in data["message"].lower()
+    await ws.close()
+
+@pytest.mark.asyncio
+async def test_websocket_handler_msg_not_enough_args(api_client):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    # Send /msg with not enough args
+    await ws.send_str("/msg onlyone")
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not enough arguments" in data["message"].lower()
+    await ws.close()
+
+@pytest.mark.asyncio
+async def test_websocket_handler_join_success(api_client):
+    from unittest.mock import AsyncMock, MagicMock
+    client, mock_bot_manager = api_client
+    ws = await client.ws_connect("/ws")
+    mock_bot = MagicMock()
+    mock_bot.queue_command = AsyncMock()
+    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
+    await ws.send_str("/join server #chan1 #chan2")
+    # Await a short time to let the handler process the command
+    await asyncio.sleep(0.1)
+    mock_bot.queue_command.assert_called_once()
+    await ws.close()
+
+@pytest.mark.asyncio
+async def test_websocket_handler_server_sends_ping(api_client):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    # Wait for a bit longer than the ping interval (10s in your code)
+    await asyncio.sleep(11)
+    # The websocket client should have received a ping from the server
+    # aiohttp's ws_connect automatically responds to ping with pong, but we can check the connection is still alive
+    assert not ws.closed
+    await ws.close()
+
+@pytest.mark.asyncio
+async def test_websocket_handler_client_sends_pong(api_client, caplog):
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    # Send a pong frame to the server
+    await ws.pong()
+    # The server should log "Received pong from client" (if logging is configured to show DEBUG)
+    # Optionally, you can check logs with caplog if you configure logging
+    await asyncio.sleep(0.1)  # Give the server a moment to process
+    await ws.close()
+    assert ws.closed
