@@ -610,5 +610,5 @@ def create_app(config_file: str) -> web.Application:
         web.Application: The aiohttp application.
 
     """
-    api = IRCBotAPI(config_file)    # pragma: no cover
-    return api.app                  # pragma: no cover
+    api = IRCBotAPI(config_file)  # pragma: no cover
+    return api.app  # pragma: no cover
