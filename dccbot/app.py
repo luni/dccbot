@@ -272,7 +272,7 @@ class IRCBotAPI:
                     msg = f"Usage: {command} <server> <target> <message>"
                 elif command == 'msgjoin':
                     msg = f"Usage: {command} <server> <channel> <target> <message>"
-                else:
+                elif command:
                     msg = f"Unknown command: {command}"
 
                 await ws.send_json({"status": "ok", "message": msg})
