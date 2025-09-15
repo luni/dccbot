@@ -83,8 +83,8 @@ available at `http://localhost:8080/` by default.
 A Tampermonkey userscript is provided to add download buttons to popular XDCC search websites, making it easy to send download commands directly to your DCCBot.
 
 #### Supported Websites
-- [XDCC.eu](https://www.xdcc.eu/)
-- [NIBL](https://nibl.co.uk/)
+- XDCC.eu
+- NIBL
 
 #### Installation
 
