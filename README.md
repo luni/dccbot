@@ -71,9 +71,40 @@ available at `http://localhost:8080/` by default.
 *   `POST /shutdown`: shutdown the bot
 *   `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers)
 
-### Addtional browser features:
+### Additional browser features:
 
 *   `/log.html`: show log file via websocket, limit to 500 lines.
     ![dccbot log example](./static/dccbot_log.png)
 *   `/info.html`: show current transfers page
     ![dccbot transfer example](./static/dccbot_info.png)
+
+### Browser Userscript for Easy Downloads
+
+A Tampermonkey userscript is provided to add download buttons to popular XDCC search websites, making it easy to send download commands directly to your DCCBot.
+
+#### Supported Websites
+- XDCC.eu
+- NIBL
+
+#### Installation
+
+1. Install the [Tampermonkey](https://www.tampermonkey.net/) extension for your browser
+2. Click the following link to install the script: [Install Script](https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js)
+
+#### Configuration
+
+1. After installation, click on the Tampermonkey extension icon
+2. Select "Set API Endpoint" from the menu
+3. Enter your DCCBot API endpoint (e.g., `http://localhost:8080`)
+
+#### Usage
+
+- On XDCC.eu and NIBL, you'll see a "Down" button next to each search result
+- Click the button to automatically send the download command to your DCCBot
+- For NIBL, you can also select multiple items and use the "Download selected" button to batch download
+
+#### Features
+- One-click downloads from supported websites
+- Batch download support on NIBL
+- Customizable API endpoint
+- Lightweight and fast

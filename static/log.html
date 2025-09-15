@@ -14,7 +14,8 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            height: 100vh; /* Full viewport height */
+            height: 100vh;
+            /* Full viewport height */
             box-sizing: border-box;
             color: #e0e0e0;
         }
@@ -36,6 +37,7 @@
             white-space: pre-wrap;
             overflow-y: auto;
         }
+
         #command-input {
             width: 100%;
             padding: 10px;
@@ -44,6 +46,7 @@
             margin-top: 10px;
             box-sizing: border-box;
         }
+
         /* Colors for log levels */
         .log-info {
             color: #cccccc;
@@ -102,6 +105,21 @@
             }
         }
 
+        function escapeHTML(str) {
+            return str.replace(
+                /[&<>'"]/g,
+                tag =>
+                ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        }
+
+
         ws.onmessage = (event) => {
             // Parse the log message
             const logEntry = JSON.parse(event.data);
@@ -113,7 +131,7 @@
                 // Format the log message with consistent padding
                 const timestamp = logEntry.timestamp;
                 const level = logEntry.level.padEnd(8); // Pad log level to 8 characters
-                const message = logEntry.message;
+                const message = escapeHTML(logEntry.message);
 
                 // Determine the CSS class based on the log level
                 let logClass = "";

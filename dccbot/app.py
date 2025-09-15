@@ -10,7 +10,6 @@ from aiohttp import web
 from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
-from dccbot.ircbot import IRCBot
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 
 logger = logging.getLogger(__name__)
@@ -248,7 +247,7 @@ class IRCBotAPI:
         ircbot_logger = logging.getLogger("dccbot.ircbot")
         ircbot_logger.addHandler(ws_log_handler)
 
-    async def handle_ws_command(self, command: str, args: list[str], ws: web.WebSocketResponse) -> None:
+    async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
 
         Args:
@@ -261,7 +260,21 @@ class IRCBotAPI:
         try:
             logging.info("Received command from client: %s %s", command, args)
             if command == "help":
-                await ws.send_json({"status": "ok", "message": "Available commands: part, join, msg"})
+                command = None
+                msg = "Available commands: part, join, msg, msgjoin"
+                if len(args) > 0:
+                    command = args.pop(0)
+
+                if command in ("part", "join"):
+                    msg = f"Usage: {command} <server> <channel> [<channel> ...]"
+                elif command == "msg":
+                    msg = f"Usage: {command} <server> <target> <message>"
+                elif command == "msgjoin":
+                    msg = f"Usage: {command} <server> <channel> <target> <message>"
+                elif command:
+                    msg = f"Unknown command: {command}"
+
+                await ws.send_json({"status": "ok", "message": msg})
             elif command == "part":
                 if len(args) < 2:
                     raise RuntimeError("Not enough arguments")
@@ -289,6 +302,19 @@ class IRCBotAPI:
                 await bot.queue_command({
                     "command": "send",
                     "user": target,
+                    "message": " ".join(args),
+                })
+            elif command == "msgjoin":
+                if len(args) < 4:
+                    raise RuntimeError("Not enough arguments")
+                server = args.pop(0)
+                bot = await self.bot_manager.get_bot(server)
+                channel = args.pop(0)
+                target = args.pop(0)
+                await bot.queue_command({
+                    "command": "send",
+                    "user": target,
+                    "channels": [channel.lower().strip()],
                     "message": " ".join(args),
                 })
         except RuntimeError as e:
@@ -593,8 +619,7 @@ class IRCBotAPI:
             cancelled = await self.bot_manager.cancel_transfer(server, nick, filename)
             if cancelled:
                 return web.json_response({"status": "ok", "message": "Transfer cancelled."})
-            else:
-                return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
+            return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
         except Exception as e:
             logger.exception(e)
             return web.json_response({"status": "error", "message": str(e)}, status=400)
