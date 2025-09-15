@@ -455,7 +455,7 @@ async def test_websocket_log_handler_emit_sends_log(monkeypatch):
     record.msg = "Test log"
     record.args = ()
     record.created = datetime.datetime.now().timestamp()
-    handler.format = lambda r: r.getMessage()
+    handler.format = lambda r: r.getMessage()   # type: ignore
 
     handler.emit(record)
     # Check that the websocket received a JSON log message
@@ -480,7 +480,7 @@ async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
     record = MagicMock()
     record.levelname = "WARNING"
     record.getMessage.return_value = "Closed test"
-    handler.format = lambda r: r.getMessage()
+    handler.format = lambda r: r.getMessage()   # type: ignore
 
     handler.emit(record)
     # ws_closed should be removed from handler.websockets

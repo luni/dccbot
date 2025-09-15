@@ -248,7 +248,7 @@ class IRCBotAPI:
         ircbot_logger = logging.getLogger("dccbot.ircbot")
         ircbot_logger.addHandler(ws_log_handler)
 
-    async def handle_ws_command(self, command: str, args: list[str], ws: web.WebSocketResponse) -> None:
+    async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
 
         Args:
@@ -266,11 +266,11 @@ class IRCBotAPI:
                 if len(args) > 0:
                     command = args.pop(0)
 
-                if command == 'part' or command == 'join':
+                if command == "part" or command == "join":
                     msg = f"Usage: {command} <server> <channel> [<channel> ...]"
-                elif command == 'msg':
+                elif command == "msg":
                     msg = f"Usage: {command} <server> <target> <message>"
-                elif command == 'msgjoin':
+                elif command == "msgjoin":
                     msg = f"Usage: {command} <server> <channel> <target> <message>"
                 elif command:
                     msg = f"Unknown command: {command}"
