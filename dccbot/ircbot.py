@@ -973,7 +973,7 @@ class IRCBot(AioSimpleIRCClient):
             logger.error("[%s] Download failed: %s does not exist", transfer["nick"], file_path)
             if transfer["status"] != "error":
                 transfer["status"] = "error"
-                transfer["error"] = f"[%s] Download failed: %s does not exist" % (transfer["nick"], file_path)
+                transfer["error"] = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
         else:
             file_size = os.path.getsize(file_path)
             if file_size != transfer["size"]:
@@ -1086,7 +1086,7 @@ class IRCBot(AioSimpleIRCClient):
             for channel in idle_channels:
                 await self.part_channel(channel, "Idle timeout")
 
-        for nick, resume_queue in self.resume_queue.items():
+        for _, resume_queue in self.resume_queue.items():
             for resume_item in list(resume_queue):
                 requested_time = resume_item[-1]
                 if now - requested_time > resume_timeout:

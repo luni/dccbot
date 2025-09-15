@@ -10,7 +10,6 @@ from aiohttp import web
 from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
-from dccbot.ircbot import IRCBot
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 
 logger = logging.getLogger(__name__)
@@ -266,7 +265,7 @@ class IRCBotAPI:
                 if len(args) > 0:
                     command = args.pop(0)
 
-                if command == "part" or command == "join":
+                if command in ("part", "join"):
                     msg = f"Usage: {command} <server> <channel> [<channel> ...]"
                 elif command == "msg":
                     msg = f"Usage: {command} <server> <target> <message>"
@@ -620,8 +619,7 @@ class IRCBotAPI:
             cancelled = await self.bot_manager.cancel_transfer(server, nick, filename)
             if cancelled:
                 return web.json_response({"status": "ok", "message": "Transfer cancelled."})
-            else:
-                return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
+            return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
         except Exception as e:
             logger.exception(e)
             return web.json_response({"status": "error", "message": str(e)}, status=400)
