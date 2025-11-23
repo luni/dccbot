@@ -128,42 +128,33 @@
   <h1>Transfers</h1>
   <div class="transfer-list" id="transfer-list"></div>
 
+  <script src="/static/ws.js"></script>
   <script>
-    async function fetchTransferInfo() {
-      try {
-        const response = await fetch('info');
-        const data = await response.json();
-        updateTransfers(data.transfers);
-      } catch (error) {
-        console.error('Error fetching transfer info:', error);
-      }
-    }
+    const transferList = document.getElementById('transfer-list');
 
-    function updateTransfers(transfers) {
-      const transferList = document.getElementById('transfer-list');
+    function renderTransfers(transfers) {
       transferList.innerHTML = '';
 
-      // Filter and sort transfers
       const completedTransfers = transfers
         .filter(t => t.status !== 'in_progress')
-        .slice(-10); // Get last 10 completed transfers
+        .slice(-10);
       const inProgressTransfers = transfers.filter(t => t.status === 'in_progress');
-
-      // Combine and display transfers
       const allTransfers = [...inProgressTransfers, ...completedTransfers];
+
       allTransfers.forEach(transfer => {
-        const progress = (transfer.received / transfer.size) * 100;
+        const progress = transfer.size ? (transfer.received / transfer.size) * 100 : 0;
         const transferDiv = document.createElement('div');
-        let transfer_status_class = transfer.status,
-          transfer_status_text = transfer.status.replace('_', ' ');
+        let transfer_status_class = transfer.status;
+        let transfer_status_text = transfer.status.replace('_', ' ');
 
         if (transfer.status === 'completed' && transfer.md5) {
           if (!transfer.file_md5) {
             transfer_status_class = 'in_progress';
             transfer_status_text += ', MD5 calculating...';
           } else {
-            transfer_status_class = transfer.md5 === transfer.file_md5 ? 'completed' : 'failed';
-            transfer_status_text += transfer.md5 === transfer.file_md5 ? ', MD5 matched' : ', MD5 mismatch';
+            const matched = transfer.md5 === transfer.file_md5;
+            transfer_status_class = matched ? 'completed' : 'failed';
+            transfer_status_text += matched ? ', MD5 matched' : ', MD5 mismatch';
           }
         }
 
@@ -191,7 +182,7 @@
             <div class="speed">Speed: ${transfer.speed.toFixed(2)} KB/s</div>
           ` : ''}
         `;
-        // Add cancel button handler if present
+
         if (transfer.status === 'in_progress') {
           const btn = transferDiv.querySelector('.cancel-btn');
           btn.addEventListener('click', async function() {
@@ -203,30 +194,32 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   server: btn.getAttribute('data-server'),
-                  nick: transfer.nick,
+                  nick: btn.getAttribute('data-nick'),
                   filename: btn.getAttribute('data-filename')
                 })
               });
-              // Optionally handle response
               if (!resp.ok) {
                 alert('Failed to cancel transfer.');
-              } else {
-                btn.parentNode.removeChild(btn);
+                btn.disabled = false;
+                btn.textContent = 'Cancel';
               }
             } catch (e) {
               alert('Failed to cancel transfer: ' + e);
+              btn.disabled = false;
+              btn.textContent = 'Cancel';
             }
           });
         }
+
         transferList.appendChild(transferDiv);
       });
     }
 
-    // Poll the /info endpoint every second
-    setInterval(fetchTransferInfo, 1000);
-
-    // Initial fetch
-    fetchTransferInfo();
+    createDccbotSocket({
+      onLog: () => {},
+      onTransfers: ({ transfers }) => renderTransfers(transfers),
+      onCommandResponse: () => {}
+    });
   </script>
 </body>
 

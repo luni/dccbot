@@ -80,23 +80,12 @@
     <div id="logs" contenteditable="false"></div>
     <input type="text" id="command-input" placeholder="Enter a command (e.g., /echo Hello)">
 
+    <script src="/static/ws.js"></script>
     <script>
         const logsElement = document.getElementById("logs");
         const commandInput = document.getElementById("command-input");
-
-        // Construct the WebSocket URL dynamically
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const host = window.location.host; // Includes hostname and port
-        const wsUrl = `${protocol}//${host}` + window.location.pathname.replace('/log.html', '/ws');
-
-        // Connect to the WebSocket server
-        const ws = new WebSocket(wsUrl);
         const commandHistory = [];
-        let historyIndex = -1; // Current position in history
-
-        ws.onopen = () => {
-            console.log("WebSocket connection established");
-        };
+        let historyIndex = -1;
 
         function trimLogs() {
             const logs = logsElement.innerHTML.split("<br>");
@@ -119,21 +108,16 @@
             );
         }
 
-
-        ws.onmessage = (event) => {
-            // Parse the log message
-            const logEntry = JSON.parse(event.data);
+        function appendLogLine(logEntry) {
             let logLine;
 
             if (logEntry.status) {
                 logLine = `<span class="log-warning">${logEntry.status}: ${logEntry.message}</span><br>`;
             } else {
-                // Format the log message with consistent padding
                 const timestamp = logEntry.timestamp;
-                const level = logEntry.level.padEnd(8); // Pad log level to 8 characters
+                const level = logEntry.level.padEnd(8);
                 const message = escapeHTML(logEntry.message);
 
-                // Determine the CSS class based on the log level
                 let logClass = "";
                 switch (logEntry.level.toLowerCase()) {
                     case "info":
@@ -155,38 +139,20 @@
                         logClass = "";
                 }
 
-                // Create the formatted log line
                 logLine = `<span class="${logClass}">${timestamp} - ${level} - ${message}</span><br>`;
             }
 
-            // Append the log line to the logs container
             logsElement.innerHTML += logLine;
-
-            // Trim logs to a maximum of 300 lines
             trimLogs();
-
-            // Auto-scroll to the bottom
             logsElement.scrollTop = logsElement.scrollHeight;
-        };
+        }
 
-        ws.onerror = (error) => {
-            console.error("WebSocket error:", error);
-        };
+        const socket = createDccbotSocket({
+            onLog: appendLogLine,
+            onCommandResponse: appendLogLine,
+            onError: (err) => console.error('WebSocket error:', err),
+        });
 
-        ws.onclose = () => {
-            console.log("WebSocket connection closed");
-        };
-
-        // Handle ping and pong frames (optional)
-        ws.onping = () => {
-            console.log("Received ping from server");
-        };
-
-        ws.onpong = () => {
-            console.log("Received pong from server");
-        };
-
-        // Handle command input
         commandInput.addEventListener("keydown", (event) => {
             if (event.key === "ArrowUp") {
                 if (commandHistory.length > 0) {
@@ -202,7 +168,7 @@
                         commandInput.value = commandHistory[historyIndex];
                     } else {
                         historyIndex = commandHistory.length;
-                        commandInput.value = ""; // Clear the input when reaching the end
+                        commandInput.value = "";
                     }
                 }
             }
@@ -214,12 +180,12 @@
                 if (command) {
                     commandHistory.push(command);
                     if (commandHistory.length > 20) {
-                        commandHistory.shift(); // Keep only the last 20 commands
+                        commandHistory.shift();
                     }
-                    historyIndex = commandHistory.length; // Reset history index
+                    historyIndex = commandHistory.length;
 
-                    ws.send(command); // Send the command to the server
-                    commandInput.value = ""; // Clear the input field
+                    socket.send(command);
+                    commandInput.value = "";
                 }
             }
         });

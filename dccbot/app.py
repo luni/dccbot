@@ -2,9 +2,10 @@ import asyncio
 import datetime
 import json
 import logging
-import os
 import re
 import time
+from collections.abc import Mapping
+from pathlib import Path
 
 from aiohttp import web
 from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
@@ -13,6 +14,7 @@ from marshmallow import Schema, fields, validate
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 
 logger = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 class CancelTransferRequestSchema(Schema):
@@ -206,6 +208,7 @@ class WebSocketLogHandler(logging.Handler):
 
         """
         log_entry = {
+            "type": "log",
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": record.levelname,
             "message": self.format(record),
@@ -237,6 +240,8 @@ class IRCBotAPI:
         self.app.on_startup.append(start_background_tasks)
         self.app.on_cleanup.append(cleanup_background_tasks)
         self.websockets = set()
+        self.static_dir = STATIC_DIR
+        self.transfer_broadcast_task: asyncio.Task | None = None
         self.setup_routes()
         self.setup_apispec()
 
@@ -246,6 +251,100 @@ class IRCBotAPI:
         logger.addHandler(ws_log_handler)
         ircbot_logger = logging.getLogger("dccbot.ircbot")
         ircbot_logger.addHandler(ws_log_handler)
+        self.app.on_startup.append(self.start_transfer_broadcast)
+        self.app.on_cleanup.append(self.stop_transfer_broadcast)
+
+    async def start_transfer_broadcast(self, app: web.Application) -> None:
+        """Start periodic transfer snapshots over WebSocket."""
+        if not self.transfer_broadcast_task:
+            self.transfer_broadcast_task = asyncio.create_task(self.broadcast_transfers())
+
+    async def stop_transfer_broadcast(self, app: web.Application) -> None:
+        """Stop periodic transfer snapshots over WebSocket."""
+        if self.transfer_broadcast_task:
+            self.transfer_broadcast_task.cancel()
+            try:
+                await self.transfer_broadcast_task
+            except asyncio.CancelledError:
+                pass
+            self.transfer_broadcast_task = None
+
+    async def broadcast_transfers(self) -> None:
+        """Broadcast current transfer status to all websocket clients."""
+        try:
+            while True:
+                await self._broadcast_transfers_to_clients()
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+
+    async def _broadcast_transfers_to_clients(self) -> None:
+        if not self.websockets:
+            return
+
+        transfers = self._build_transfer_snapshot()
+        message = json.dumps({"type": "transfers", "transfers": transfers})
+        for ws in list(self.websockets):
+            if ws.closed:
+                self.websockets.discard(ws)
+                continue
+            try:
+                await ws.send_str(message)
+            except ConnectionResetError:
+                self.websockets.discard(ws)
+
+    def _build_transfer_snapshot(self) -> list[dict[str, object]]:
+        """Collect current transfer information."""
+        snapshot: list[dict[str, object]] = []
+        now = time.time()
+        transfers_data = getattr(self.bot_manager, "transfers", {})
+        if not isinstance(transfers_data, Mapping):
+            transfers_data = {}
+
+        for filename, transfers in transfers_data.items():
+            for transfer in transfers:
+                transferred_bytes = transfer["bytes_received"]
+                transfer_time = now - transfer["start_time"] if transfer["start_time"] else 0
+                speed_avg = transferred_bytes / transfer_time / 1024 if transfer_time > 0 else 0
+
+                recent_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
+                recent_duration = now - transfer["last_progress_update"]
+                speed = (recent_bytes / recent_duration) / 1024 if recent_duration > 0 else 0
+
+                snapshot.append({
+                    "server": transfer["server"],
+                    "filename": filename,
+                    "nick": transfer["nick"],
+                    "host": transfer["peer_address"] + ":" + str(transfer["peer_port"]),
+                    "size": transfer["size"],
+                    "received": transfer["bytes_received"] + transfer["offset"],
+                    "speed": round(speed, 2),
+                    "speed_avg": round(speed_avg, 2),
+                    "md5": transfer.get("md5"),
+                    "file_md5": transfer.get("file_md5"),
+                    "status": transfer.get("status"),
+                    "error": transfer.get("error"),
+                    "resumed": transfer.get("offset", 0) > 0,
+                    "connected": transfer.get("connected"),
+                })
+        return snapshot
+
+    def _build_info_payload(self) -> dict[str, object]:
+        """Build the payload returned by the /info endpoint."""
+        response = {"networks": [], "transfers": self._build_transfer_snapshot()}
+        for server, bot in self.bot_manager.bots.items():
+            network_info = {"server": server, "nickname": bot.nick, "channels": []}
+
+            for channel, last_active in bot.joined_channels.items():
+                network_info["channels"].append({"name": channel, "last_active": last_active})
+
+            response["networks"].append(network_info)
+        return response
+
+    async def _send_transfer_snapshot(self, ws: web.WebSocketResponse) -> None:
+        """Send the latest transfer snapshot to a single websocket client."""
+        transfers = self._build_transfer_snapshot()
+        await ws.send_json({"type": "transfers", "transfers": transfers})
 
     async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
@@ -261,7 +360,7 @@ class IRCBotAPI:
             logging.info("Received command from client: %s %s", command, args)
             if command == "help":
                 command = None
-                msg = "Available commands: part, join, msg, msgjoin"
+                msg = "Available commands: part, join, msg, msgjoin, info"
                 if len(args) > 0:
                     command = args.pop(0)
 
@@ -317,6 +416,8 @@ class IRCBotAPI:
                     "channels": [channel.lower().strip()],
                     "message": " ".join(args),
                 })
+            elif command == "info":
+                await self._send_transfer_snapshot(ws)
         except RuntimeError as e:
             logger.error(str(e), exc_info=True)
             await ws.send_json({"status": "error", "message": str(e)})
@@ -381,13 +482,11 @@ class IRCBotAPI:
         return ws
 
     async def _return_static_html(self, request: web.Request) -> web.Response:
-        """Return the contents of index.html as a text/html response.
-
-        This endpoint serves the HTML for the WebSocket log viewer.
-        """
-        # use request uri to get the filename
+        """Serve HTML files located under the static directory."""
         filename = request.rel_url.path.split("/")[-1]
-        fullpath = os.path.normpath(os.path.join("static/", filename))
+        fullpath = (self.static_dir / filename).resolve()
+        if not str(fullpath).startswith(str(self.static_dir.resolve())) or not fullpath.exists():
+            raise web.HTTPNotFound()
 
         with open(fullpath, encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
@@ -403,6 +502,7 @@ class IRCBotAPI:
         self.app.router.add_get("/ws", self.websocket_handler)
         self.app.router.add_get("/log.html", self._return_static_html)
         self.app.router.add_get("/info.html", self._return_static_html)
+        self.app.router.add_static("/static/", path=str(self.static_dir))
 
     def setup_apispec(self) -> None:
         """Configure aiohttp-apispec for API documentation."""
@@ -550,49 +650,8 @@ class IRCBotAPI:
     async def info(self, request: web.Request) -> web.Response:
         """Handle an information request."""
         try:
-            response = {"networks": [], "transfers": []}
-
-            # Gather information about all networks and channels
-            for server, bot in self.bot_manager.bots.items():
-                network_info = {"server": server, "nickname": bot.nick, "channels": []}
-
-                # Add channel information
-                for channel, last_active in bot.joined_channels.items():
-                    network_info["channels"].append({"name": channel, "last_active": last_active})
-
-                response["networks"].append(network_info)
-
-            for filename, transfers in self.bot_manager.transfers.items():
-                for transfer in transfers:
-                    now = time.time()
-
-                    transferred_bytes = transfer["bytes_received"]
-                    transfer_time = now - transfer["start_time"] if transfer["start_time"] else 0
-                    speed_avg = transferred_bytes / transfer_time / 1024 if transfer_time > 0 else 0
-
-                    transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
-                    transfer_time = now - transfer["last_progress_update"]
-                    speed = (transferred_bytes / transfer_time) / 1024
-
-                    transfer_info = {
-                        "server": transfer["server"],
-                        "filename": filename,
-                        "nick": transfer["nick"],
-                        "host": transfer["peer_address"] + ":" + str(transfer["peer_port"]),
-                        "size": transfer["size"],
-                        "received": transfer["bytes_received"] + transfer["offset"],
-                        "speed": round(speed, 2),
-                        "speed_avg": round(speed_avg, 2),
-                        "md5": transfer.get("md5"),
-                        "file_md5": transfer.get("file_md5"),
-                        "status": transfer.get("status"),
-                        "error": transfer.get("error"),
-                        "resumed": transfer.get("offset", 0) > 0,
-                        "connected": transfer.get("connected"),
-                    }
-                    response["transfers"].append(transfer_info)
-
-            return web.json_response(response)  # Return the response
+            response = self._build_info_payload()
+            return web.json_response(response)
         except Exception as e:
             logger.exception(e)
             logger.error("Error in handle_info: %s", str(e))
