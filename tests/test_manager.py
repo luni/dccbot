@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import web
 
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 
@@ -306,7 +307,7 @@ async def test_check_queue_processor(manager):
 @pytest.mark.asyncio
 async def test_start_background_tasks():
     """Test starting background tasks."""
-    app = {}
+    app = web.Application()
     mock_manager = MagicMock()
     mock_manager.cleanup = AsyncMock(return_value=None)
     mock_manager.check_queue_processor = AsyncMock(return_value=None)
