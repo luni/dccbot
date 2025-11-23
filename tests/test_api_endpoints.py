@@ -1,28 +1,15 @@
+"""Tests for API endpoints (join, part, msg, shutdown, info, cancel)."""
+
 from unittest.mock import AsyncMock, patch
+
 import pytest
-import pytest_asyncio
-from dccbot.app import IRCBotAPI
+
 from dccbot.ircbot import IRCBot
-import json
-import datetime
-from unittest.mock import MagicMock
-from dccbot.app import WebSocketLogHandler
-from aiohttp import web
-import asyncio
-
-# Fixture to initialize the IRCBotAPI application
-@pytest_asyncio.fixture
-async def api_client(aiohttp_client):
-    mock_bot_manager = AsyncMock()
-    # Patch the bot manager with an AsyncMock
-    api = IRCBotAPI(config_file="config.json", bot_manager=mock_bot_manager)
-    client = await aiohttp_client(api.app)
-    return client, mock_bot_manager
 
 
-# Test cases for the handle_join method
 @pytest.mark.asyncio
 async def test_join_success(api_client):
+    """Test successful join request."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -42,6 +29,7 @@ async def test_join_success(api_client):
 
 @pytest.mark.asyncio
 async def test_join_request_missing_channel_data(api_client):
+    """Test join request with missing channel."""
     client, mock_bot_manager = api_client
 
     # Test a join request with a missing channel
@@ -57,6 +45,7 @@ async def test_join_request_missing_channel_data(api_client):
 
 @pytest.mark.asyncio
 async def test_join_request_missing_server_data(api_client):
+    """Test join request with missing server."""
     client, mock_bot_manager = api_client
 
     # Test a join request with a missing server
@@ -72,6 +61,7 @@ async def test_join_request_missing_server_data(api_client):
 
 @pytest.mark.asyncio
 async def test_join_request_invalid_server_data(api_client):
+    """Test join request with invalid server."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to raise an exception for an invalid server
@@ -91,6 +81,7 @@ async def test_join_request_invalid_server_data(api_client):
 
 @pytest.mark.asyncio
 async def test_join_request_exception_during_bot_queue_command(api_client):
+    """Test join request with exception during queue_command."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -111,6 +102,7 @@ async def test_join_request_exception_during_bot_queue_command(api_client):
 
 @pytest.mark.asyncio
 async def test_join_multiple_channels(api_client):
+    """Test join request with multiple channels."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -130,6 +122,7 @@ async def test_join_multiple_channels(api_client):
 
 @pytest.mark.asyncio
 async def test_part_success(api_client):
+    """Test successful part request."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -153,6 +146,7 @@ async def test_part_success(api_client):
 
 @pytest.mark.asyncio
 async def test_part_request_missing_channel_data(api_client):
+    """Test part request with missing channel."""
     client, mock_bot_manager = api_client
 
     # Test a part request with missing channel data
@@ -168,6 +162,7 @@ async def test_part_request_missing_channel_data(api_client):
 
 @pytest.mark.asyncio
 async def test_part_request_missing_server_data(api_client):
+    """Test part request with missing server."""
     client, mock_bot_manager = api_client
 
     # Test a part request with missing server data
@@ -183,6 +178,7 @@ async def test_part_request_missing_server_data(api_client):
 
 @pytest.mark.asyncio
 async def test_part_request_invalid_server_data(api_client):
+    """Test part request with invalid server."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to raise an exception for an invalid server
@@ -199,6 +195,7 @@ async def test_part_request_invalid_server_data(api_client):
 
 @pytest.mark.asyncio
 async def test_part_request_exception_during_bot_queue_command(api_client):
+    """Test part request with exception during queue_command."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -219,6 +216,7 @@ async def test_part_request_exception_during_bot_queue_command(api_client):
 
 @pytest.mark.asyncio
 async def test_part_multiple_channels(api_client):
+    """Test part request with multiple channels."""
     client, mock_bot_manager = api_client
 
     # Mock the get_bot method to return a mock IRCBot
@@ -237,7 +235,71 @@ async def test_part_multiple_channels(api_client):
 
 
 @pytest.mark.asyncio
+async def test_msg_success(api_client):
+    """Test successful message request."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot.server_config = {}
+    mock_bot_manager.get_bot.return_value = mock_bot
+    mock_bot_manager.config = {}
+
+    payload = {"server": "irc.example.com", "user": "testuser", "message": "Hello", "channel": "#test"}
+    resp = await client.post("/msg", json=payload)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["status"] == "ok"
+
+    mock_bot.queue_command.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_msg_missing_user(api_client):
+    """Test message request with missing user."""
+    client, mock_bot_manager = api_client
+
+    payload = {"server": "irc.example.com", "message": "Hello"}
+    resp = await client.post("/msg", json=payload)
+    assert resp.status == 422
+
+
+@pytest.mark.asyncio
+async def test_msg_missing_message(api_client):
+    """Test message request with missing message."""
+    client, mock_bot_manager = api_client
+
+    payload = {"server": "irc.example.com", "user": "testuser"}
+    resp = await client.post("/msg", json=payload)
+    assert resp.status == 422
+
+
+@pytest.mark.asyncio
+async def test_msg_with_xdcc_rewrite(api_client):
+    """Test message request with XDCC send rewrite to ssend."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot.server_config = {"rewrite_to_ssend": ["#test"]}
+    mock_bot_manager.get_bot.return_value = mock_bot
+    mock_bot_manager.config = {}
+
+    payload = {
+        "server": "irc.example.com",
+        "user": "testbot",
+        "message": "xdcc send #1",
+        "channel": "#test",
+    }
+    resp = await client.post("/msg", json=payload)
+    assert resp.status == 200
+
+    # Verify the message was rewritten
+    call_args = mock_bot.queue_command.call_args[0][0]
+    assert "xdcc ssend" in call_args["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_request_valid_bot_manager(api_client):
+    """Test shutdown with valid bot manager."""
     client, mock_bot_manager = api_client
     mock_bot_manager.bots = {"bot1": AsyncMock(), "bot2": AsyncMock()}
     resp = await client.post("/shutdown")
@@ -250,6 +312,7 @@ async def test_shutdown_request_valid_bot_manager(api_client):
 
 @pytest.mark.asyncio
 async def test_shutdown_request_no_bots(api_client):
+    """Test shutdown with no bots."""
     client, mock_bot_manager = api_client
     mock_bot_manager.bots = {}
     resp = await client.post("/shutdown")
@@ -260,6 +323,7 @@ async def test_shutdown_request_no_bots(api_client):
 
 @pytest.mark.asyncio
 async def test_shutdown_request_exception_during_bot_disconnection(api_client):
+    """Test shutdown with exception during bot disconnection."""
     client, mock_bot_manager = api_client
     bot1 = AsyncMock()
     mock_bot_manager.bots = {"bot1": bot1}
@@ -274,6 +338,7 @@ async def test_shutdown_request_exception_during_bot_disconnection(api_client):
 
 @pytest.mark.asyncio
 async def test_shutdown_request_exception_during_app_shutdown(api_client):
+    """Test shutdown with exception during app shutdown."""
     client, mock_bot_manager = api_client
     mock_bot_manager.bots = {}
     with patch("aiohttp.web.Application.shutdown") as mock_shutdown:
@@ -288,6 +353,7 @@ async def test_shutdown_request_exception_during_app_shutdown(api_client):
 
 @pytest.mark.asyncio
 async def test_info_success_empty_bot_manager(api_client):
+    """Test info endpoint with empty bot manager."""
     # Mock bot manager with empty bots and transfers
     client, mock_bot_manager = api_client
 
@@ -303,6 +369,7 @@ async def test_info_success_empty_bot_manager(api_client):
 
 @pytest.mark.asyncio
 async def test_cancel_transfer_success(api_client):
+    """Test successful transfer cancellation."""
     client, mock_bot_manager = api_client
     mock_bot_manager.cancel_transfer.return_value = True
     payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
@@ -316,6 +383,7 @@ async def test_cancel_transfer_success(api_client):
 
 @pytest.mark.asyncio
 async def test_cancel_transfer_not_found(api_client):
+    """Test transfer cancellation when transfer not found."""
     client, mock_bot_manager = api_client
     mock_bot_manager.cancel_transfer.return_value = False
     payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
@@ -329,6 +397,7 @@ async def test_cancel_transfer_not_found(api_client):
 
 @pytest.mark.asyncio
 async def test_cancel_transfer_exception(api_client):
+    """Test transfer cancellation with exception."""
     client, mock_bot_manager = api_client
     mock_bot_manager.cancel_transfer.side_effect = Exception("Test exception")
     payload = {"server": "irc.example.com", "nick": "sender_nick", "filename": "file.txt"}
@@ -339,8 +408,10 @@ async def test_cancel_transfer_exception(api_client):
     assert "test exception" in data["message"].lower()
     mock_bot_manager.cancel_transfer.assert_awaited_once_with("irc.example.com", "sender_nick", "file.txt")
 
+
 @pytest.mark.asyncio
 async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
+    """Test info endpoint with bots and transfers."""
     # Mock bot manager with bots and transfers
     client, mock_bot_manager = api_client
 
@@ -391,8 +462,10 @@ async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
     assert len(data["networks"]) == 2
     assert len(data["transfers"]) == 2
 
+
 @pytest.mark.asyncio
 async def test_cancel_missing_fields(api_client):
+    """Test cancel with missing fields."""
     client, _ = api_client
     # Missing 'nick'
     payload = {"server": "irc.example.com", "filename": "file.txt"}
@@ -401,8 +474,10 @@ async def test_cancel_missing_fields(api_client):
     data = await resp.json()
     assert "nick" in data["json"]
 
+
 @pytest.mark.asyncio
 async def test_cancel_wrong_type(api_client):
+    """Test cancel with wrong field type."""
     client, _ = api_client
     # 'nick' should be a string, not a list
     payload = {"server": "irc.example.com", "nick": ["not", "a", "string"], "filename": "file.txt"}
@@ -411,8 +486,10 @@ async def test_cancel_wrong_type(api_client):
     data = await resp.json()
     assert "nick" in data["json"]
 
+
 @pytest.mark.asyncio
 async def test_cancel_internal_error(api_client):
+    """Test cancel with internal error."""
     client, mock_bot_manager = api_client
     mock_bot_manager.cancel_transfer.side_effect = Exception("Internal error!")
     payload = {"server": "irc.example.com", "nick": "nick", "filename": "file.txt"}
@@ -422,8 +499,10 @@ async def test_cancel_internal_error(api_client):
     assert data["status"] == "error"
     assert "internal error" in data["message"].lower()
 
+
 @pytest.mark.asyncio
 async def test_info_no_bots_no_transfers(api_client):
+    """Test info endpoint with no bots and no transfers."""
     client, mock_bot_manager = api_client
     mock_bot_manager.bots = {}
     mock_bot_manager.transfers = {}
@@ -434,63 +513,8 @@ async def test_info_no_bots_no_transfers(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_log_handler_emit_sends_log(monkeypatch):
-    ws_mock = MagicMock()
-    ws_mock.closed = False
-    sent = {}
-
-    def fake_send_str(msg):
-        sent['msg'] = msg
-    ws_mock.send_str.side_effect = fake_send_str
-
-    handler = WebSocketLogHandler({ws_mock})
-
-    # Patch asyncio.create_task to run immediately for test
-    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
-
-    # Emit a log record
-    record = MagicMock()
-    record.levelname = "INFO"
-    record.getMessage.return_value = "Test log"
-    record.msg = "Test log"
-    record.args = ()
-    record.created = datetime.datetime.now().timestamp()
-    handler.format = lambda r: r.getMessage()   # type: ignore
-
-    handler.emit(record)
-    # Check that the websocket received a JSON log message
-    assert "msg" in sent
-    log_entry = json.loads(sent["msg"])
-    assert log_entry["level"] == "INFO"
-    assert log_entry["message"] == "Test log"
-    assert "timestamp" in log_entry
-
-@pytest.mark.asyncio
-async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
-    ws_open = MagicMock()
-    ws_open.closed = False
-    ws_closed = MagicMock()
-    ws_closed.closed = True
-
-    handler = WebSocketLogHandler({ws_open, ws_closed})
-
-    # Patch asyncio.create_task to run immediately for test
-    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
-
-    record = MagicMock()
-    record.levelname = "WARNING"
-    record.getMessage.return_value = "Closed test"
-    handler.format = lambda r: r.getMessage()   # type: ignore
-
-    handler.emit(record)
-    # ws_closed should be removed from handler.websockets
-    assert ws_closed not in handler.websockets
-    # ws_open should remain
-    assert ws_open in handler.websockets
-
-
-@pytest.mark.asyncio
 async def test_return_static_html_returns_html(api_client):
+    """Test static HTML endpoint."""
     client, _ = api_client
     # This assumes the route '/log.html' is mapped to _return_static_html
     resp = await client.get("/log.html")
@@ -498,101 +522,3 @@ async def test_return_static_html_returns_html(api_client):
     assert resp.headers["Content-Type"].startswith("text/html")
     text = await resp.text()
     assert "<html" in text.lower()  # crude check for HTML content
-
-
-
-@pytest.mark.asyncio
-async def test_websocket_handler_lifecycle(api_client):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-
-    # Send a text message (not a command) and expect no crash
-    await ws.send_str("Hello world")
-    # Optionally, check if a log message is received if your frontend echoes logs
-
-    # Send a command (e.g., /help) and expect a JSON response
-    await ws.send_str("/help")
-    msg = await ws.receive(timeout=2)
-    assert msg.type == web.WSMsgType.TEXT
-    data = msg.json()
-    assert data["status"] == "ok"
-    assert "Available commands" in data["message"]
-
-    # Close the websocket and ensure clean shutdown
-    await ws.close()
-    assert ws.closed
-
-
-@pytest.mark.asyncio
-async def test_websocket_handler_invalid_command(api_client):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-    # Send an unknown command
-    await ws.send_str("/foobar")
-    # The server should not crash, but may not respond (depends on your handler)
-    # Optionally, check for logs or just ensure connection stays open
-    await ws.close()
-    assert ws.closed
-
-@pytest.mark.asyncio
-async def test_websocket_handler_part_not_enough_args(api_client):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-    # Send /part with not enough args
-    await ws.send_str("/part onlyone")
-    msg = await ws.receive(timeout=2)
-    assert msg.type == web.WSMsgType.TEXT
-    data = msg.json()
-    assert data["status"] == "error"
-    assert "not enough arguments" in data["message"].lower()
-    await ws.close()
-
-@pytest.mark.asyncio
-async def test_websocket_handler_msg_not_enough_args(api_client):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-    # Send /msg with not enough args
-    await ws.send_str("/msg onlyone")
-    msg = await ws.receive(timeout=2)
-    assert msg.type == web.WSMsgType.TEXT
-    data = msg.json()
-    assert data["status"] == "error"
-    assert "not enough arguments" in data["message"].lower()
-    await ws.close()
-
-@pytest.mark.asyncio
-async def test_websocket_handler_join_success(api_client):
-    from unittest.mock import AsyncMock, MagicMock
-    client, mock_bot_manager = api_client
-    ws = await client.ws_connect("/ws")
-    mock_bot = MagicMock()
-    mock_bot.queue_command = AsyncMock()
-    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
-    await ws.send_str("/join server #chan1 #chan2")
-    # Await a short time to let the handler process the command
-    await asyncio.sleep(0.1)
-    mock_bot.queue_command.assert_called_once()
-    await ws.close()
-
-@pytest.mark.asyncio
-async def test_websocket_handler_server_sends_ping(api_client):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-    # Wait for a bit longer than the ping interval (10s in your code)
-    await asyncio.sleep(11)
-    # The websocket client should have received a ping from the server
-    # aiohttp's ws_connect automatically responds to ping with pong, but we can check the connection is still alive
-    assert not ws.closed
-    await ws.close()
-
-@pytest.mark.asyncio
-async def test_websocket_handler_client_sends_pong(api_client, caplog):
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
-    # Send a pong frame to the server
-    await ws.pong()
-    # The server should log "Received pong from client" (if logging is configured to show DEBUG)
-    # Optionally, you can check logs with caplog if you configure logging
-    await asyncio.sleep(0.1)  # Give the server a moment to process
-    await ws.close()
-    assert ws.closed
