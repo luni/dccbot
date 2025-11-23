@@ -24,10 +24,10 @@ def test_dcc_protocol():
 
 
 @pytest.fixture
-def mock_reactor(event_loop):
+def mock_reactor(fresh_event_loop):
     """Create a mock reactor."""
     reactor = MagicMock(spec=AioReactor)
-    reactor.loop = event_loop
+    reactor.loop = fresh_event_loop
     reactor._on_connect = MagicMock()
     reactor._handle_event = MagicMock()
     reactor._remove_connection = MagicMock()
@@ -36,15 +36,6 @@ def mock_reactor(event_loop):
     reactor.mutex.__exit__ = MagicMock()
     reactor.connections = []
     return reactor
-
-
-@pytest.fixture
-def event_loop():
-    """Create an event loop for tests."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
 
 
 @pytest.fixture
@@ -187,7 +178,7 @@ def test_dcc_connection_listen_not_implemented(dcc_connection):
 @pytest.mark.asyncio
 async def test_aio_reactor_dcc():
     """Test AioReactor.dcc() method."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     reactor = AioReactor()
     reactor.loop = loop
     reactor.mutex = MagicMock()
@@ -205,7 +196,7 @@ async def test_aio_reactor_dcc():
 @pytest.mark.asyncio
 async def test_aio_reactor_dcc_chat():
     """Test AioReactor.dcc() with chat type."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     reactor = AioReactor()
     reactor.loop = loop
     reactor.mutex = MagicMock()

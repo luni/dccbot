@@ -19,29 +19,38 @@ def mock_bot_manager():
 
 
 @pytest.fixture
-def event_loop():
-    """Create an event loop for tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+def bot_factory(mock_bot_manager, loop_patch):
+    """Factory to build IRCBot instances with shared defaults."""
+
+    def _create_bot(
+        *,
+        server_config: dict | None = None,
+        allowed_mimetypes: list[str] | None = None,
+        max_file_size: int = 1_000_000,
+        download_path: str = "/tmp/downloads",
+        manager=None,
+    ) -> IRCBot:
+        base_config = {"nick": "testbot", "channels": ["#test"]}
+        if server_config:
+            base_config.update(server_config)
+
+        return IRCBot(
+            server="irc.example.com",
+            server_config=base_config,
+            download_path=download_path,
+            allowed_mimetypes=allowed_mimetypes if allowed_mimetypes is not None else ["application/x-bittorrent"],
+            max_file_size=max_file_size,
+            bot_manager=manager or mock_bot_manager,
+        )
+
+    return _create_bot
 
 
 @pytest.fixture
-def bot(mock_bot_manager, event_loop):
-    """Create an IRCBot instance for testing."""
-    server_config = {
-        "nick": "testbot",
-        "channels": ["#test"],
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        return IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=["application/x-bittorrent"],
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+def bot(bot_factory):
+    """Default IRCBot instance for tests."""
+
+    return bot_factory()
 
 
 def test_ircbot_initialization(bot):
@@ -53,21 +62,9 @@ def test_ircbot_initialization(bot):
     assert len(bot.joined_channels) == 0
 
 
-def test_ircbot_random_nick(mock_bot_manager, event_loop):
+def test_ircbot_random_nick(bot_factory):
     """Test IRCBot with random nick generation."""
-    server_config = {
-        "nick": "testbot",
-        "random_nick": True,
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"random_nick": True}, allowed_mimetypes=None)
     assert bot.nick.startswith("testbot")
     assert len(bot.nick) == len("testbot") + 3
     assert bot.nick[-3:].isdigit()
@@ -104,21 +101,9 @@ async def test_connect_without_tls(bot):
 
 
 @pytest.mark.asyncio
-async def test_connect_with_tls(mock_bot_manager, event_loop):
+async def test_connect_with_tls(bot_factory):
     """Test connection with TLS."""
-    server_config = {
-        "nick": "testbot",
-        "use_tls": True,
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"use_tls": True}, allowed_mimetypes=None)
 
     with patch("dccbot.ircbot.AioConnection") as mock_connection:
         mock_conn_instance = AsyncMock()
@@ -132,21 +117,9 @@ async def test_connect_with_tls(mock_bot_manager, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_connect_with_custom_port(mock_bot_manager, event_loop):
+async def test_connect_with_custom_port(bot_factory):
     """Test connection with custom port."""
-    server_config = {
-        "nick": "testbot",
-        "port": 7000,
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"port": 7000}, allowed_mimetypes=None)
 
     with patch("dccbot.ircbot.AioConnection") as mock_connection:
         mock_conn_instance = AsyncMock()
@@ -248,21 +221,9 @@ def test_on_welcome(bot):
         mock_create_task.assert_called_once()
 
 
-def test_on_welcome_with_nickserv(mock_bot_manager, event_loop):
+def test_on_welcome_with_nickserv(bot_factory, mock_bot_manager):
     """Test on_welcome with NickServ authentication."""
-    server_config = {
-        "nick": "testbot",
-        "nickserv_password": "secret",
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"nickserv_password": "secret"}, allowed_mimetypes=None)
     bot.connection = MagicMock()
     event = MagicMock()
 
@@ -492,18 +453,10 @@ def test_on_dcc_send_private_ip_rejected(bot):
     # Should reject private IP
 
 
-def test_on_dcc_send_private_ip_allowed(mock_bot_manager, event_loop):
+def test_on_dcc_send_private_ip_allowed(bot_factory, mock_bot_manager):
     """Test on_dcc_send with private IP when allowed."""
     mock_bot_manager.config = {"allow_private_ips": True}
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config={"nick": "testbot"},
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, server_config={"channels": []})
     bot.connection = MagicMock()
     bot.mime_checker = MagicMock()
     event = MagicMock()
@@ -528,23 +481,9 @@ async def test_join_channels(bot):
 
 
 @pytest.mark.asyncio
-async def test_join_channels_with_also_join(mock_bot_manager, event_loop):
+async def test_join_channels_with_also_join(bot_factory, mock_bot_manager):
     """Test _join_channels with also_join configuration."""
-    server_config = {
-        "nick": "testbot",
-        "also_join": {
-            "#test": ["#extra1", "#extra2"],
-        },
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"also_join": {"#test": ["#extra1", "#extra2"]}}, allowed_mimetypes=None, manager=mock_bot_manager)
     bot.connection = MagicMock()
 
     with patch.object(bot, "join_channel", new_callable=AsyncMock) as mock_join:
@@ -564,21 +503,9 @@ async def test_handle_authentication_no_password(bot):
 
 
 @pytest.mark.asyncio
-async def test_handle_authentication_with_password(mock_bot_manager, event_loop):
+async def test_handle_authentication_with_password(bot_factory, mock_bot_manager):
     """Test _handle_authentication with password."""
-    server_config = {
-        "nick": "testbot",
-        "nickserv_password": "secret",
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"nickserv_password": "secret"}, allowed_mimetypes=None, manager=mock_bot_manager)
 
     # Set authenticated event immediately to avoid timeout
     bot.authenticated_event.set()
@@ -586,21 +513,9 @@ async def test_handle_authentication_with_password(mock_bot_manager, event_loop)
 
 
 @pytest.mark.asyncio
-async def test_handle_authentication_timeout(mock_bot_manager, event_loop):
+async def test_handle_authentication_timeout(bot_factory, mock_bot_manager):
     """Test _handle_authentication with timeout."""
-    server_config = {
-        "nick": "testbot",
-        "nickserv_password": "secret",
-    }
-    with patch("asyncio.get_event_loop", return_value=event_loop):
-        bot = IRCBot(
-            server="irc.example.com",
-            server_config=server_config,
-            download_path="/tmp/downloads",
-            allowed_mimetypes=None,
-            max_file_size=1000000,
-            bot_manager=mock_bot_manager,
-        )
+    bot = bot_factory(server_config={"nickserv_password": "secret"}, allowed_mimetypes=None, manager=mock_bot_manager)
 
     # Don't set authenticated event, should timeout
     with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):

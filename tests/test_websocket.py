@@ -72,10 +72,9 @@ async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_lifecycle(api_client):
+async def test_websocket_handler_lifecycle(ws_session):
     """Test websocket connection lifecycle."""
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
+    ws, _ = ws_session
 
     # Send a text message (not a command) and expect no crash
     await ws.send_str("Hello world")
@@ -95,10 +94,9 @@ async def test_websocket_handler_lifecycle(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_invalid_command(api_client):
+async def test_websocket_handler_invalid_command(ws_session):
     """Test websocket with invalid command."""
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
+    ws, _ = ws_session
     # Send an unknown command
     await ws.send_str("/foobar")
     # The server should not crash, but may not respond (depends on your handler)
@@ -108,10 +106,9 @@ async def test_websocket_handler_invalid_command(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_part_not_enough_args(api_client):
+async def test_websocket_handler_part_not_enough_args(ws_session):
     """Test websocket /part command with insufficient arguments."""
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
+    ws, _ = ws_session
     # Send /part with not enough args
     await ws.send_str("/part onlyone")
     msg = await ws.receive(timeout=2)
@@ -123,10 +120,9 @@ async def test_websocket_handler_part_not_enough_args(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_msg_not_enough_args(api_client):
+async def test_websocket_handler_msg_not_enough_args(ws_session):
     """Test websocket /msg command with insufficient arguments."""
-    client, _ = api_client
-    ws = await client.ws_connect("/ws")
+    ws, _ = ws_session
     # Send /msg with not enough args
     await ws.send_str("/msg onlyone")
     msg = await ws.receive(timeout=2)
@@ -138,10 +134,9 @@ async def test_websocket_handler_msg_not_enough_args(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_join_success(api_client):
+async def test_websocket_handler_join_success(ws_session):
     """Test websocket /join command success."""
-    client, mock_bot_manager = api_client
-    ws = await client.ws_connect("/ws")
+    ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.queue_command = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
@@ -210,10 +205,9 @@ async def test_websocket_handler_help_with_command(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_msg_command(api_client):
+async def test_websocket_handler_msg_command(ws_session):
     """Test websocket /msg command."""
-    client, mock_bot_manager = api_client
-    ws = await client.ws_connect("/ws")
+    ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.queue_command = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
@@ -228,10 +222,9 @@ async def test_websocket_handler_msg_command(api_client):
 
 
 @pytest.mark.asyncio
-async def test_websocket_handler_msgjoin_command(api_client):
+async def test_websocket_handler_msgjoin_command(ws_session):
     """Test websocket /msgjoin command."""
-    client, mock_bot_manager = api_client
-    ws = await client.ws_connect("/ws")
+    ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.queue_command = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
