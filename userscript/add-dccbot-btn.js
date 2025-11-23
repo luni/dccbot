@@ -2,11 +2,13 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2025-02-12
+// @version      2025-11-23
 // @description  Add Button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
 // @match        https://nibl.co.uk/*
+// @match        https://xdcc.animk.info/*
+// @match        https://xdcc.rocks/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
 // @grant        GM_xmlhttpRequest
@@ -142,6 +144,135 @@
         };
     }
 
+    function add_button_animk_info() {
+        // Wait for table to be populated (it's dynamically loaded)
+        const observer = new MutationObserver(function(mutations) {
+            const rows = document.querySelectorAll('#listtable tbody tr.anime0, #listtable tbody tr.anime1');
+            if (rows.length > 0) {
+                observer.disconnect();
+                processAnimkRows();
+            }
+        });
+
+        const table = document.getElementById('listtable');
+        if (table) {
+            observer.observe(table, { childList: true, subtree: true });
+        }
+
+        // Also try to process immediately if rows already exist
+        setTimeout(processAnimkRows, 1000);
+
+        function processAnimkRows() {
+            const rows = document.querySelectorAll('#listtable tbody tr.anime0, #listtable tbody tr.anime1');
+            if (rows.length === 0) return;
+
+            // Get server and channel from page text
+            const bodyText = document.body.textContent;
+            const serverMatch = bodyText.match(/irc\.([a-z.]+)/i);
+            const channelMatch = bodyText.match(/#([a-zA-Z0-9_-]+)/);
+            const server = serverMatch ? 'irc.' + serverMatch[1] : 'irc.xertion.org';
+            const channel = channelMatch ? channelMatch[1] : 'MK';
+
+            for (let row of rows) {
+                if (row.querySelector('.dccbot-btn')) continue; // Already processed
+
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 4) continue;
+
+                const botname = cells[0].textContent.trim();
+                const packnum = cells[1].textContent.trim();
+
+                const btnCell = document.createElement('td');
+                btnCell.className = 'number';
+                const btn = document.createElement('button');
+                btn.className = 'dccbot-btn';
+                btn.textContent = 'Down';
+                btn.style.cursor = 'pointer';
+                btn.dataset.server = server;
+                btn.dataset.channel = channel;
+                btn.dataset.bot = botname;
+                btn.dataset.pack = packnum;
+
+                btn.onclick = function(e) {
+                    e.preventDefault();
+                    const d = this.dataset;
+                    send_msg(d.server, d.channel, d.bot, "xdcc send " + d.pack);
+                    this.parentNode.parentNode.style.background = '#CECECE';
+                };
+
+                btnCell.appendChild(btn);
+                row.appendChild(btnCell);
+            }
+        }
+    }
+
+    function add_button_xdcc_rocks() {
+        // Wait for results to load
+        const observer = new MutationObserver(function(mutations) {
+            const rows = document.querySelectorAll('tr.font2_bg0_bg1');
+            if (rows.length > 0) {
+                observer.disconnect();
+                processRocksRows();
+            }
+        });
+
+        const resultsDiv = document.querySelector('.results');
+        if (resultsDiv) {
+            observer.observe(resultsDiv, { childList: true, subtree: true });
+        }
+
+        // Also try to process immediately if rows already exist
+        setTimeout(processRocksRows, 1000);
+
+        function processRocksRows() {
+            const rows = document.querySelectorAll('tr.font2_bg0_bg1');
+            if (rows.length === 0) return;
+
+            // Get server and channel from page text
+            const bodyText = document.body.textContent;
+            const serverMatch = bodyText.match(/Server[:\s]+([^\s\n]+)/i);
+            const channelMatch = bodyText.match(/Channel[:\s]+([^\s\n]+)/i);
+            const server = serverMatch ? serverMatch[1] : 'irc.abjects.net';
+            const channel = channelMatch ? channelMatch[1].replace('#', '') : 'beast-xdcc';
+
+            for (let row of rows) {
+                if (row.querySelector('.dccbot-btn')) continue; // Already processed
+
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 3) continue;
+
+                const botname = cells[0].textContent.trim();
+                const packnum = cells[1].textContent.trim();
+
+                const btnCell = document.createElement('td');
+                const btn = document.createElement('button');
+                btn.className = 'dccbot-btn';
+                btn.textContent = 'Down';
+                btn.style.cursor = 'pointer';
+                btn.style.padding = '4px 8px';
+                btn.style.background = '#4CAF50';
+                btn.style.color = 'white';
+                btn.style.border = 'none';
+                btn.style.borderRadius = '3px';
+                btn.dataset.server = server;
+                btn.dataset.channel = channel;
+                btn.dataset.bot = botname;
+                btn.dataset.pack = packnum;
+
+                btn.onclick = function(e) {
+                    e.preventDefault();
+                    const d = this.dataset;
+                    send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack);
+                    this.style.background = '#CECECE';
+                    this.textContent = 'Sent';
+                };
+
+                btnCell.appendChild(btn);
+                row.appendChild(btnCell);
+            }
+        }
+    }
+
     const hostname = window.location.hostname;
     if (hostname == 'www.xdcc.eu') {
         add_button_xdcc_eu();
@@ -149,6 +280,14 @@
     }
     if (hostname == 'nibl.co.uk') {
         add_button_nibl();
+        return;
+    }
+    if (hostname == 'xdcc.animk.info') {
+        add_button_animk_info();
+        return;
+    }
+    if (hostname == 'xdcc.rocks') {
+        add_button_xdcc_rocks();
         return;
     }
 })();
