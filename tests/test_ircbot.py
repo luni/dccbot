@@ -265,6 +265,34 @@ def test_on_loggedin(bot):
     assert bot.authenticated_event.is_set()
 
 
+def test_on_privmsg_sets_auth_on_nickserv_message(bot):
+    """Ensure NickServ success notices mark the bot as authenticated."""
+    bot.authenticated = False
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "NickServ"
+    event.arguments = ["Password accepted - you are now recognized."]
+
+    bot.on_privmsg(bot.connection, event)
+
+    assert bot.authenticated is True
+    assert bot.authenticated_event.is_set()
+
+
+def test_on_privmsg_ignores_nonmatching_message(bot):
+    """Ensure other notices do not toggle authentication."""
+    bot.authenticated = False
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "SomeOtherServ"
+    event.arguments = ["Password accepted - you are now recognized."]
+
+    bot.on_privmsg(bot.connection, event)
+
+    assert bot.authenticated is False
+    assert bot.authenticated_event.is_set() is False
+
+
 def test_on_part(bot):
     """Test on_part handler."""
     bot.connection = MagicMock()

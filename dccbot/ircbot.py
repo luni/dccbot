@@ -58,6 +58,15 @@ class IRCBot(AioSimpleIRCClient):
     """
 
     reactor_class = AioReactor
+    NICKSERV_SUCCESS_PATTERNS: tuple[str, ...] = (
+        "password accepted",
+        "you are now recognized",
+        "you are now identified",
+        "you are now logged in",
+        "already identified",
+        "already logged in",
+    )
+
     download_path: str
     allowed_mimetypes: list[str] | None
     max_file_size: int
@@ -1012,6 +1021,26 @@ class IRCBot(AioSimpleIRCClient):
         """
         return self.on_privmsg(connection, event)
 
+    def _maybe_handle_nickserv_auth(self, sender: str | None, message: str | None) -> bool:
+        """Handle NickServ notices and set authentication state when applicable.
+
+        Returns:
+            bool: True if the message came from NickServ (handled), False otherwise.
+
+        """
+        if not sender or not message or sender.lower() != "nickserv":
+            return False
+
+        normalized_message = message.lower()
+        if any(pattern in normalized_message for pattern in self.NICKSERV_SUCCESS_PATTERNS):
+            if not self.authenticated:
+                logger.info("NickServ authentication confirmed via message: %s", message)
+
+            self.authenticated = True
+            self.authenticated_event.set()
+
+        return True
+
     def on_privmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle PRIVMSG messages.
 
@@ -1024,8 +1053,14 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         self.last_active = time.time()
-        sender = event.source.nick
+        sender = getattr(event.source, "nick", None)
         message = event.arguments[0]
+
+        logger.info("[%s] %s", sender, message)
+
+        if self._maybe_handle_nickserv_auth(sender, message):
+            return
+
         f = re.search(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9]{32})", message)
         if f:
             md5sum = f.group(1)
@@ -1059,8 +1094,6 @@ class IRCBot(AioSimpleIRCClient):
         if f:
             error = f.group(1)
             logger.error("[%s] XDCC SEND denied: %s", sender, error)
-
-        logger.info("[%s] %s", sender, message)
 
     async def cleanup(self, channel_idle_timeout: int, resume_timeout: int) -> None:
         # Find idle channels
