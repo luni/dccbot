@@ -49,6 +49,34 @@
         return results;
     }
 
+    function btn_send_to_dccbot(evt) {
+        evt.preventDefault();
+        if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
+        evt.stopPropagation();
+        const d = this.dataset;
+        send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack);
+        this.style.background = '#CECECE';
+        this.textContent = 'Sent';
+    }
+
+    function get_download_btn(server, channel, botname, packnum) {
+        const btn = document.createElement('button');
+        btn.className = 'dccbot-btn';
+        btn.textContent = 'Down';
+        btn.style.cursor = 'pointer';
+        btn.style.padding = '4px 8px';
+        btn.style.background = '#4CAF50';
+        btn.style.color = 'white';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '3px';
+        btn.dataset.server = server;
+        btn.dataset.channel = channel;
+        btn.dataset.bot = botname;
+        btn.dataset.pack = packnum;
+        btn.onclick = btn_send_to_dccbot;
+        return btn
+    }
+
     function send_msg(server, channel, user, message) {
         GM_xmlhttpRequest({
             method: "POST",
@@ -83,23 +111,10 @@
             }
             d[3] = d[3].replace('#', '');
             all_results.push(d.join(';'))
-            x.dataset.data = d.join(';');
-            x.dataset.channel = d[1];
-            x.dataset.server = d[0];
-            x.dataset.bot = d[2];
-            x.dataset.pack = d[3];
-            let clmn = document.createElement('td'),
-                btn = document.createElement('button');
-            btn.innerHTML = 'Down';
-            clmn.appendChild(btn);
-            x.appendChild(clmn)
-            btn.onclick = function (e) {
-                e.preventDefault();
-                const d = this.parentNode.parentNode.dataset;
-                send_msg(d.server, d.channel, d.bot, "xdcc send " + d.pack);
-                this.parentNode.parentNode.style.background = '#CECECE';
-                return;
-            };
+            const btnCell = document.createElement('td'),
+            btn = get_download_btn(d[0], d[1], d[2], d[3]);
+            btnCell.appendChild(btn);
+            x.appendChild(btnCell)
         }
 
         document.getElementsByTagName('h4')[0].onclick = function (e) {
@@ -117,11 +132,9 @@
         }
 
         for (let copy_btn of get_elements_by_xpath("//button[contains(@class, 'copy-data')]")) {
-            // const td=copy_btn.parentNode, new_btn=copy_btn.cloneNode();
             copy_btn.className = copy_btn.className.replace('copy-data ', '');
             copy_btn.innerHTML = 'Down';
             copy_btn.onclick = send_to_dccbot;
-            // td.appendChild(new_btn);
         }
 
         const copy_batch_btn = document.getElementById('copy-as-batch');
@@ -145,25 +158,44 @@
     }
 
     function add_button_animk_info() {
-        // Wait for table to be populated (it's dynamically loaded)
-        const observer = new MutationObserver(function(mutations) {
-            const rows = document.querySelectorAll('#listtable tbody tr.anime0, #listtable tbody tr.anime1');
-            if (rows.length > 0) {
-                observer.disconnect();
-                processAnimkRows();
-            }
-        });
+        let processScheduled = false;
 
-        const table = document.getElementById('listtable');
-        if (table) {
-            observer.observe(table, { childList: true, subtree: true });
+        function scheduleProcess() {
+            if (processScheduled) return;
+            processScheduled = true;
+            requestAnimationFrame(function () {
+                processScheduled = false;
+                processAnimkRows();
+            });
         }
 
-        // Also try to process immediately if rows already exist
-        setTimeout(processAnimkRows, 1000);
+        function attachObserver() {
+            const tableBody = document.querySelector('#listtable');
+            if (!tableBody) {
+                setTimeout(attachObserver, 300);
+                return;
+            }
+
+            const observer = new MutationObserver(scheduleProcess);
+            observer.observe(tableBody, { childList: true, subtree: true });
+            scheduleProcess();
+        }
+
+        attachObserver();
+
+        // Re-run processing whenever bot selection changes via sidebar or history navigation
+        const botList = document.getElementById('botlist');
+        if (botList) {
+            botList.addEventListener('click', function (evt) {
+                if (evt.target && evt.target.matches('a')) {
+                    setTimeout(scheduleProcess, 400);
+                }
+            }, true);
+        }
+        window.addEventListener('popstate', scheduleProcess);
 
         function processAnimkRows() {
-            const rows = document.querySelectorAll('#listtable tbody tr.anime0, #listtable tbody tr.anime1');
+            const rows = document.querySelectorAll('#listtable tbody tr');
             if (rows.length === 0) return;
 
             // Get server and channel from page text
@@ -184,21 +216,17 @@
 
                 const btnCell = document.createElement('td');
                 btnCell.className = 'number';
-                const btn = document.createElement('button');
-                btn.className = 'dccbot-btn';
-                btn.textContent = 'Down';
-                btn.style.cursor = 'pointer';
-                btn.dataset.server = server;
-                btn.dataset.channel = channel;
-                btn.dataset.bot = botname;
-                btn.dataset.pack = packnum;
+                const btn = get_download_btn(server, channel, botname, packnum);
 
-                btn.onclick = function(e) {
-                    e.preventDefault();
-                    const d = this.dataset;
-                    send_msg(d.server, d.channel, d.bot, "xdcc send " + d.pack);
-                    this.parentNode.parentNode.style.background = '#CECECE';
+                const stopRowPrompt = function (evt) {
+                    evt.preventDefault();
+                    if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
+                    evt.stopPropagation();
                 };
+
+                ['mousedown', 'mouseup'].forEach(function (evtName) {
+                    btn.addEventListener(evtName, stopRowPrompt, true);
+                });
 
                 btnCell.appendChild(btn);
                 row.appendChild(btnCell);
@@ -207,69 +235,60 @@
     }
 
     function add_button_xdcc_rocks() {
-        // Wait for results to load
-        const observer = new MutationObserver(function(mutations) {
-            const rows = document.querySelectorAll('tr.font2_bg0_bg1');
-            if (rows.length > 0) {
-                observer.disconnect();
-                processRocksRows();
+        const resultsRoot = document.querySelector('.results');
+        if (!resultsRoot) return;
+
+        const observer = new MutationObserver(function () {
+            if (resultsRoot.querySelector('tr.font2_bg0_bg1')) {
+                processRocksTable();
             }
         });
+        observer.observe(resultsRoot, { childList: true, subtree: true });
+        processRocksTable();
 
-        const resultsDiv = document.querySelector('.results');
-        if (resultsDiv) {
-            observer.observe(resultsDiv, { childList: true, subtree: true });
-        }
 
-        // Also try to process immediately if rows already exist
-        setTimeout(processRocksRows, 1000);
+        function processRocksTable() {
+            const table = resultsRoot.querySelector('table');
+            if (!table) return;
 
-        function processRocksRows() {
-            const rows = document.querySelectorAll('tr.font2_bg0_bg1');
-            if (rows.length === 0) return;
+            let currentServer = null;
+            let currentChannel = null;
 
-            // Get server and channel from page text
-            const bodyText = document.body.textContent;
-            const serverMatch = bodyText.match(/Server[:\s]+([^\s\n]+)/i);
-            const channelMatch = bodyText.match(/Channel[:\s]+([^\s\n]+)/i);
-            const server = serverMatch ? serverMatch[1] : 'irc.abjects.net';
-            const channel = channelMatch ? channelMatch[1].replace('#', '') : 'beast-xdcc';
+            const sections = Array.from(table.children);
+            sections.forEach(function (section) {
+                if (section.tagName === 'THEAD') {
+                    const channelAnchor = section.querySelector('a[href^="irc://"]');
+                    if (channelAnchor) {
+                        try {
+                            const url = new URL(channelAnchor.href);
+                            currentServer = url.hostname;
+                            currentChannel = channelAnchor.href.match(/(\#.+)$/)[1];
+                        } catch (e) {
+                            currentServer = null;
+                            currentChannel = null;
+                        }
+                    }
 
-            for (let row of rows) {
-                if (row.querySelector('.dccbot-btn')) continue; // Already processed
+                } else if (section.tagName === 'TBODY' && currentServer && currentChannel) {
+                    const dataRows = Array.from(section.querySelectorAll('tr')).filter(function (row) {
+                        return !row.querySelector('td[name]');
+                    });
 
-                const cells = row.querySelectorAll('td');
-                if (cells.length < 3) continue;
+                    dataRows.forEach(function (row) {
+                        if (row.querySelector('.dccbot-btn')) return;
+                        const cells = row.querySelectorAll('td');
+                        if (cells.length < 3) return;
 
-                const botname = cells[0].textContent.trim();
-                const packnum = cells[1].textContent.trim();
-
-                const btnCell = document.createElement('td');
-                const btn = document.createElement('button');
-                btn.className = 'dccbot-btn';
-                btn.textContent = 'Down';
-                btn.style.cursor = 'pointer';
-                btn.style.padding = '4px 8px';
-                btn.style.background = '#4CAF50';
-                btn.style.color = 'white';
-                btn.style.border = 'none';
-                btn.style.borderRadius = '3px';
-                btn.dataset.server = server;
-                btn.dataset.channel = channel;
-                btn.dataset.bot = botname;
-                btn.dataset.pack = packnum;
-
-                btn.onclick = function(e) {
-                    e.preventDefault();
-                    const d = this.dataset;
-                    send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack);
-                    this.style.background = '#CECECE';
-                    this.textContent = 'Sent';
-                };
-
-                btnCell.appendChild(btn);
-                row.appendChild(btnCell);
-            }
+                        const botname = cells[0].textContent.trim();
+                        const packnum = cells[1].textContent.trim();
+                        const filenameCell = cells[2];
+                        if (filenameCell) {
+                            const btn = get_download_btn(currentServer, currentChannel, botname, packnum);
+                            filenameCell.insertBefore(btn, filenameCell.firstChild);
+                        }
+                    });
+                }
+            });
         }
     }
 
