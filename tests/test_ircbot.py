@@ -357,6 +357,95 @@ def test_on_kick(bot):
     assert "#test" not in bot.joined_channels
 
 
+def test_resolve_channel_from_event_fallback_priority(bot):
+    """Ensure fallback is preferred when resolving channel names."""
+    event = MagicMock()
+    event.arguments = ["#from_args"]
+    event.target = "#from_target"
+
+    result = bot._resolve_channel_from_event(event, fallback="#from_fallback")
+
+    assert result == "#from_fallback"
+
+
+def test_resolve_channel_from_event_uses_arguments(bot):
+    """Ensure arguments are used when fallback is missing."""
+    event = MagicMock()
+    event.arguments = ["#from_args", bot.nick]
+    event.target = bot.nick
+
+    result = bot._resolve_channel_from_event(event)
+
+    assert result == "#from_args"
+
+
+def test_store_join_failure_records_reason(bot):
+    """Verify join failures are tracked and remove pending channel state."""
+    event = MagicMock()
+    event.arguments = ["#chan"]
+    bot.joined_channels["#chan"] = 123456.0
+
+    bot._store_join_failure(event, "Test reason")
+
+    assert bot.pending_join_failures["#chan"] == "Test reason"
+    assert "#chan" not in bot.joined_channels
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "expected_reason"),
+    [
+        ("on_channelisfull", "Channel is full"),
+        ("on_inviteonlychan", "Invite-only channel"),
+        ("on_badchannelkey", "Bad channel key/password"),
+        ("on_badchanmask", "Bad channel mask"),
+        ("on_toomanychannels", "Too many channels joined"),
+    ],
+)
+def test_join_failure_numerics_call_store(bot, handler_name, expected_reason):
+    """Static reason numerics should forward the expected reason to the helper."""
+    event = MagicMock()
+    event.arguments = ["#chan", "details"]
+
+    with patch.object(bot, "_store_join_failure") as mock_store:
+        getattr(bot, handler_name)(bot.connection, event)
+
+    mock_store.assert_called_once_with(event, expected_reason)
+
+
+def test_on_nochanmodes_uses_server_reason(bot):
+    """ERR_NOCHANMODES should pass through server supplied text."""
+    event = MagicMock()
+    event.arguments = ["#chan", "mode restriction"]
+
+    with patch.object(bot, "_store_join_failure") as mock_store:
+        bot.on_nochanmodes(bot.connection, event)
+
+    mock_store.assert_called_once_with(event, "mode restriction")
+
+
+def test_on_nosuchchannel_uses_second_argument_when_available(bot):
+    """ERR_NOSUCHCHANNEL should prefer human readable server reason."""
+    event = MagicMock()
+    event.arguments = ["#chan", "No such channel"]
+
+    with patch.object(bot, "_store_join_failure") as mock_store:
+        bot.on_nosuchchannel(bot.connection, event)
+
+    mock_store.assert_called_once_with(event, "No such channel")
+
+
+def test_on_bannedfromchan_tracks_banned_channels(bot):
+    """ERR_BANNEDFROMCHAN should mark the channel as banned."""
+    event = MagicMock()
+    event.arguments = ["#chan"]
+
+    with patch.object(bot, "_store_join_failure") as mock_store:
+        bot.on_bannedfromchan(bot.connection, event)
+
+    mock_store.assert_called_once_with(event, "Banned from channel")
+    assert "#chan" in bot.banned_channels
+
+
 @pytest.mark.asyncio
 async def test_handle_send_command(bot):
     """Test _handle_send_command."""
