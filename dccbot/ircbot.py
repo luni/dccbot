@@ -119,6 +119,7 @@ class IRCBot(AioSimpleIRCClient):
         self.current_transfers = {}  # track active DCC connections
         self.banned_channels = set()
         self.resume_queue = {}
+        self.pending_join_failures: dict[str, str] = {}
         self.command_queue = asyncio.Queue()
         self.mime_checker = magic.Magic(mime=True)
         self.loop = asyncio.get_event_loop()  # Ensure the loop is set
@@ -208,9 +209,14 @@ class IRCBot(AioSimpleIRCClient):
         this function does nothing and returns.
 
         """
-        if not channel or channel in self.joined_channels:
+        if not channel:
             return
 
+        normalized_channel = channel.lower()
+        if normalized_channel in self.joined_channels:
+            return
+
+        self.pending_join_failures.pop(normalized_channel, None)
         self.connection.join(channel)
         logger.info("Try to join channel: %s", channel)
 
@@ -222,14 +228,15 @@ class IRCBot(AioSimpleIRCClient):
             reason (str): Optional part message to send to the server.
 
         """
-        if channel not in self.joined_channels:
+        normalized_channel = channel.lower()
+        if normalized_channel not in self.joined_channels:
             # If the channel is empty or the bot is not in the channel, do nothing
             return
 
         self.connection.part(channel, reason or "")
         logger.info("Parted channel: %s (%s)", channel, reason)
         self.last_active = time.time()
-        del self.joined_channels[channel]
+        del self.joined_channels[normalized_channel]
 
     async def queue_command(self, data: dict) -> None:
         """Queue a command to be processed by the bot.
@@ -264,26 +271,63 @@ class IRCBot(AioSimpleIRCClient):
             channels (list of str): The channels to join.
 
         """
-        waiting_channels: list[str] = []
+        waiting_channels: dict[str, str] = {}
         for channel in channels:
             await self.join_channel(channel)
-            waiting_channels.append(channel)
+            waiting_channels[channel.lower()] = channel
             if channel in self.server_config.get("also_join", {}):
                 for also_join_channel in self.server_config["also_join"][channel]:
                     await self.join_channel(also_join_channel)
-                    waiting_channels.append(also_join_channel)
+                    waiting_channels[also_join_channel.lower()] = also_join_channel
 
         retry = 0
         while retry < 10 and waiting_channels:
-            for channel in list(waiting_channels):
-                if channel in self.joined_channels:
-                    waiting_channels.remove(channel)
+            for normalized in list(waiting_channels):
+                if normalized in self.joined_channels:
+                    waiting_channels.pop(normalized, None)
+                elif normalized in self.pending_join_failures:
+                    waiting_channels.pop(normalized, None)
+                    self.pending_join_failures.pop(normalized, None)
 
             await asyncio.sleep(1)
             retry += 1
 
         if waiting_channels:
-            logger.warning("Failed to join channels %s after 10 seconds", ", ".join(waiting_channels))
+            details: list[str] = []
+            for normalized, original in waiting_channels.items():
+                reason = self.pending_join_failures.pop(normalized, None)
+                if reason:
+                    details.append(f"{original} ({reason})")
+                else:
+                    details.append(original)
+
+            logger.warning("Failed to join channels %s after %s seconds", ", ".join(details), retry)
+
+    def _resolve_channel_from_event(
+        self,
+        event: irc.client_aio.Event,
+        fallback: str | None = None,
+    ) -> str | None:
+        candidates: list[str | None] = []
+        if fallback:
+            candidates.append(fallback)
+        if getattr(event, "arguments", None):
+            candidates.extend(event.arguments)
+        candidates.append(getattr(event, "target", None))
+
+        for candidate in candidates:
+            if candidate and " " not in candidate and candidate.lower() != self.nick.lower():
+                return candidate
+        return None
+
+    def _store_join_failure(self, event: irc.client_aio.Event, reason: str, fallback_channel: str | None = None) -> None:
+        channel = self._resolve_channel_from_event(event, fallback_channel)
+        normalized = channel.lower() if channel else None
+        if normalized:
+            self.pending_join_failures[normalized] = reason
+            self.joined_channels.pop(normalized, None)
+
+        logger.warning("Unable to join channel %s: %s", channel or "(unknown)", reason)
 
     def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
         """Update bot's channel mapping for a user.
@@ -402,33 +446,42 @@ class IRCBot(AioSimpleIRCClient):
 
         """
 
+    def on_channelisfull(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_CHANNELISFULL (471)."""
+        self._store_join_failure(event, "Channel is full")
+
+    def on_inviteonlychan(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_INVITEONLYCHAN (473)."""
+        self._store_join_failure(event, "Invite-only channel")
+
     def on_bannedfromchan(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
-        """Add the channel to the list of banned channels and remove it from the list of joined channels.
-
-        Args:
-            connection (irc.client_aio.AioConnection): The connection to the IRC server.
-            event (irc.client_aio.Event): The event that triggered this method to be called.
-
-        """
-        logger.info("Banned from channel %s: %s", event.target, event.arguments[0])
-        channel_name = event.arguments[0].lower()
-        self.banned_channels.add(channel_name)
+        """Handle ERR_BANNEDFROMCHAN (474)."""
+        self._store_join_failure(event, "Banned from channel")
+        channel = self._resolve_channel_from_event(event)
+        if channel:
+            self.banned_channels.add(channel.lower())
 
     def on_nochanmodes(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
-        """Process operations after receiving a NOCHANMODES message from the server.
+        """Handle ERR_NOCHANMODES (477)."""
+        reason = event.arguments[1] if len(event.arguments) > 1 else "Channel mode prevents join"
+        self._store_join_failure(event, reason)
 
-        If the bot is not allowed to join (because of a channel mode), remove it from the list of joined channels.
+    def on_badchannelkey(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_BADCHANNELKEY (475)."""
+        self._store_join_failure(event, "Bad channel key/password")
 
-        Args:
-            connection (irc.client_aio.AioConnection): The connection to the IRC server.
-            event (irc.client_aio.Event): The event that triggered this method to be called.
+    def on_badchanmask(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_BADCHANMASK (476)."""
+        self._store_join_failure(event, "Bad channel mask")
 
-        """
-        logger.info("Not allowed to join channel %s: %s", event.arguments[0], event.arguments[1])
-        channel_name = event.arguments[0].lower()
-        if channel_name in self.joined_channels:
-            logger.info("Removed from channel %s: %s", event.target, event.arguments)
-            del self.joined_channels[channel_name]
+    def on_toomanychannels(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_TOOMANYCHANNELS (405)."""
+        self._store_join_failure(event, "Too many channels joined")
+
+    def on_nosuchchannel(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_NOSUCHCHANNEL (403)."""
+        reason = event.arguments[1] if len(event.arguments) > 1 else "No such channel"
+        self._store_join_failure(event, reason)
 
     def on_loggedin(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a LOGGEDIN message from the server.
