@@ -13,8 +13,10 @@
     };
 
     const isSecure = window.location.protocol === "https:";
-    const protocol = isSecure ? "wss" : "ws";
-    const wsUrl = `${protocol}://${window.location.host}/ws`;
+    const protocol = isSecure ? "wss:" : "ws:";
+    const host = window.location.host;
+    const path = new URL("./ws", window.location.href).pathname;
+    const wsUrl = `${protocol}//${host}${path}`;
     const socket = new WebSocket(wsUrl);
 
     socket.onopen = (event) => {
