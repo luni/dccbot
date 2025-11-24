@@ -3,7 +3,6 @@
 import asyncio
 import json
 import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -267,9 +266,9 @@ def test_get_md5(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_check_queue_processor(manager):
+async def test_check_queue_processor(manager, tmp_path):
     """Test MD5 check queue processor."""
-    test_file = Path(tempfile.mktemp())
+    test_file = tmp_path / "test.txt"
     test_file.write_text("test content")
 
     transfer_job = {
@@ -300,8 +299,6 @@ async def test_check_queue_processor(manager):
 
     # Check that MD5 was calculated
     assert "file_md5" in manager.transfers["test.txt"][0]
-
-    test_file.unlink()
 
 
 @pytest.mark.asyncio
