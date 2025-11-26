@@ -516,8 +516,14 @@ class IRCBotAPI:
 
     @staticmethod
     def _clean_channel_list(l: list[str]) -> list[str]:
-        """Clean a list of channel names by stripping and lowercasing them."""
-        return [x.lower().strip() for x in l]
+        """Normalize channel names by stripping, lowercasing, and prefixing '#'."""
+        cleaned_channels: list[str] = []
+        for channel in l:
+            normalized = channel.lower().strip()
+            if normalized and not normalized.startswith("#"):
+                normalized = f"#{normalized}"
+            cleaned_channels.append(normalized)
+        return cleaned_channels
 
     @docs(
         tags=["IRC Commands"],

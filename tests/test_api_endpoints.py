@@ -28,6 +28,36 @@ async def test_join_success(api_client):
 
 
 @pytest.mark.asyncio
+async def test_join_adds_missing_channel_prefix(api_client):
+    """Ensure join request auto-prefixes channels lacking #."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot_manager.get_bot.return_value = mock_bot
+
+    payload = {"server": "irc.example.com", "channel": "test"}
+    resp = await client.post("/join", json=payload)
+    assert resp.status == 200
+
+    mock_bot.queue_command.assert_called_once_with({"command": "join", "channels": ["#test"]})
+
+
+@pytest.mark.asyncio
+async def test_join_adds_missing_prefix_for_multiple_channels(api_client):
+    """Ensure join request normalizes all provided channels."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot_manager.get_bot.return_value = mock_bot
+
+    payload = {"server": "irc.example.com", "channels": ["TestOne", "#TestTwo"]}
+    resp = await client.post("/join", json=payload)
+    assert resp.status == 200
+
+    mock_bot.queue_command.assert_called_once_with({"command": "join", "channels": ["#testone", "#testtwo"]})
+
+
+@pytest.mark.asyncio
 async def test_join_request_missing_channel_data(api_client):
     """Test join request with missing channel."""
     client, mock_bot_manager = api_client
@@ -141,6 +171,25 @@ async def test_part_success(api_client):
         "command": "part",
         "channels": ["#test"],
         "reason": "test reason",
+    })
+
+
+@pytest.mark.asyncio
+async def test_part_adds_missing_channel_prefix(api_client):
+    """Ensure part request auto-prefixes channels lacking #."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot_manager.get_bot.return_value = mock_bot
+
+    payload = {"server": "irc.example.com", "channel": "TeSt", "reason": "bye"}
+    resp = await client.post("/part", json=payload)
+    assert resp.status == 200
+
+    mock_bot.queue_command.assert_called_once_with({
+        "command": "part",
+        "channels": ["#test"],
+        "reason": "bye",
     })
 
 
