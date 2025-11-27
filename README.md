@@ -80,7 +80,7 @@ available at `http://localhost:8080/` by default.
 
 ### Browser Userscript for Easy Downloads
 
-A Tampermonkey userscript is provided to add download buttons to popular XDCC search websites, making it easy to send download commands directly to your DCCBot.
+A Violentmonkey userscript is provided to add download buttons to popular XDCC search websites, making it easy to send download commands directly to your DCCBot.
 
 #### Supported Websites
 - XDCC.eu
@@ -88,13 +88,13 @@ A Tampermonkey userscript is provided to add download buttons to popular XDCC se
 
 #### Installation
 
-1. Install the [Tampermonkey](https://www.tampermonkey.net/) extension for your browser
-2. Click the following link to install the script: [Install Script](https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js)
+1. Install the [Violentmonkey](https://violentmonkey.github.io/get-it/) extension for your browser (open source and available for Chrome, Firefox, and other Chromium-based browsers)
+2. Click the following link to install the script: [Install Script](https://luni.github.io/dccbot/userscript/add-dccbot-btn.js)
 
 #### Configuration
 
-1. After installation, click on the Tampermonkey extension icon
-2. Select "Set API Endpoint" from the menu
+1. After installation, click on the Violentmonkey extension icon
+2. Open the installed `add-dccbot-btn` script's menu and choose "Set API Endpoint"
 3. Enter your DCCBot API endpoint (e.g., `http://localhost:8080`)
 
 #### Usage
