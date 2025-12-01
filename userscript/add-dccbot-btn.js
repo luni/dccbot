@@ -56,16 +56,25 @@
         this.textContent = 'Sent';
     }
 
-    function get_download_btn(server, channel, botname, packnum) {
+    function get_download_btn(server, channel, botname, packnum, styleOverrides) {
         const btn = document.createElement('button');
         btn.className = 'dccbot-btn';
         btn.textContent = 'Down';
-        btn.style.cursor = 'pointer';
-        btn.style.padding = '4px 8px';
-        btn.style.background = '#4CAF50';
-        btn.style.color = 'white';
-        btn.style.border = 'none';
-        btn.style.borderRadius = '3px';
+
+        const defaultStyle = {
+            cursor: 'pointer',
+            padding: '4px 8px',
+            background: '#4CAF50',
+            color: 'white',
+            border: 'none',
+            borderRadius: '3px',
+        };
+
+        const styles = Object.assign({}, defaultStyle, styleOverrides || {});
+        Object.keys(styles).forEach(function (key) {
+            btn.style[key] = styles[key];
+        });
+
         btn.dataset.server = server;
         btn.dataset.channel = channel;
         btn.dataset.bot = botname;
@@ -340,14 +349,22 @@
             }
 
             const server = mapNetworkToServer(networkName);
+            const packHeader = card.querySelector(".pack-header");
+            const sizeEl = packHeader ? packHeader.querySelector(".pack-size") : null;
+            if (!packHeader || !sizeEl) return;
+
+            if (card.querySelector(".dccbot-btn")) return;
+
+            const btn = get_download_btn(server, channelName, botname, packnum, {
+                padding: "8px",
+                marginLeft: "8px"
+            });
+            sizeEl.insertAdjacentElement("afterend", btn);
+
             const packCommandDiv = card.querySelector(".pack-command");
-            if (!packCommandDiv) return;
-
-            if (packCommandDiv.querySelector(".dccbot-btn")) return;
-
-            packCommandDiv.innerHTML = "";
-            const btn = get_download_btn(server, channelName, botname, packnum);
-            packCommandDiv.appendChild(btn);
+            if (packCommandDiv) {
+                packCommandDiv.remove();
+            }
         });
     }
 
