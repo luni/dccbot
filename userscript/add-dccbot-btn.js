@@ -40,13 +40,22 @@
 
     console.log("API Endpoint for DCCBot: " + dccbot_api);
 
-    function get_elements_by_xpath(xpath, parent) {
-        let results = [], query = document.evaluate(xpath, parent || document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-        for (let i = 0, length = query.snapshotLength; i < length; ++i) { results.push(query.snapshotItem(i)); };
-        return results;
-    }
+    const BUTTON_STYLES = {
+        default: {
+            cursor: 'pointer',
+            padding: '4px 8px',
+            background: '#4CAF50',
+            color: 'white',
+            border: 'none',
+            borderRadius: '3px',
+        },
+        xdccSearchHeader: {
+            padding: '8px',
+            marginLeft: '8px'
+        }
+    };
 
-    function btn_send_to_dccbot(evt) {
+    function handleDccbotButtonClick(evt) {
         evt.preventDefault();
         if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
         evt.stopPropagation();
@@ -56,30 +65,25 @@
         this.textContent = 'Sent';
     }
 
+    function applyStyles(element, defaultStyle, styleOverrides) {
+        const styles = Object.assign({}, defaultStyle, styleOverrides || {});
+        Object.keys(styles).forEach(function (key) {
+            element.style[key] = styles[key];
+        });
+    }
+
     function get_download_btn(server, channel, botname, packnum, styleOverrides) {
         const btn = document.createElement('button');
         btn.className = 'dccbot-btn';
         btn.textContent = 'Down';
 
-        const defaultStyle = {
-            cursor: 'pointer',
-            padding: '4px 8px',
-            background: '#4CAF50',
-            color: 'white',
-            border: 'none',
-            borderRadius: '3px',
-        };
-
-        const styles = Object.assign({}, defaultStyle, styleOverrides || {});
-        Object.keys(styles).forEach(function (key) {
-            btn.style[key] = styles[key];
-        });
+        applyStyles(btn, BUTTON_STYLES.default, styleOverrides);
 
         btn.dataset.server = server;
         btn.dataset.channel = channel;
         btn.dataset.bot = botname;
         btn.dataset.pack = packnum;
-        btn.onclick = btn_send_to_dccbot;
+        btn.onclick = handleDccbotButtonClick;
         return btn;
     }
 
@@ -123,9 +127,9 @@
         document.getElementsByClassName('container')[0].style.width = "90%";
         document.getElementsByClassName('twelve')[0].style.marginTop = 0;
 
-        let all_results = [];
-        for (let x of document.getElementById('table').getElementsByTagName('tbody')[0].getElementsByTagName('tr')) {
-            let d = [
+        const all_results = [];
+        for (const x of document.getElementById('table').getElementsByTagName('tbody')[0].getElementsByTagName('tr')) {
+            const d = [
                 x.getElementsByTagName('td')[1].getElementsByTagName('a')[0].href.replace('irc://', '').split('/')[0],
             ];
             for (let y = 1; y < 4; y++) {
@@ -145,7 +149,7 @@
     }
 
     function add_button_nibl() {
-        function send_to_dccbot(e) {
+        function handleNiblButtonClick(e) {
             e.preventDefault();
             const botpack = this.dataset.botpack,
                 botname = this.dataset.botname;
@@ -153,18 +157,18 @@
 
         }
 
-        for (let copy_btn of get_elements_by_xpath("//button[contains(@class, 'copy-data')]")) {
+        for (const copy_btn of document.querySelectorAll("button.copy-data")) {
             copy_btn.className = copy_btn.className.replace('copy-data ', '');
             copy_btn.innerHTML = 'Down';
-            copy_btn.onclick = send_to_dccbot;
+            copy_btn.onclick = handleNiblButtonClick;
         }
 
         const copy_batch_btn = document.getElementById('copy-as-batch');
         copy_batch_btn.innerHTML = 'Download selected';
         copy_batch_btn.onclick = function (e) {
             e.preventDefault();
-            let bots = {};
-            for (const ckbox of get_elements_by_xpath("//input[@name='batch']")) {
+            const bots = {};
+            for (const ckbox of document.querySelectorAll("input[name='batch']")) {
                 if (ckbox.checked) {
                     if (!bots[ckbox.dataset.botname]) {
                         bots[ckbox.dataset.botname] = [];
@@ -227,7 +231,7 @@
             const server = serverMatch ? 'irc.' + serverMatch[1] : 'irc.xertion.org';
             const channel = channelMatch ? channelMatch[1] : 'MK';
 
-            for (let row of rows) {
+            for (const row of rows) {
                 if (row.querySelector('.dccbot-btn')) continue; // Already processed
 
                 const cells = row.querySelectorAll('td');
@@ -314,51 +318,56 @@
         }
     }
 
+    function get_xdcc_search_meta(card) {
+        const metaItems = card.querySelectorAll(".pack-meta-item");
+        const meta = {
+            botname: null,
+            packnum: null,
+            networkName: null,
+            channelName: null
+        };
+
+        metaItems.forEach(function (item) {
+            const labelEl = item.querySelector(".pack-meta-label");
+            if (!labelEl) return;
+            const label = labelEl.textContent.trim().toLowerCase().replace(":", "");
+            const valueEl = labelEl.nextElementSibling;
+            if (!valueEl) return;
+
+            if (label === "bot") {
+                meta.botname = valueEl.textContent.trim();
+            } else if (label === "pack") {
+                meta.packnum = valueEl.textContent.trim().replace(/^#/, "");
+            } else if (label === "network") {
+                meta.networkName = valueEl.textContent.trim();
+            } else if (label === "channel") {
+                const channelEl = item.querySelector(".channel-link") || valueEl;
+                meta.channelName = channelEl.textContent.trim();
+            }
+        });
+
+        return meta;
+    }
+
     function add_button_xdcc_search() {
         const cards = document.querySelectorAll(".pack-card");
         if (!cards.length) return;
 
         cards.forEach(function (card) {
-            const metaItems = card.querySelectorAll(".pack-meta-item");
-            let botname = null;
-            let packnum = null;
-            let networkName = null;
-            let channelName = null;
+            const meta = get_xdcc_search_meta(card);
 
-            metaItems.forEach(function (item) {
-                const labelEl = item.querySelector(".pack-meta-label");
-                if (!labelEl) return;
-                const label = labelEl.textContent.trim().toLowerCase().replace(":", "");
-                const valueEl = labelEl.nextElementSibling;
-                if (!valueEl) return;
-
-                if (label === "bot") {
-                    botname = valueEl.textContent.trim();
-                } else if (label === "pack") {
-                    packnum = valueEl.textContent.trim().replace(/^#/, "");
-                } else if (label === "network") {
-                    networkName = valueEl.textContent.trim();
-                } else if (label === "channel") {
-                    const channelEl = item.querySelector(".channel-link") || valueEl;
-                    channelName = channelEl.textContent.trim();
-                }
-            });
-
-            if (!botname || !packnum || !channelName) {
+            if (!meta.botname || !meta.packnum || !meta.channelName) {
                 return;
             }
 
-            const server = mapNetworkToServer(networkName);
+            const server = mapNetworkToServer(meta.networkName);
             const packHeader = card.querySelector(".pack-header");
             const sizeEl = packHeader ? packHeader.querySelector(".pack-size") : null;
             if (!packHeader || !sizeEl) return;
 
             if (card.querySelector(".dccbot-btn")) return;
 
-            const btn = get_download_btn(server, channelName, botname, packnum, {
-                padding: "8px",
-                marginLeft: "8px"
-            });
+            const btn = get_download_btn(server, meta.channelName, meta.botname, meta.packnum, BUTTON_STYLES.xdccSearchHeader);
             sizeEl.insertAdjacentElement("afterend", btn);
 
             const packCommandDiv = card.querySelector(".pack-command");
@@ -368,25 +377,16 @@
         });
     }
 
-    const hostname = window.location.hostname;
-    if (hostname === 'www.xdcc.eu') {
-        add_button_xdcc_eu();
-        return;
-    }
-    if (hostname === 'nibl.co.uk') {
-        add_button_nibl();
-        return;
-    }
-    if (hostname === 'xdcc.animk.info') {
-        add_button_animk_info();
-        return;
-    }
-    if (hostname === 'xdcc.rocks') {
-        add_button_xdcc_rocks();
-        return;
-    }
-    if (hostname === 'xdcc-search.com') {
-        add_button_xdcc_search();
-        return;
+    const hostHandlers = {
+        'www.xdcc.eu': add_button_xdcc_eu,
+        'nibl.co.uk': add_button_nibl,
+        'xdcc.animk.info': add_button_animk_info,
+        'xdcc.rocks': add_button_xdcc_rocks,
+        'xdcc-search.com': add_button_xdcc_search
+    };
+
+    const handler = hostHandlers[window.location.hostname];
+    if (handler) {
+        handler();
     }
 })();
