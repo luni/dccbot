@@ -9,6 +9,7 @@
 // @match        https://nibl.co.uk/*
 // @match        https://xdcc.animk.info/*
 // @match        https://xdcc.rocks/*
+// @match        https://xdcc-search.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
 // @grant        GM_xmlhttpRequest
@@ -34,14 +35,10 @@
     const dccbot_api = GM_getValue("dccbot_api", "");
     if (!dccbot_api) {
         console.log("No API endpoint for DCCBot defined.");
-        return
+        return;
     }
 
     console.log("API Endpoint for DCCBot: " + dccbot_api);
-
-    function get_element_by_xpath(path, parent) {
-        return document.evaluate(path, parent || document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-    }
 
     function get_elements_by_xpath(xpath, parent) {
         let results = [], query = document.evaluate(xpath, parent || document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
@@ -74,7 +71,7 @@
         btn.dataset.bot = botname;
         btn.dataset.pack = packnum;
         btn.onclick = btn_send_to_dccbot;
-        return btn
+        return btn;
     }
 
     function send_msg(server, channel, user, message) {
@@ -91,9 +88,25 @@
                 message: message
             }),
             onload: function (response) {
-                console.log("[DCCBOT] API Reponse: " + response.responseText);
+                console.log("[DCCBOT] API Response: " + response.responseText);
             }
         });
+    }
+
+    function mapNetworkToServer(networkName) {
+        if (!networkName) {
+            return "irc.rizon.net";
+        }
+        const n = networkName.trim().toLowerCase();
+        if (n === "rizon") return "irc.rizon.net";
+        if (n === "abjects") return "irc.abjects.net";
+        if (n === "scenep2p") return "irc.scenep2p.net";
+        if (n === "coreirc") return "irc.coreirc.net";
+        if (n === "abandoned-irc") return "irc.abandoned-irc.net";
+        if (n === "pureirc") return "irc.pureirc.net";
+        if (n === "terrachat") return "irc.terrachat.cl";
+        const cleaned = n.replace(/[^a-z0-9]+/g, "");
+        return "irc." + cleaned + ".net";
     }
 
     function add_button_xdcc_eu() {
@@ -110,11 +123,11 @@
                 d.push(x.getElementsByTagName('td')[y].textContent.trim());
             }
             d[3] = d[3].replace('#', '');
-            all_results.push(d.join(';'))
+            all_results.push(d.join(';'));
             const btnCell = document.createElement('td'),
             btn = get_download_btn(d[0], d[1], d[2], d[3]);
             btnCell.appendChild(btn);
-            x.appendChild(btnCell)
+            x.appendChild(btnCell);
         }
 
         document.getElementsByTagName('h4')[0].onclick = function (e) {
@@ -292,21 +305,71 @@
         }
     }
 
+    function add_button_xdcc_search() {
+        const cards = document.querySelectorAll(".pack-card");
+        if (!cards.length) return;
+
+        cards.forEach(function (card) {
+            const metaItems = card.querySelectorAll(".pack-meta-item");
+            let botname = null;
+            let packnum = null;
+            let networkName = null;
+            let channelName = null;
+
+            metaItems.forEach(function (item) {
+                const labelEl = item.querySelector(".pack-meta-label");
+                if (!labelEl) return;
+                const label = labelEl.textContent.trim().toLowerCase().replace(":", "");
+                const valueEl = labelEl.nextElementSibling;
+                if (!valueEl) return;
+
+                if (label === "bot") {
+                    botname = valueEl.textContent.trim();
+                } else if (label === "pack") {
+                    packnum = valueEl.textContent.trim().replace(/^#/, "");
+                } else if (label === "network") {
+                    networkName = valueEl.textContent.trim();
+                } else if (label === "channel") {
+                    const channelEl = item.querySelector(".channel-link") || valueEl;
+                    channelName = channelEl.textContent.trim();
+                }
+            });
+
+            if (!botname || !packnum || !channelName) {
+                return;
+            }
+
+            const server = mapNetworkToServer(networkName);
+            const packCommandDiv = card.querySelector(".pack-command");
+            if (!packCommandDiv) return;
+
+            if (packCommandDiv.querySelector(".dccbot-btn")) return;
+
+            packCommandDiv.innerHTML = "";
+            const btn = get_download_btn(server, channelName, botname, packnum);
+            packCommandDiv.appendChild(btn);
+        });
+    }
+
     const hostname = window.location.hostname;
-    if (hostname == 'www.xdcc.eu') {
+    if (hostname === 'www.xdcc.eu') {
         add_button_xdcc_eu();
         return;
     }
-    if (hostname == 'nibl.co.uk') {
+    if (hostname === 'nibl.co.uk') {
         add_button_nibl();
         return;
     }
-    if (hostname == 'xdcc.animk.info') {
+    if (hostname === 'xdcc.animk.info') {
         add_button_animk_info();
         return;
     }
-    if (hostname == 'xdcc.rocks') {
+    if (hostname === 'xdcc.rocks') {
         add_button_xdcc_rocks();
+        return;
+    }
+    if (hostname === 'xdcc-search.com') {
+        add_button_xdcc_search();
         return;
     }
 })();
