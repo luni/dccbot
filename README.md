@@ -87,6 +87,7 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 - NIBL
 - xdcc.rocks
 - xdcc.animk.info
+- xdcc-search.com
 
 #### Installation
 
