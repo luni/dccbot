@@ -25,6 +25,9 @@ fix: reformat-ruff fix-ruff
 test:
 	pytest
 
+test-cov:
+	pytest --cov --cov-report=xml --cov-report=term-missing
+
 vulture:
 	vulture . --exclude .venv,migrations,tests --make-whitelist
 
