@@ -96,6 +96,20 @@ async def test_get_bot_unknown_server(manager):
 
 
 @pytest.mark.asyncio
+async def test_get_bot_connect_failure_not_cached(manager):
+    """Test failed bot connection does not leave stale cache entry."""
+    with patch("dccbot.manager.IRCBot") as mock_ircbot:
+        mock_bot = AsyncMock()
+        mock_bot.connect.side_effect = RuntimeError("connect failed")
+        mock_ircbot.return_value = mock_bot
+
+        with pytest.raises(RuntimeError, match="connect failed"):
+            await manager.get_bot("irc.example.com")
+
+        assert "irc.example.com" not in manager.bots
+
+
+@pytest.mark.asyncio
 async def test_get_bot_with_default_config():
     """Test get_bot with default server config."""
     config = {
@@ -327,3 +341,19 @@ async def test_start_background_tasks():
         await app["queue_processor_task"]
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_cleanup_background_tasks_handles_cancelled_errors():
+    """Test cleanup_background_tasks suppresses task cancellation exceptions."""
+    app = web.Application()
+
+    async def _never() -> None:
+        await asyncio.Future()
+
+    cleanup_task = asyncio.create_task(_never())
+    queue_task = asyncio.create_task(_never())
+    app["cleanup_task"] = cleanup_task
+    app["queue_processor_task"] = queue_task
+
+    await cleanup_background_tasks(app)

@@ -12,21 +12,14 @@ from dccbot.app import WebSocketLogHandler
 
 
 @pytest.mark.asyncio
-async def test_websocket_log_handler_emit_sends_log(monkeypatch):
+async def test_websocket_log_handler_emit_sends_log():
     """Test that WebSocketLogHandler emits logs to connected websockets."""
     ws_mock = MagicMock()
     ws_mock.closed = False
-    sent = {}
-
-    def fake_send_str(msg):
-        sent["msg"] = msg
-
-    ws_mock.send_str.side_effect = fake_send_str
+    ws_mock.send_str = AsyncMock()
 
     handler = WebSocketLogHandler({ws_mock})
-
-    # Patch asyncio.create_task to run immediately for test
-    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
+    handler.set_event_loop(asyncio.get_running_loop())
 
     # Emit a log record
     record = MagicMock()
@@ -38,26 +31,27 @@ async def test_websocket_log_handler_emit_sends_log(monkeypatch):
     handler.format = lambda r: r.getMessage()  # type: ignore
 
     handler.emit(record)
+    await asyncio.sleep(0)
     # Check that the websocket received a JSON log message
-    assert "msg" in sent
-    log_entry = json.loads(sent["msg"])
+    ws_mock.send_str.assert_awaited_once()
+    sent_payload = ws_mock.send_str.await_args.args[0]
+    log_entry = json.loads(sent_payload)
     assert log_entry["level"] == "INFO"
     assert log_entry["message"] == "Test log"
     assert "timestamp" in log_entry
 
 
 @pytest.mark.asyncio
-async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
+async def test_websocket_log_handler_removes_closed_ws():
     """Test that WebSocketLogHandler removes closed websockets."""
     ws_open = MagicMock()
     ws_open.closed = False
+    ws_open.send_str = AsyncMock()
     ws_closed = MagicMock()
     ws_closed.closed = True
 
     handler = WebSocketLogHandler({ws_open, ws_closed})
-
-    # Patch asyncio.create_task to run immediately for test
-    monkeypatch.setattr("asyncio.create_task", lambda coro: coro)
+    handler.set_event_loop(asyncio.get_running_loop())
 
     record = MagicMock()
     record.levelname = "WARNING"
@@ -65,6 +59,7 @@ async def test_websocket_log_handler_removes_closed_ws(monkeypatch):
     handler.format = lambda r: r.getMessage()  # type: ignore
 
     handler.emit(record)
+    await asyncio.sleep(0)
     # ws_closed should be removed from handler.websockets
     assert ws_closed not in handler.websockets
     # ws_open should remain
@@ -99,8 +94,11 @@ async def test_websocket_handler_invalid_command(ws_session):
     ws, _ = ws_session
     # Send an unknown command
     await ws.send_str("/foobar")
-    # The server should not crash, but may not respond (depends on your handler)
-    # Optionally, check for logs or just ensure connection stays open
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "unknown command" in data["message"].lower()
     await ws.close()
     assert ws.closed
 

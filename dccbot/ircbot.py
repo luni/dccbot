@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
@@ -166,28 +167,29 @@ class IRCBot(AioSimpleIRCClient):
 
         If the connection fails, an error message will be logged.
         """
-        try:
-            self.connection = AioConnection(self.reactor)
-            connect_factory = None
+        self.connection = AioConnection(self.reactor)
+        connect_factory = None
 
-            if self.server_config.get("use_tls", False):
-                # Initialize AioConnection with the custom connect_factory
-                if not self.server_config.get("verify_ssl", True):
-                    ssl_context = ssl.create_default_context()
-                    ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE
-                else:
-                    ssl_context = True
-                connect_factory = AioFactory(ssl=ssl_context)
-                port = self.server_config.get("port", 6697)
+        if self.server_config.get("use_tls", False):
+            # Initialize AioConnection with the custom connect_factory
+            if not self.server_config.get("verify_ssl", True):
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
             else:
-                connect_factory = AioFactory()
-                port = self.server_config.get("port", 6667)
+                ssl_context = True
+            connect_factory = AioFactory(ssl=ssl_context)
+            port = self.server_config.get("port", 6697)
+        else:
+            connect_factory = AioFactory()
+            port = self.server_config.get("port", 6667)
 
+        try:
             await self.connection.connect(self.server, port, self.nick, connect_factory=connect_factory)
             logger.info("Connecting to server: %s with nick: %s", self.server, self.nick)
-        except Exception as e:
-            logger.error("Connection error to %s: %s", self.server, e)
+        except Exception:
+            logger.exception("Connection error to %s", self.server)
+            raise
 
     async def disconnect(self, reason: str | None = None) -> None:
         """Disconnect the bot from the IRC server.
@@ -786,11 +788,15 @@ class IRCBot(AioSimpleIRCClient):
         """
         self.last_active = time.time()
 
+        if not event.arguments:
+            logger.warning("Invalid DCC event: %s", event)
+            return
+
         # Only handle DCC messages
         if event.arguments[0] != "DCC":
             return self.on_privmsg(connection, event)
 
-        if not event.arguments or len(event.arguments) < 2:
+        if len(event.arguments) < 2:
             logger.warning("Invalid DCC event: %s", event)
             return
 
@@ -1048,8 +1054,7 @@ class IRCBot(AioSimpleIRCClient):
                 transfer["completed"] = time.time()
                 transfer["status"] = "completed"
                 if transfer.get("md5"):
-                    loop = asyncio.get_event_loop()
-                    loop.run_until_complete(self._add_md5_check_queue_item(transfer))
+                    self.bot_manager.md5_check_queue.put_nowait(transfer)
 
                 if self.config.get("incomplete_suffix") and file_path.endswith(self.config["incomplete_suffix"]):
                     target = file_path[: -len(self.config["incomplete_suffix"])]
@@ -1060,7 +1065,8 @@ class IRCBot(AioSimpleIRCClient):
                     except Exception as e:
                         logger.error("Error renaming %s to %s: %s", file_path, target, e)
 
-        del self.current_transfers[dcc]
+        with contextlib.suppress(KeyError):
+            del self.current_transfers[dcc]
 
     def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle NOTICE messages.

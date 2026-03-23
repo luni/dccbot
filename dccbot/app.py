@@ -188,6 +188,7 @@ class WebSocketLogHandler(logging.Handler):
     """
 
     websockets: set[web.WebSocketResponse]
+    event_loop: asyncio.AbstractEventLoop | None
 
     def __init__(self, websockets: set[web.WebSocketResponse]) -> None:
         """Initialize a WebSocketLogHandler.
@@ -199,6 +200,11 @@ class WebSocketLogHandler(logging.Handler):
         """
         super().__init__()
         self.websockets = websockets
+        self.event_loop = None
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Set the event loop used to dispatch websocket sends."""
+        self.event_loop = loop
 
     def emit(self, record: logging.LogRecord) -> None:
         """Send a log entry to connected WebSocket clients.
@@ -218,7 +224,17 @@ class WebSocketLogHandler(logging.Handler):
                 self.websockets.remove(ws)
                 continue
 
-            asyncio.create_task(ws.send_str(json.dumps(log_entry)))
+            payload = json.dumps(log_entry)
+            send_coro = ws.send_str(payload)
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+
+            if running_loop and running_loop is self.event_loop:
+                asyncio.create_task(send_coro)
+            elif self.event_loop and self.event_loop.is_running():
+                asyncio.run_coroutine_threadsafe(send_coro, self.event_loop)
 
 
 class IRCBotAPI:
@@ -242,17 +258,22 @@ class IRCBotAPI:
         self.websockets = set()
         self.static_dir = STATIC_DIR
         self.transfer_broadcast_task: asyncio.Task | None = None
+        self.ws_log_handler = WebSocketLogHandler(self.websockets)
         self.setup_routes()
         self.setup_apispec()
 
-        ws_log_handler = WebSocketLogHandler(self.websockets)
-        ws_log_handler.setFormatter(logging.Formatter("%(message)s"))
+        self.ws_log_handler.setFormatter(logging.Formatter("%(message)s"))
 
-        logger.addHandler(ws_log_handler)
+        logger.addHandler(self.ws_log_handler)
         ircbot_logger = logging.getLogger("dccbot.ircbot")
-        ircbot_logger.addHandler(ws_log_handler)
+        ircbot_logger.addHandler(self.ws_log_handler)
         self.app.on_startup.append(self.start_transfer_broadcast)
         self.app.on_cleanup.append(self.stop_transfer_broadcast)
+        self.app.on_startup.append(self.capture_event_loop)
+
+    async def capture_event_loop(self, app: web.Application) -> None:
+        """Capture the running loop so logging can dispatch safely from any thread."""
+        self.ws_log_handler.set_event_loop(asyncio.get_running_loop())
 
     async def start_transfer_broadcast(self, app: web.Application) -> None:
         """Start periodic transfer snapshots over WebSocket."""
@@ -418,11 +439,14 @@ class IRCBotAPI:
                 })
             elif command == "info":
                 await self._send_transfer_snapshot(ws)
+            else:
+                raise RuntimeError(f"Unknown command: {command}")
         except RuntimeError as e:
             logger.error(str(e), exc_info=True)
             await ws.send_json({"status": "error", "message": str(e)})
         except Exception as e:
             logger.exception(e)
+            await ws.send_json({"status": "error", "message": "Internal server error"})
 
     # WebSocket handler
     async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -472,12 +496,13 @@ class IRCBotAPI:
                     logging.error("WebSocket connection closed with exception: %s", ws.exception())
         finally:
             # Remove the WebSocket connection when it's closed
-            try:
-                self.websockets.remove(ws)
-            except ValueError:
-                pass
+            self.websockets.discard(ws)
             if ping_task:
                 ping_task.cancel()  # Stop the ping task
+                try:
+                    await ping_task
+                except asyncio.CancelledError:
+                    pass
 
         return ws
 

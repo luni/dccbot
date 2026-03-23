@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -133,7 +134,11 @@ class IRCBotManager:
                 self,
             )
             self.bots[server] = bot
-            await bot.connect()
+            try:
+                await bot.connect()
+            except Exception:
+                self.bots.pop(server, None)
+                raise
         return self.bots[server]
 
     async def _cleanup_transfers(self) -> None:
@@ -202,6 +207,8 @@ class IRCBotManager:
 
                 # Wait 1 second before checking again
                 await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 # Log the exception and wait 10 seconds before trying again
                 logger.exception(e)
@@ -287,6 +294,8 @@ async def cleanup_background_tasks(app: web.Application) -> None:
     app["cleanup_task"].cancel()
     app["queue_processor_task"].cancel()
 
-    # Wait for the task to finish
-    await app["cleanup_task"]
-    await app["queue_processor_task"]
+    # Wait for the tasks to finish
+    with contextlib.suppress(asyncio.CancelledError):
+        await app["cleanup_task"]
+    with contextlib.suppress(asyncio.CancelledError):
+        await app["queue_processor_task"]
