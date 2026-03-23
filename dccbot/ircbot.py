@@ -5,12 +5,10 @@ import logging
 import os
 import random
 import re
-import shlex
 import ssl
 import string
-import struct
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import irc.client
 import irc.client_aio
@@ -20,6 +18,9 @@ from irc.connection import AioFactory
 
 from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
+from dccbot.command_pipeline import handle_part_command, handle_send_command
+from dccbot.dcc_parsing import is_valid_filename, parse_dcc_accept, parse_dcc_send
+from dccbot.transfer_handler import TransferHandler
 from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults
 
 if TYPE_CHECKING:
@@ -130,6 +131,7 @@ class IRCBot(AioSimpleIRCClient):
         self.authenticated_event = asyncio.Event()
         self.authenticated = False
         self.config = bot_manager.config
+        self.transfer_handler = TransferHandler(self)
 
     @staticmethod
     def get_version() -> str:
@@ -349,48 +351,12 @@ class IRCBot(AioSimpleIRCClient):
                 self.joined_channels[channel] = time.time()
 
     async def _handle_send_command(self, data: dict[str, Any]) -> None:
-        """Handle send command by joining channels and sending messages.
-
-        This method processes a send command by:
-        1. Joining specified channels
-        2. Waiting for channel joins
-        3. Sending the message
-        4. Updating channel mapping
-
-        Args:
-            data: Dictionary containing command data with keys:
-                - channels: List of channels to join
-                - user: User to send message to
-                - message: Message to send
-
-        """
-        if not data.get("user") or not data.get("message"):
-            return
-
-        if data.get("channels"):
-            await self._join_channels(data["channels"])
-
-        try:
-            self.connection.privmsg(data["user"], data["message"])
-            logger.info("Sent message to %s: %s", data["user"], data["message"])
-        except Exception as e:
-            logger.error("Failed to send message to %s: %s", data["user"], e)
-
-        if data.get("channels"):
-            self._update_channel_mapping(data["user"], data["channels"])
+        """Delegate send command to command pipeline."""
+        await handle_send_command(self, data)
 
     async def _handle_part_command(self, data: dict[str, Any]) -> None:
-        """Handle part command by parting specified channels.
-
-        Args:
-            data: Dictionary containing command data with keys:
-                - channels: List of channels to part
-                - reason: Optional reason for parting
-
-        """
-        if data.get("channels"):
-            for channel in data["channels"]:
-                await self.part_channel(channel, data.get("reason"))
+        """Delegate part command to command pipeline."""
+        await handle_part_command(self, data)
 
     async def process_command_queue(self) -> None:
         """Process commands from the command queue.
@@ -551,39 +517,8 @@ class IRCBot(AioSimpleIRCClient):
 
     @staticmethod
     def is_valid_filename(path: str, filename: str) -> bool:
-        """Check if a given filename is valid.
-
-        A filename is considered valid if:
-
-        1. It is not empty
-        2. It does not contain any invalid characters (e.g. slash, backslash, :, *, ?, ", <, >, |)
-        3. It does not contain any directory separators (e.g. slash, backslash)
-        4. It is an absolute path
-        5. It is not outside of the given path
-
-        This function is used to validate filenames when downloading files from IRC.
-
-        Args:
-            path (str): The path to the directory where the file will be saved.
-            filename (str): The name of the file.
-
-        Returns:
-            bool: True if the filename is valid, False if not.
-
-        """
-        if not filename:
-            return False
-
-        file_path = os.path.join(path, filename)
-
-        if re.search(r"[/\\:\*?\"<>\|]", filename):  # Check for invalid characters
-            return False
-
-        # Check if the file is within the given path
-        if not os.path.abspath(file_path).startswith(path):
-            return False
-
-        return True
+        """Backward-compatible delegator to DCC parsing filename validation."""
+        return is_valid_filename(path, filename)
 
     def on_dcc_accept(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle DCC ACCEPT command.
@@ -608,25 +543,12 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("DCC ACCEPT not in queue: %s", event)
             return
 
-        f = re.search(r"(\d+) (\d+)$", event.arguments[1])
-        if not f:
+        parsed = parse_dcc_accept(event.arguments[1])
+        if not parsed:
             logger.warning("Invalid DCC ACCEPT command: %s", event)
             return
 
-        try:
-            peer_port = int(f.group(1))
-            resume_position = int(f.group(2))
-
-            if peer_port < 1024 or peer_port > 65535:
-                logger.warning("Invalid DCC SEND command (invalid port): %s", event.arguments)
-                return
-
-            if resume_position < 1:
-                logger.warning("Invalid DCC SEND command (invalid resume_position): %s", event.arguments)
-                return
-        except ValueError:
-            logger.warning("Invalid DCC SEND command (invalid size or port): %s", event.arguments)
-            return
+        peer_port, resume_position = parsed
 
         for item in self.resume_queue[event.source.nick]:
             if peer_port != item[1] or resume_position != item[5]:
@@ -658,57 +580,15 @@ class IRCBot(AioSimpleIRCClient):
             use_ssl (bool): A boolean indicating whether to use SSL.
 
         """
-        payload = event.arguments[1]
-        parts = shlex.split(payload)
-
-        if len(parts) < 5:
+        parsed = parse_dcc_send(event.arguments[1])
+        if not parsed:
             logger.warning("Invalid DCC SEND command (not enough arguments): %s", event.arguments)
             return
 
-        filename, peer_address, peer_port, size = parts[1:5]
+        filename, peer_address, peer_port, size = parsed.filename, parsed.peer_address, parsed.peer_port, parsed.size
 
-        # handle v6
-        if ":" in peer_address:
-            # Validate the IP address
-            try:
-                ipaddress.ip_address(peer_address)
-            except ValueError:
-                logger.warning("Rejected %s: Invalid IP address %s", filename, peer_address)
-                return
-        else:
-            try:
-                # Convert the IP address to a quad-dotted form
-                peer_address = irc.client.ip_numstr_to_quad(peer_address)
-            except ValueError:
-                logger.warning("Rejected %s: Invalid IP address %s", filename, peer_address)
-                return
-
-        if ipaddress.ip_address(peer_address).is_private and not self.config.get("allow_private_ips"):
-            logger.warning("Rejected %s: Private IP address %s", filename, peer_address)
-            return
-
-        # validate file name
-        if not self.is_valid_filename(self.download_path, filename):
-            logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
-            return
-
-        try:
-            size = int(size)
-            peer_port = int(peer_port)
-
-            if peer_port == 0:
-                logger.warning("Passive DCC transfers are not supported yet.")
-                return
-
-            if peer_port < 1 or peer_port > 65535:
-                logger.warning("Invalid DCC SEND command (invalid port)")
-                return
-
-            if size < 1:
-                logger.warning("Invalid DCC SEND command (invalid size)")
-                return
-        except ValueError:
-            logger.warning("Invalid DCC SEND command (invalid size or port)")
+        if peer_port == 0:
+            logger.warning("Passive DCC transfers are not supported yet.")
             return
 
         if size > self.max_file_size:
@@ -717,6 +597,15 @@ class IRCBot(AioSimpleIRCClient):
 
         if size < 1:
             logger.warning("Rejected %s: File size is too small (%d)", filename, size)
+            return
+
+        if ipaddress.ip_address(peer_address).is_private and not self.config.get("allow_private_ips"):
+            logger.warning("Rejected %s: Private IP address %s", filename, peer_address)
+            return
+
+        # validate file name
+        if not self.is_valid_filename(self.download_path, filename):
+            logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
             return
 
         # check if transfer for same file already running
@@ -905,93 +794,8 @@ class IRCBot(AioSimpleIRCClient):
         self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item))
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
-        """Handle DCC messages.
-
-        This method handles the DCC message, which is sent by the server to the bot when the bot
-        should receive a DCC file transfer. The message contains the chunk of data from the file.
-
-        Args:
-            connection (irc.client_aio.AioConnection): The connection to the IRC server.
-            event (irc.client_aio.Event): The event that triggered this method to be called.
-
-        """
-        dcc = connection
-        if dcc not in self.current_transfers:
-            logger.debug("Received DCC message from unknown connection")
-            return
-
-        transfer = self.current_transfers[dcc]
-        ensure_transfer_defaults(transfer["filename"], transfer)
-        transfer["connected"] = True
-        transfer["status"] = "in_progress"
-        data = event.arguments[0]
-
-        # If file is already completed, ignore data
-        if not transfer["completed"]:
-            now = time.time()
-
-            # update timeout
-            if transfer["nick"].lower() in self.bot_channel_map:
-                for channel in self.bot_channel_map[transfer["nick"].lower()]:
-                    self.joined_channels[channel] = now
-
-            percent = int(100 * (transfer["bytes_received"] + transfer["offset"]) / transfer["size"])
-            if transfer["percent"] + 10 <= percent or now - transfer["last_progress_update"] >= 5:
-                transfer["percent"] = percent
-                elapsed_time = now - transfer["start_time"]
-                transfer_rate_avg = (transfer["bytes_received"] / elapsed_time) / 1024 if elapsed_time > 0 else 0
-
-                elapsed_time = now - transfer["last_progress_update"]
-                transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
-                transfer_rate = (transferred_bytes / elapsed_time) / 1024
-
-                logger.info(
-                    "[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s",
-                    transfer["nick"],
-                    transfer["filename"],
-                    transfer["percent"],
-                    transfer_rate,
-                    transfer_rate_avg,
-                )
-                transfer["last_progress_update"] = now
-                transfer["last_progress_bytes_received"] = transfer["bytes_received"]
-
-            # Check MIME type after first chunk
-            if transfer["bytes_received"] == 0 and not transfer.get("offset") and self.allowed_mimetypes:
-                mime_type = self.mime_checker.from_buffer(data)
-                if mime_type not in self.allowed_mimetypes:
-                    logger.warning("[%s] Reject %s: Invalid MIME type (%s)", transfer["nick"], transfer["filename"], mime_type)
-                    dcc.disconnect()
-                    transfer["status"] = "error"
-                    transfer["error"] = f"Invalid MIME type ({mime_type})"
-                    transfer["connected"] = False
-                    dcc.disconnect()
-                    try:
-                        del self.current_transfers[dcc]
-                    except KeyError:
-                        pass
-                    return
-
-            try:
-                with open(transfer["file_path"], "ab") as f:
-                    f.write(data)
-            except Exception as e:
-                logger.error("Error writing to file %s: %s", transfer["file_path"], e)
-                transfer["status"] = "error"
-                transfer["error"] = f"Error writing to file {transfer['file_path']}: {e}"
-                transfer["connected"] = False
-                dcc.disconnect()
-                try:
-                    del self.current_transfers[dcc]
-                except KeyError:
-                    pass
-
-        transfer["bytes_received"] += len(data)
-        # Send 64bit ACK
-        if transfer["size"] >= 1024 * 1024 * 1024 * 4:
-            dcc.send_bytes(struct.pack("!Q", transfer["bytes_received"] + transfer["offset"]))
-        else:
-            dcc.send_bytes(struct.pack("!I", transfer["bytes_received"] + transfer["offset"]))
+        """Delegate DCC message handling to transfer handler."""
+        self.transfer_handler.on_dccmsg(cast(AioDCCConnection, connection), event)
 
     async def _add_md5_check_queue_item(self, transfer: dict) -> None:
         """Add a transfer to the MD5 check queue.
@@ -1006,64 +810,8 @@ class IRCBot(AioSimpleIRCClient):
         await self.bot_manager.md5_check_queue.put(transfer)
 
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
-        """Handle DCC DISCONNECT messages.
-
-        This method handles the DCC DISCONNECT message, which is sent by the server to the bot when the bot
-        should close the DCC connection.
-
-        Args:
-            connection (irc.client_aio.AioConnection): The DCC connection to the IRC server.
-            event (irc.client_aio.Event): The event that triggered this method to be called.
-
-        """
-        logger.debug("DCC connection lost: %s", event)
-        dcc = connection
-        if dcc not in self.current_transfers:
-            logger.debug("Received DCC disconnect from unknown connection")
-            return
-
-        transfer = self.current_transfers[dcc]
-        transfer["connected"] = False
-
-        # update timeout
-        if transfer["nick"].lower() in self.bot_channel_map:
-            for channel in self.bot_channel_map[transfer["nick"].lower()]:
-                self.joined_channels[channel] = time.time()
-
-        file_path = transfer["file_path"]
-        elapsed_time = time.time() - transfer["start_time"]
-        transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024  # KB/s
-
-        if not os.path.exists(file_path):
-            logger.error("[%s] Download failed: %s does not exist", transfer["nick"], file_path)
-            if transfer["status"] != "error":
-                transfer["status"] = "error"
-                transfer["error"] = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
-        else:
-            file_size = os.path.getsize(file_path)
-            if file_size != transfer["size"]:
-                logger.error("[%s] Download %s failed: size mismatch %d != %d", transfer["nick"], transfer["filename"], file_size, transfer["size"])
-                if transfer["status"] != "error":
-                    transfer["status"] = "failed"
-                    transfer["error"] = f"size mismatch {file_size} != {transfer['size']}"
-            else:
-                logger.info("[%s] Download %s complete - size: %d bytes, %.2f KB/s", transfer["nick"], transfer["filename"], file_size, transfer_rate)
-                transfer["completed"] = time.time()
-                transfer["status"] = "completed"
-                if transfer.get("md5"):
-                    self.bot_manager.md5_check_queue.put_nowait(transfer)
-
-                if self.config.get("incomplete_suffix") and file_path.endswith(self.config["incomplete_suffix"]):
-                    target = file_path[: -len(self.config["incomplete_suffix"])]
-                    try:
-                        os.rename(file_path, target)
-                        logger.info("Renamed downloaded file to %s", transfer["filename"])
-                        transfer["file_path"] = target
-                    except Exception as e:
-                        logger.error("Error renaming %s to %s: %s", file_path, target, e)
-
-        with contextlib.suppress(KeyError):
-            del self.current_transfers[dcc]
+        """Delegate DCC disconnect handling to transfer handler."""
+        self.transfer_handler.on_dcc_disconnect(cast(AioDCCConnection, connection), event)
 
     def on_privnotice(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle NOTICE messages.
