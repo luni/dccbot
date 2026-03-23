@@ -11,9 +11,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]%(mes
 
 if __name__ == "__main__":
     app = create_app(os.path.join(os.path.dirname(__file__), "config.json"))
-    if app["bot_manager"].config.get("http", {}).get("socket"):
-        web.run_app(app, path=app["bot_manager"].config["http"]["socket"])
+    http_config = app["bot_manager"].config.get("http", {})
+    host = http_config.get("host", http_config.get("bind_addr", "127.0.0.1"))
+    port = http_config.get("port", http_config.get("bind_port", 8080))
+    if http_config.get("socket"):
+        web.run_app(app, path=http_config["socket"])
     else:
-        web.run_app(
-            app, host=app["bot_manager"].config.get("http", {}).get("host", "127.0.0.1"), port=app["bot_manager"].config.get("http", {}).get("port", 8080)
-        )
+        web.run_app(app, host=host, port=port)

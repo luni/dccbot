@@ -62,6 +62,54 @@ def test_load_config_invalid_json():
         IRCBotManager(config_file)
 
 
+def test_load_config_normalizes_legacy_keys(caplog):
+    """Test legacy config keys are normalized to canonical names."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "download_path": "/tmp/legacy-downloads",
+        "http": {"bind_addr": "0.0.0.0", "bind_port": 9999},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with caplog.at_level("WARNING"):
+        manager = IRCBotManager(config_file)
+
+    assert manager.config["default_download_path"] == "/tmp/legacy-downloads"
+    assert manager.config["http"]["host"] == "0.0.0.0"
+    assert manager.config["http"]["port"] == 9999
+    assert "deprecated" in caplog.text.lower()
+
+
+def test_load_config_rejects_invalid_http_type():
+    """Test config validation rejects invalid http block type."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "http": "not-a-dict",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with pytest.raises(ValueError, match="'http' must be a dictionary"):
+        IRCBotManager(config_file)
+
+
+def test_load_config_rejects_invalid_http_port_type():
+    """Test config validation rejects non-integer http.port."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "http": {"host": "127.0.0.1", "port": "8080"},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with pytest.raises(ValueError, match="'http.port' must be an integer"):
+        IRCBotManager(config_file)
+
+
 @pytest.mark.asyncio
 async def test_get_bot_creates_new_bot(manager):
     """Test that get_bot creates a new bot if it doesn't exist."""

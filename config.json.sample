@@ -52,8 +52,8 @@
   "incomplete_suffix": ".incomplete",
   "allow_private_ips": false,
   "http": {
-    "bind_addr": "0.0.0.0",
-    "bind_port": 9999,
+    "host": "0.0.0.0",
+    "port": 9999,
     "socket": null
   }
 }

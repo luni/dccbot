@@ -35,7 +35,7 @@ keys:
     *   `also_join`: a dictionary of channels to join if the specific channel is joined
     *   `rewrite_to_ssend`: a list of channels to rewrite xdcc send to ssend for users in this channels
 *   `default_server_config`: same as `servers`, used if the server connected to is not in `servers`
-*   `download_path`: the directory where the bot should download files
+*   `default_download_path`: the directory where the bot should download files
 *   `allowed_mimetypes`: a list of mimetypes the bot should allow to be sent
     over dcc
 *   `max_file_size`: the maximum size of a file to be sent over dcc
@@ -58,6 +58,7 @@ keys:
     *   `socket`: the path to the socket to use for the http server (instead of host and port)
     *   `port`: the port to bind the http server to, default: 8080
     *   `host`: the host to bind the http server to, default: localhost
+    *   legacy keys `bind_addr` and `bind_port` are still accepted for compatibility
 
 
 ### API
@@ -68,6 +69,7 @@ available at `http://localhost:8080/` by default.
 *   `POST /join`: join a channel
 *   `POST /part`: part a channel
 *   `POST /msg`: send a message to a channel or user
+*   `POST /cancel`: cancel a running transfer
 *   `POST /shutdown`: shutdown the bot
 *   `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers)
 
