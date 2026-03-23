@@ -8,6 +8,7 @@ from typing import Any
 from aiohttp import web
 
 from dccbot.ircbot import IRCBot
+from dccbot.transfers import ensure_transfer_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,7 @@ class IRCBotManager:
                 md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
                 for transfer in self.transfers.get(transfer_job["filename"], []):
+                    ensure_transfer_defaults(transfer_job["filename"], transfer)
                     if transfer["id"] == transfer_job["id"]:
                         transfer["file_md5"] = md5_hash
                 md5_check_queue.task_done()
