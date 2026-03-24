@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-03-24-2
+// @version      2026-03-24
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -42,6 +42,9 @@
     function normalizeApiBase(input) {
         let url = (input || '').trim();
         if (!url) return '';
+        if (!/^https?:\/\//i.test(url)) {
+            url = 'http://' + url;
+        }
         url = url.replace(/\/+$/, '');
         // Allow users to paste a UI URL and still derive API base.
         url = url.replace(/\/(?:index\.html|log\.html|info\.html)$/i, '');
@@ -62,6 +65,15 @@
         const basePath = parsed.pathname.endsWith('/') ? parsed.pathname : (parsed.pathname + '/');
         const wsPath = new URL('ws', 'http://dummy' + basePath).pathname;
         return protocol + '//' + parsed.host + wsPath;
+    }
+
+    function isMixedContentBlocked() {
+        try {
+            const endpoint = new URL(dccbot_api_base);
+            return window.location.protocol === 'https:' && endpoint.protocol === 'http:';
+        } catch (e) {
+            return false;
+        }
     }
 
     const BUTTON_STYLES = {
@@ -258,6 +270,8 @@
     let transferOverlayCollapsed = false;
     let transferSocket = null;
     let transferReconnectTimer = null;
+    let transferPollTimer = null;
+    let transferUsingPollingFallback = false;
     const transferStateByKey = {};
     const transferEventList = [];
 
@@ -509,6 +523,7 @@
     }
 
     function scheduleTransferReconnect() {
+        if (transferUsingPollingFallback) return;
         if (transferReconnectTimer) return;
         transferReconnectTimer = setTimeout(function () {
             transferReconnectTimer = null;
@@ -516,8 +531,56 @@
         }, 2000);
     }
 
+    function startTransferPollingFallback(reasonText) {
+        transferUsingPollingFallback = true;
+        if (transferReconnectTimer) {
+            clearTimeout(transferReconnectTimer);
+            transferReconnectTimer = null;
+        }
+        if (transferStatusLine) {
+            transferStatusLine.textContent = reasonText || 'fallback • polling /info';
+        }
+        pollTransferInfo();
+        if (transferPollTimer) clearInterval(transferPollTimer);
+        transferPollTimer = setInterval(pollTransferInfo, 3000);
+    }
+
+    function pollTransferInfo() {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: buildApiUrl('/info'),
+            onload: function (response) {
+                if (!response || response.status < 200 || response.status >= 300) {
+                    if (transferStatusLine) transferStatusLine.textContent = 'offline • HTTP ' + (response ? response.status : '?');
+                    return;
+                }
+                let payload = null;
+                try {
+                    payload = JSON.parse(response.responseText || '{}');
+                } catch (e) {
+                    if (transferStatusLine) transferStatusLine.textContent = 'invalid /info response';
+                    return;
+                }
+                const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
+                processTransferEvents(transfers);
+                renderTransferOverlay(transfers);
+            },
+            onerror: function () {
+                if (transferStatusLine) transferStatusLine.textContent = 'offline • network error';
+            },
+            ontimeout: function () {
+                if (transferStatusLine) transferStatusLine.textContent = 'offline • timeout';
+            }
+        });
+    }
+
     function startTransferStream() {
         ensureTransferOverlay();
+        if (transferUsingPollingFallback) return;
+        if (isMixedContentBlocked()) {
+            startTransferPollingFallback('fallback • mixed content (https page + http endpoint)');
+            return;
+        }
         if (transferSocket && (transferSocket.readyState === WebSocket.OPEN || transferSocket.readyState === WebSocket.CONNECTING)) {
             return;
         }
@@ -527,8 +590,7 @@
             wsUrl = buildWsUrl();
             transferSocket = new WebSocket(wsUrl);
         } catch (e) {
-            transferStatusLine.textContent = 'offline • websocket init failed';
-            scheduleTransferReconnect();
+            startTransferPollingFallback('fallback • websocket init failed');
             return;
         }
 
