@@ -24,11 +24,20 @@ def test_parse_dcc_send_valid_ipv4_num():
     assert parsed.size == 1024
 
 
+def test_parse_dcc_send_valid_ipv6():
+    """Test parsing valid DCC SEND payload with IPv6 literal."""
+    parsed = parse_dcc_send('SEND "file.mkv" 2001:db8::1 5000 1024')
+    assert parsed is not None
+    assert parsed.peer_address == "2001:db8::1"
+
+
 def test_parse_dcc_send_rejects_invalid():
     """Test parser rejects malformed DCC SEND payload."""
     assert parse_dcc_send('SEND "file.mkv" x.x.x.x 5000 1024') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 -1 1024') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 0') is None
+    assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 notanint') is None
+    assert parse_dcc_send('SEND "file.mkv" 2001:db8:::1 5000 1024') is None
 
 
 def test_is_valid_filename():
@@ -36,3 +45,4 @@ def test_is_valid_filename():
     assert is_valid_filename("/tmp/downloads", "file.mkv") is True
     assert is_valid_filename("/tmp/downloads", "../file.mkv") is False
     assert is_valid_filename("/tmp/downloads", "dir/file.mkv") is False
+    assert is_valid_filename("./downloads", "file.mkv") is False
