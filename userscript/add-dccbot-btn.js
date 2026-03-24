@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-03-24
+// @version      2026-03-24-2
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -39,7 +39,30 @@
         return;
     }
 
-    console.log("API Endpoint for DCCBot: " + dccbot_api);
+    function normalizeApiBase(input) {
+        let url = (input || '').trim();
+        if (!url) return '';
+        url = url.replace(/\/+$/, '');
+        // Allow users to paste a UI URL and still derive API base.
+        url = url.replace(/\/(?:index\.html|log\.html|info\.html)$/i, '');
+        return url;
+    }
+
+    const dccbot_api_base = normalizeApiBase(dccbot_api);
+    console.log("API Endpoint for DCCBot: " + dccbot_api_base);
+
+    function buildApiUrl(path) {
+        const normalizedPath = String(path || '').startsWith('/') ? path : ('/' + path);
+        return dccbot_api_base + normalizedPath;
+    }
+
+    function buildWsUrl() {
+        const parsed = new URL(dccbot_api_base);
+        const protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+        const basePath = parsed.pathname.endsWith('/') ? parsed.pathname : (parsed.pathname + '/');
+        const wsPath = new URL('ws', 'http://dummy' + basePath).pathname;
+        return protocol + '//' + parsed.host + wsPath;
+    }
 
     const BUTTON_STYLES = {
         default: {
@@ -199,7 +222,7 @@
         const summary = formatMsgSummary(server, channel, user, message);
         GM_xmlhttpRequest({
             method: "POST",
-            url: dccbot_api + '/msg',
+            url: buildApiUrl('/msg'),
             headers: {
                 "Content-Type": "application/json"
             },
@@ -233,7 +256,8 @@
     let transferEvents = null;
     let transferStatusLine = null;
     let transferOverlayCollapsed = false;
-    let transferPollTimer = null;
+    let transferSocket = null;
+    let transferReconnectTimer = null;
     const transferStateByKey = {};
     const transferEventList = [];
 
@@ -429,7 +453,6 @@
                     cancelTransfer(t.server, t.nick, t.filename, function (ok) {
                         if (ok) {
                             cancelBtn.textContent = '✓';
-                            pollTransferInfo();
                         } else {
                             cancelBtn.disabled = false;
                             cancelBtn.textContent = 'X';
@@ -485,50 +508,71 @@
         });
     }
 
-    function pollTransferInfo() {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: dccbot_api + '/info',
-            onload: function (response) {
-                if (!response || response.status < 200 || response.status >= 300) {
-                    transferStatusLine.textContent = 'offline • HTTP ' + (response ? response.status : '?');
-                    return;
-                }
-                let payload = null;
-                try {
-                    payload = JSON.parse(response.responseText || '{}');
-                } catch (e) {
-                    transferStatusLine.textContent = 'invalid /info response';
-                    return;
-                }
-                const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
-                processTransferEvents(transfers);
-                renderTransferOverlay(transfers);
-            },
-            onerror: function () {
-                if (transferStatusLine) {
-                    transferStatusLine.textContent = 'offline • network error';
-                }
-            },
-            ontimeout: function () {
-                if (transferStatusLine) {
-                    transferStatusLine.textContent = 'offline • timeout';
-                }
+    function scheduleTransferReconnect() {
+        if (transferReconnectTimer) return;
+        transferReconnectTimer = setTimeout(function () {
+            transferReconnectTimer = null;
+            startTransferStream();
+        }, 2000);
+    }
+
+    function startTransferStream() {
+        ensureTransferOverlay();
+        if (transferSocket && (transferSocket.readyState === WebSocket.OPEN || transferSocket.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        let wsUrl;
+        try {
+            wsUrl = buildWsUrl();
+            transferSocket = new WebSocket(wsUrl);
+        } catch (e) {
+            transferStatusLine.textContent = 'offline • websocket init failed';
+            scheduleTransferReconnect();
+            return;
+        }
+
+        transferStatusLine.textContent = 'connecting...';
+
+        transferSocket.addEventListener('open', function () {
+            transferStatusLine.textContent = 'connected • ' + relativeNowTs();
+        });
+
+        transferSocket.addEventListener('message', function (event) {
+            if (!event || !event.data) return;
+            let payload = null;
+            try {
+                payload = JSON.parse(event.data);
+            } catch (e) {
+                return;
             }
+            if (!payload || payload.type !== 'transfers') return;
+
+            const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
+            processTransferEvents(transfers);
+            renderTransferOverlay(transfers);
+        });
+
+        transferSocket.addEventListener('close', function () {
+            transferStatusLine.textContent = 'offline • reconnecting';
+            transferSocket = null;
+            scheduleTransferReconnect();
+        });
+
+        transferSocket.addEventListener('error', function () {
+            transferStatusLine.textContent = 'offline • websocket error';
         });
     }
 
     function initTransferOverlay() {
         ensureTransferOverlay();
-        pollTransferInfo();
-        if (transferPollTimer) clearInterval(transferPollTimer);
-        transferPollTimer = setInterval(pollTransferInfo, 3000);
+        startTransferStream();
     }
 
     function cancelTransfer(server, nick, filename, done) {
         GM_xmlhttpRequest({
             method: "POST",
-            url: dccbot_api + '/cancel',
+            url: buildApiUrl('/cancel'),
             headers: {
                 "Content-Type": "application/json"
             },
