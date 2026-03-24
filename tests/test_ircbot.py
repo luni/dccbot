@@ -586,6 +586,16 @@ def test_on_dcc_send_private_ip_allowed(bot_factory, mock_bot_manager):
         # Should not reject
 
 
+def test_on_ctcp_with_missing_arguments(bot):
+    """Test on_ctcp with malformed/short argument list."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.arguments = []
+
+    # Should not raise
+    bot.on_ctcp(bot.connection, event)
+
+
 @pytest.mark.asyncio
 async def test_join_channels(bot):
     """Test _join_channels method."""
