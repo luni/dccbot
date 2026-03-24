@@ -2,13 +2,14 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2025-12-01
-// @description  Add Button for DCCbot to automate downloads.
+// @version      2026-03-24
+// @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
 // @match        https://nibl.co.uk/*
 // @match        https://xdcc.animk.info/*
 // @match        https://xdcc.rocks/*
+// @match        https://www.xdcc.rocks/*
 // @match        https://xdcc-search.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
@@ -55,14 +56,118 @@
         }
     };
 
+    function normalizeChannel(channel) {
+        if (!channel) return '';
+        const trimmed = channel.trim();
+        return trimmed.startsWith('#') ? trimmed : ('#' + trimmed);
+    }
+
+    function extractPackNumber(value) {
+        return (value || '').toString().replace(/[^\d]/g, '');
+    }
+
+    function parseIrcTarget(href) {
+        if (!href) return { server: null, channel: null };
+        const raw = href.trim();
+
+        // Handles forms like irc://server/#channel and irc://server/channel
+        const parsed = raw.match(/^irc:\/\/([^/]+)\/(?:#)?([^/?#]+)$/i);
+        if (parsed) {
+            return {
+                server: (parsed[1] || '').trim() || null,
+                channel: normalizeChannel(parsed[2] || '')
+            };
+        }
+
+        // Fallback for less common URL shapes.
+        try {
+            const url = new URL(raw);
+            const channel = (url.hash || url.pathname || '').replace(/^\//, '').replace(/^#/, '');
+            return {
+                server: url.hostname || null,
+                channel: normalizeChannel(channel)
+            };
+        } catch (e) {
+            return { server: null, channel: null };
+        }
+    }
+
+    function observeMutations(target, onMutation, options) {
+        if (!target) return null;
+        const observer = new MutationObserver(onMutation);
+        observer.observe(target, options || { childList: true, subtree: true });
+        return observer;
+    }
+
+    let noticeContainer = null;
+
+    function getNoticeContainer() {
+        if (noticeContainer && noticeContainer.isConnected) return noticeContainer;
+        noticeContainer = document.createElement('div');
+        noticeContainer.style.position = 'fixed';
+        noticeContainer.style.right = '12px';
+        noticeContainer.style.bottom = '12px';
+        noticeContainer.style.zIndex = '2147483647';
+        noticeContainer.style.display = 'flex';
+        noticeContainer.style.flexDirection = 'column';
+        noticeContainer.style.gap = '6px';
+        noticeContainer.style.maxWidth = 'min(420px, 90vw)';
+        document.body.appendChild(noticeContainer);
+        return noticeContainer;
+    }
+
+    function showNotice(message, kind, timeoutMs) {
+        if (!message) return;
+        const container = getNoticeContainer();
+        const note = document.createElement('div');
+        note.textContent = message;
+        note.style.padding = '8px 10px';
+        note.style.borderRadius = '6px';
+        note.style.fontSize = '12px';
+        note.style.lineHeight = '1.35';
+        note.style.wordBreak = 'break-word';
+        note.style.boxShadow = '0 4px 14px rgba(0,0,0,0.22)';
+        note.style.color = '#fff';
+        if (kind === 'error') {
+            note.style.background = '#b81d13';
+        } else if (kind === 'success') {
+            note.style.background = '#227a34';
+        } else {
+            note.style.background = '#2e3238';
+        }
+        container.appendChild(note);
+        setTimeout(function () {
+            note.remove();
+            if (container.childElementCount === 0) {
+                container.remove();
+            }
+        }, timeoutMs || 5000);
+    }
+
+    function formatMsgSummary(server, channel, user, message) {
+        return [server, channel, user, message].filter(Boolean).join(' | ');
+    }
+
+    function trimResponseText(text, maxLen) {
+        const clean = (text || '').replace(/\s+/g, ' ').trim();
+        if (clean.length <= maxLen) return clean;
+        return clean.slice(0, maxLen) + '...';
+    }
+
     function handleDccbotButtonClick(evt) {
         evt.preventDefault();
         if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
         evt.stopPropagation();
         const d = this.dataset;
-        send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack);
-        this.style.background = '#CECECE';
-        this.textContent = 'Sent';
+        const btn = this;
+        btn.disabled = true;
+        btn.style.background = '#808080';
+        btn.textContent = 'Sending...';
+        send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack, function (ok) {
+            btn.style.background = ok ? '#CECECE' : '#b81d13';
+            btn.textContent = ok ? 'Sent' : 'Retry';
+            btn.disabled = false;
+        });
     }
 
     function applyStyles(element, defaultStyle, styleOverrides) {
@@ -78,16 +183,20 @@
         btn.textContent = 'Down';
 
         applyStyles(btn, BUTTON_STYLES.default, styleOverrides);
+        configure_dccbot_btn(btn, server, channel, botname, packnum);
+        return btn;
+    }
 
+    function configure_dccbot_btn(btn, server, channel, botname, packnum) {
         btn.dataset.server = server;
         btn.dataset.channel = channel;
         btn.dataset.bot = botname;
         btn.dataset.pack = packnum;
         btn.onclick = handleDccbotButtonClick;
-        return btn;
     }
 
-    function send_msg(server, channel, user, message) {
+    function send_msg(server, channel, user, message, done) {
+        const summary = formatMsgSummary(server, channel, user, message);
         GM_xmlhttpRequest({
             method: "POST",
             url: dccbot_api + '/msg',
@@ -101,7 +210,353 @@
                 message: message
             }),
             onload: function (response) {
-                console.log("[DCCBOT] API Response: " + response.responseText);
+                const text = trimResponseText(response.responseText, 220);
+                const ok = response.status >= 200 && response.status < 300;
+                console.log("[DCCBOT] API Response (" + response.status + "): " + response.responseText);
+                showNotice('[DCCBOT] ' + (ok ? 'Sent' : 'Failed') + ': ' + summary + ' -> [' + response.status + '] ' + (text || '(empty response)'), ok ? 'success' : 'error', ok ? 5500 : 9000);
+                if (done) done(ok, response);
+            },
+            onerror: function (response) {
+                const details = response && response.error ? response.error : 'network error';
+                showNotice('[DCCBOT] Failed: ' + summary + ' -> ' + details, 'error', 9000);
+                if (done) done(false, response);
+            },
+            ontimeout: function (response) {
+                showNotice('[DCCBOT] Failed: ' + summary + ' -> request timeout', 'error', 9000);
+                if (done) done(false, response);
+            }
+        });
+    }
+
+    let transferOverlay = null;
+    let transferBody = null;
+    let transferEvents = null;
+    let transferStatusLine = null;
+    let transferOverlayCollapsed = false;
+    let transferPollTimer = null;
+    const transferStateByKey = {};
+    const transferEventList = [];
+
+    function isTerminalTransferStatus(status) {
+        return ['completed', 'failed', 'error', 'cancelled'].indexOf(status) !== -1;
+    }
+
+    function transferKey(t) {
+        return [t.server || '', t.nick || '', t.filename || ''].join('|');
+    }
+
+    function formatBytes(bytes) {
+        const value = Number(bytes) || 0;
+        if (value >= 1024 * 1024 * 1024) return (value / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+        if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(2) + ' MB';
+        if (value >= 1024) return (value / 1024).toFixed(2) + ' KB';
+        return value.toFixed(0) + ' B';
+    }
+
+    function relativeNowTs() {
+        return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function addTransferEvent(text, kind) {
+        transferEventList.unshift({
+            text: text,
+            kind: kind || 'info',
+            at: relativeNowTs()
+        });
+        if (transferEventList.length > 6) transferEventList.length = 6;
+    }
+
+    function ensureTransferOverlay() {
+        if (transferOverlay && transferOverlay.isConnected) return transferOverlay;
+        transferOverlay = document.createElement('div');
+        transferOverlay.style.position = 'fixed';
+        transferOverlay.style.top = '12px';
+        transferOverlay.style.right = '12px';
+        transferOverlay.style.zIndex = '2147483646';
+        transferOverlay.style.width = 'min(360px, 92vw)';
+        transferOverlay.style.background = 'rgba(22, 25, 30, 0.95)';
+        transferOverlay.style.color = '#eef2f5';
+        transferOverlay.style.border = '1px solid rgba(255,255,255,0.15)';
+        transferOverlay.style.borderRadius = '8px';
+        transferOverlay.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
+        transferOverlay.style.backdropFilter = 'blur(3px)';
+        transferOverlay.style.fontFamily = 'system-ui, -apple-system, Segoe UI, sans-serif';
+        transferOverlay.style.fontSize = '12px';
+        transferOverlay.style.lineHeight = '1.35';
+
+        const header = document.createElement('div');
+        header.style.display = 'flex';
+        header.style.justifyContent = 'space-between';
+        header.style.alignItems = 'center';
+        header.style.padding = '8px 10px';
+        header.style.cursor = 'pointer';
+        header.style.borderBottom = '1px solid rgba(255,255,255,0.12)';
+
+        const title = document.createElement('div');
+        title.textContent = 'DCCBot Transfers';
+        title.style.fontWeight = '700';
+        title.style.letterSpacing = '0.2px';
+        header.appendChild(title);
+
+        transferStatusLine = document.createElement('div');
+        transferStatusLine.textContent = '...';
+        transferStatusLine.style.color = '#9fb2bf';
+        transferStatusLine.style.fontSize = '11px';
+        header.appendChild(transferStatusLine);
+
+        const content = document.createElement('div');
+        content.style.padding = '8px 10px 10px 10px';
+        content.style.display = 'flex';
+        content.style.flexDirection = 'column';
+        content.style.gap = '8px';
+
+        transferBody = document.createElement('div');
+        transferBody.style.display = 'flex';
+        transferBody.style.flexDirection = 'column';
+        transferBody.style.gap = '6px';
+        content.appendChild(transferBody);
+
+        const eventsTitle = document.createElement('div');
+        eventsTitle.textContent = 'Recent events';
+        eventsTitle.style.color = '#9fb2bf';
+        eventsTitle.style.fontSize = '11px';
+        eventsTitle.style.marginTop = '2px';
+        content.appendChild(eventsTitle);
+
+        transferEvents = document.createElement('div');
+        transferEvents.style.display = 'flex';
+        transferEvents.style.flexDirection = 'column';
+        transferEvents.style.gap = '4px';
+        content.appendChild(transferEvents);
+
+        header.addEventListener('click', function () {
+            transferOverlayCollapsed = !transferOverlayCollapsed;
+            content.style.display = transferOverlayCollapsed ? 'none' : 'flex';
+        });
+
+        transferOverlay.appendChild(header);
+        transferOverlay.appendChild(content);
+        document.body.appendChild(transferOverlay);
+        return transferOverlay;
+    }
+
+    function renderTransferOverlay(transfers) {
+        ensureTransferOverlay();
+
+        const rows = Array.isArray(transfers) ? transfers : [];
+        const active = rows.filter(function (t) {
+            return t && (t.status === 'in_progress' || t.status === 'started');
+        });
+        transferStatusLine.textContent = active.length + ' active • ' + relativeNowTs();
+
+        transferBody.innerHTML = '';
+        if (active.length === 0) {
+            const empty = document.createElement('div');
+            empty.textContent = 'No active transfers';
+            empty.style.color = '#aab5bf';
+            transferBody.appendChild(empty);
+        } else {
+            active.slice(0, 4).forEach(function (t) {
+                const size = Number(t.size) || 0;
+                const received = Number(t.received) || 0;
+                const percent = size > 0 ? Math.max(0, Math.min(100, Math.round((received / size) * 100))) : 0;
+
+                const row = document.createElement('div');
+                row.style.padding = '6px 7px';
+                row.style.border = '1px solid rgba(255,255,255,0.12)';
+                row.style.borderRadius = '6px';
+                row.style.background = 'rgba(255,255,255,0.03)';
+
+                const name = document.createElement('div');
+                name.textContent = t.filename || 'unknown file';
+                name.style.fontWeight = '600';
+                row.appendChild(name);
+
+                const meta = document.createElement('div');
+                meta.textContent = (t.nick || '?') + ' @ ' + (t.server || '?');
+                meta.style.color = '#9fb2bf';
+                meta.style.fontSize = '11px';
+                row.appendChild(meta);
+
+                const details = document.createElement('div');
+                details.textContent = percent + '% • ' + formatBytes(received) + ' / ' + formatBytes(size) + ' • ' + Number(t.speed || 0).toFixed(2) + ' KB/s';
+                details.style.marginTop = '2px';
+                row.appendChild(details);
+
+                const barRow = document.createElement('div');
+                barRow.style.marginTop = '6px';
+                barRow.style.display = 'flex';
+                barRow.style.alignItems = 'center';
+                barRow.style.gap = '6px';
+
+                const bar = document.createElement('div');
+                bar.style.flex = '1';
+                bar.style.height = '6px';
+                bar.style.background = 'rgba(255,255,255,0.15)';
+                bar.style.borderRadius = '3px';
+                bar.style.overflow = 'hidden';
+
+                const fill = document.createElement('div');
+                fill.style.height = '100%';
+                fill.style.width = percent + '%';
+                fill.style.background = '#37a169';
+                fill.style.transition = 'width 0.4s ease';
+                bar.appendChild(fill);
+                barRow.appendChild(bar);
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.textContent = 'X';
+                cancelBtn.title = 'Cancel transfer';
+                cancelBtn.setAttribute('aria-label', 'Cancel transfer');
+                cancelBtn.style.background = '#b81d13';
+                cancelBtn.style.color = '#fff';
+                cancelBtn.style.border = 'none';
+                cancelBtn.style.borderRadius = '999px';
+                cancelBtn.style.width = '20px';
+                cancelBtn.style.height = '20px';
+                cancelBtn.style.lineHeight = '18px';
+                cancelBtn.style.padding = '0';
+                cancelBtn.style.textAlign = 'center';
+                cancelBtn.style.cursor = 'pointer';
+                cancelBtn.style.fontSize = '12px';
+                cancelBtn.style.fontWeight = '700';
+                cancelBtn.addEventListener('click', function (evt) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    cancelBtn.disabled = true;
+                    cancelBtn.textContent = '...';
+                    cancelBtn.style.opacity = '0.8';
+                    cancelTransfer(t.server, t.nick, t.filename, function (ok) {
+                        if (ok) {
+                            cancelBtn.textContent = '✓';
+                            pollTransferInfo();
+                        } else {
+                            cancelBtn.disabled = false;
+                            cancelBtn.textContent = 'X';
+                            cancelBtn.style.opacity = '1';
+                        }
+                    });
+                });
+                barRow.appendChild(cancelBtn);
+                row.appendChild(barRow);
+
+                transferBody.appendChild(row);
+            });
+        }
+
+        transferEvents.innerHTML = '';
+        if (!transferEventList.length) {
+            const emptyEvent = document.createElement('div');
+            emptyEvent.textContent = 'No recent transfer events';
+            emptyEvent.style.color = '#aab5bf';
+            transferEvents.appendChild(emptyEvent);
+        } else {
+            transferEventList.forEach(function (item) {
+                const row = document.createElement('div');
+                row.textContent = '[' + item.at + '] ' + item.text;
+                row.style.color = item.kind === 'error' ? '#ff9898' : '#b7c4cf';
+                transferEvents.appendChild(row);
+            });
+        }
+    }
+
+    function processTransferEvents(transfers) {
+        const currentByKey = {};
+        (transfers || []).forEach(function (t) {
+            if (!t || !t.filename) return;
+            const key = transferKey(t);
+            const status = (t.status || 'unknown').toLowerCase();
+            currentByKey[key] = status;
+
+            const prev = transferStateByKey[key];
+            if (!prev && (status === 'in_progress' || status === 'started')) {
+                addTransferEvent('Started: ' + t.filename + ' (' + (t.nick || '?') + ')', 'info');
+            } else if (prev && prev !== status && isTerminalTransferStatus(status)) {
+                const kind = status === 'completed' ? 'success' : 'error';
+                addTransferEvent((status === 'completed' ? 'Finished: ' : 'Ended (' + status + '): ') + t.filename + ' (' + (t.nick || '?') + ')', kind);
+            }
+        });
+
+        Object.keys(transferStateByKey).forEach(function (key) {
+            delete transferStateByKey[key];
+        });
+        Object.keys(currentByKey).forEach(function (key) {
+            transferStateByKey[key] = currentByKey[key];
+        });
+    }
+
+    function pollTransferInfo() {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: dccbot_api + '/info',
+            onload: function (response) {
+                if (!response || response.status < 200 || response.status >= 300) {
+                    transferStatusLine.textContent = 'offline • HTTP ' + (response ? response.status : '?');
+                    return;
+                }
+                let payload = null;
+                try {
+                    payload = JSON.parse(response.responseText || '{}');
+                } catch (e) {
+                    transferStatusLine.textContent = 'invalid /info response';
+                    return;
+                }
+                const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
+                processTransferEvents(transfers);
+                renderTransferOverlay(transfers);
+            },
+            onerror: function () {
+                if (transferStatusLine) {
+                    transferStatusLine.textContent = 'offline • network error';
+                }
+            },
+            ontimeout: function () {
+                if (transferStatusLine) {
+                    transferStatusLine.textContent = 'offline • timeout';
+                }
+            }
+        });
+    }
+
+    function initTransferOverlay() {
+        ensureTransferOverlay();
+        pollTransferInfo();
+        if (transferPollTimer) clearInterval(transferPollTimer);
+        transferPollTimer = setInterval(pollTransferInfo, 3000);
+    }
+
+    function cancelTransfer(server, nick, filename, done) {
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: dccbot_api + '/cancel',
+            headers: {
+                "Content-Type": "application/json"
+            },
+            data: JSON.stringify({
+                server: server,
+                nick: nick,
+                filename: filename
+            }),
+            onload: function (response) {
+                let message = '';
+                try {
+                    const payload = JSON.parse(response.responseText || '{}');
+                    message = payload.message || '';
+                } catch (e) {
+                    message = trimResponseText(response.responseText, 180);
+                }
+                const ok = response.status >= 200 && response.status < 300;
+                showNotice('[DCCBOT] ' + (ok ? 'Cancel requested' : 'Cancel failed') + ': ' + filename + ' -> [' + response.status + '] ' + (message || '(empty response)'), ok ? 'success' : 'error', ok ? 5500 : 9000);
+                if (done) done(ok, response);
+            },
+            onerror: function (response) {
+                const details = response && response.error ? response.error : 'network error';
+                showNotice('[DCCBOT] Cancel failed: ' + filename + ' -> ' + details, 'error', 9000);
+                if (done) done(false, response);
+            },
+            ontimeout: function (response) {
+                showNotice('[DCCBOT] Cancel failed: ' + filename + ' -> request timeout', 'error', 9000);
+                if (done) done(false, response);
             }
         });
     }
@@ -123,28 +578,61 @@
     }
 
     function add_button_xdcc_eu() {
-        document.getElementsByClassName('container')[0].style.maxWidth = "100%";
-        document.getElementsByClassName('container')[0].style.width = "90%";
-        document.getElementsByClassName('twelve')[0].style.marginTop = 0;
+        const mainContainer = document.getElementsByClassName('container')[0];
+        const mainColumn = document.getElementsByClassName('twelve')[0];
+        if (mainContainer) {
+            mainContainer.style.maxWidth = "100%";
+            mainContainer.style.width = "90%";
+        }
+        if (mainColumn) {
+            mainColumn.style.marginTop = 0;
+        }
 
         const all_results = [];
-        for (const x of document.getElementById('table').getElementsByTagName('tbody')[0].getElementsByTagName('tr')) {
-            const d = [
-                x.getElementsByTagName('td')[1].getElementsByTagName('a')[0].href.replace('irc://', '').split('/')[0],
-            ];
-            for (let y = 1; y < 4; y++) {
-                d.push(x.getElementsByTagName('td')[y].textContent.trim());
+        const rows = document.querySelectorAll('#table tbody tr');
+        for (const x of rows) {
+            const cells = x.querySelectorAll('td');
+            if (cells.length < 4) continue;
+
+            let server = null;
+            let channel = null;
+
+            const infoLink = cells[1].querySelector('a[data-s][data-c]');
+            if (infoLink) {
+                server = (infoLink.dataset.s || '').trim();
+                channel = normalizeChannel(infoLink.dataset.c || '');
             }
-            d[3] = d[3].replace('#', '');
-            all_results.push(d.join(';'));
-            const btnCell = document.createElement('td'),
-            btn = get_download_btn(d[0], d[1], d[2], d[3]);
+
+            if (!server || !channel) {
+                const ircLink = cells[1].querySelector('a[href^="irc://"]');
+                if (ircLink) {
+                    const meta = parseIrcTarget(ircLink.getAttribute('href') || ircLink.href || '');
+                    server = server || meta.server;
+                    channel = channel || meta.channel;
+                }
+            }
+
+            const botname = cells[2].textContent.trim();
+            const packnum = extractPackNumber(cells[3].textContent);
+            if (!server || !channel || !botname || !packnum) continue;
+            all_results.push([server, channel, botname, packnum].join(';'));
+
+            if (x.querySelector('.dccbot-btn')) continue;
+
+            const btnCell = document.createElement('td');
+            const btn = get_download_btn(server, channel, botname, packnum);
             btnCell.appendChild(btn);
             x.appendChild(btnCell);
         }
 
-        document.getElementsByTagName('h4')[0].onclick = function (e) {
-            document.getElementById('msg').innerHTML = '<textarea style="width:100%;" rows=8>' + all_results.join('\n') + '</textarea>';
+        const h4 = document.getElementsByTagName('h4')[0];
+        if (h4) {
+            h4.onclick = function () {
+                const msg = document.getElementById('msg');
+                if (msg) {
+                    msg.innerHTML = '<textarea style="width:100%;" rows=8>' + all_results.join('\n') + '</textarea>';
+                }
+            };
         }
     }
 
@@ -164,23 +652,25 @@
         }
 
         const copy_batch_btn = document.getElementById('copy-as-batch');
-        copy_batch_btn.innerHTML = 'Download selected';
-        copy_batch_btn.onclick = function (e) {
-            e.preventDefault();
-            const bots = {};
-            for (const ckbox of document.querySelectorAll("input[name='batch']")) {
-                if (ckbox.checked) {
-                    if (!bots[ckbox.dataset.botname]) {
-                        bots[ckbox.dataset.botname] = [];
+        if (copy_batch_btn) {
+            copy_batch_btn.innerHTML = 'Download selected';
+            copy_batch_btn.onclick = function (e) {
+                e.preventDefault();
+                const bots = {};
+                for (const ckbox of document.querySelectorAll("input[name='batch']")) {
+                    if (ckbox.checked) {
+                        if (!bots[ckbox.dataset.botname]) {
+                            bots[ckbox.dataset.botname] = [];
+                        }
+                        bots[ckbox.dataset.botname].push(ckbox.dataset.botpack);
                     }
-                    bots[ckbox.dataset.botname].push(ckbox.dataset.botpack);
                 }
-            }
 
-            for (const botname in bots) {
-                send_msg("irc.rizon.net", "#nibl", botname, "xdcc batch " + bots[botname].join(','));
-            }
-        };
+                for (const botname in bots) {
+                    send_msg("irc.rizon.net", "#nibl", botname, "xdcc batch " + bots[botname].join(','));
+                }
+            };
+        }
     }
 
     function add_button_animk_info() {
@@ -202,8 +692,7 @@
                 return;
             }
 
-            const observer = new MutationObserver(scheduleProcess);
-            observer.observe(tableBody, { childList: true, subtree: true });
+            observeMutations(tableBody, scheduleProcess);
             scheduleProcess();
         }
 
@@ -229,7 +718,7 @@
             const serverMatch = bodyText.match(/irc\.([a-z.]+)/i);
             const channelMatch = bodyText.match(/#([a-zA-Z0-9_-]+)/);
             const server = serverMatch ? 'irc.' + serverMatch[1] : 'irc.xertion.org';
-            const channel = channelMatch ? channelMatch[1] : 'MK';
+            const channel = channelMatch ? normalizeChannel(channelMatch[1]) : '#MK';
 
             for (const row of rows) {
                 if (row.querySelector('.dccbot-btn')) continue; // Already processed
@@ -264,14 +753,48 @@
         const resultsRoot = document.querySelector('.results');
         if (!resultsRoot) return;
 
-        const observer = new MutationObserver(function () {
+        observeMutations(resultsRoot, function () {
             if (resultsRoot.querySelector('tr.font2_bg0_bg1')) {
                 processRocksTable();
             }
         });
-        observer.observe(resultsRoot, { childList: true, subtree: true });
         processRocksTable();
 
+
+        function parseRocksSectionMeta(section) {
+            let server = null;
+            let channel = null;
+
+            const channelAnchor = section.querySelector('a[href^="irc://"]');
+            if (channelAnchor) {
+                const meta = parseIrcTarget(channelAnchor.getAttribute('href') || channelAnchor.href || '');
+                server = meta.server;
+                channel = meta.channel;
+            }
+
+            if (!server) {
+                const serverRow = Array.from(section.querySelectorAll('tr')).find(function (tr) {
+                    return /server\s*:/i.test(tr.textContent || '');
+                });
+                if (serverRow) {
+                    const serverText = serverRow.textContent.replace(/server\s*:/i, '').trim();
+                    server = serverText || null;
+                }
+            }
+
+            if (!channel) {
+                const channelRow = Array.from(section.querySelectorAll('tr')).find(function (tr) {
+                    return /channel\s*:/i.test(tr.textContent || '');
+                });
+                if (channelRow) {
+                    const channelText = channelRow.textContent.replace(/channel\s*:/i, '').trim();
+                    channel = channelText || null;
+                }
+            }
+
+            if (channel && !channel.startsWith('#')) channel = '#' + channel;
+            return { server: server, channel: channel };
+        }
 
         function processRocksTable() {
             const table = resultsRoot.querySelector('table');
@@ -283,17 +806,9 @@
             const sections = Array.from(table.children);
             sections.forEach(function (section) {
                 if (section.tagName === 'THEAD') {
-                    const channelAnchor = section.querySelector('a[href^="irc://"]');
-                    if (channelAnchor) {
-                        try {
-                            const url = new URL(channelAnchor.href);
-                            currentServer = url.hostname;
-                            currentChannel = channelAnchor.href.match(/(\#.+)$/)[1];
-                        } catch (e) {
-                            currentServer = null;
-                            currentChannel = null;
-                        }
-                    }
+                    const meta = parseRocksSectionMeta(section);
+                    currentServer = meta.server;
+                    currentChannel = meta.channel;
 
                 } else if (section.tagName === 'TBODY' && currentServer && currentChannel) {
                     const dataRows = Array.from(section.querySelectorAll('tr')).filter(function (row) {
@@ -306,7 +821,8 @@
                         if (cells.length < 3) return;
 
                         const botname = cells[0].textContent.trim();
-                        const packnum = cells[1].textContent.trim();
+                        const packnum = extractPackNumber(cells[1].textContent);
+                        if (!packnum) return;
                         const filenameCell = cells[2];
                         if (filenameCell) {
                             const btn = get_download_btn(currentServer, currentChannel, botname, packnum);
@@ -330,13 +846,17 @@
         metaItems.forEach(function (item) {
             const labelEl = item.querySelector(".pack-meta-label");
             if (!labelEl) return;
-            const label = labelEl.textContent.trim().toLowerCase().replace(":", "");
+            const label = labelEl.textContent
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
             const valueEl = labelEl.nextElementSibling;
             if (!valueEl) return;
 
             if (label === "bot") {
                 meta.botname = valueEl.textContent.trim();
-            } else if (label === "pack") {
+            } else if (label.indexOf("pack") === 0) {
                 meta.packnum = valueEl.textContent.trim().replace(/^#/, "");
             } else if (label === "network") {
                 meta.networkName = valueEl.textContent.trim();
@@ -350,31 +870,50 @@
     }
 
     function add_button_xdcc_search() {
-        const cards = document.querySelectorAll(".pack-card");
-        if (!cards.length) return;
+        function processCards() {
+            const cards = document.querySelectorAll(".pack-card");
+            if (!cards.length) return;
 
-        cards.forEach(function (card) {
-            const meta = get_xdcc_search_meta(card);
+            cards.forEach(function (card) {
+                const meta = get_xdcc_search_meta(card);
+                const channel = normalizeChannel(meta.channelName || '');
+                const packnum = extractPackNumber(meta.packnum);
 
-            if (!meta.botname || !meta.packnum || !meta.channelName) {
-                return;
-            }
+                if (!meta.botname || !packnum || !channel) {
+                    return;
+                }
 
-            const server = mapNetworkToServer(meta.networkName);
-            const packHeader = card.querySelector(".pack-header");
-            const sizeEl = packHeader ? packHeader.querySelector(".pack-size") : null;
-            if (!packHeader || !sizeEl) return;
+                if (card.querySelector(".dccbot-btn")) return;
 
-            if (card.querySelector(".dccbot-btn")) return;
+                const server = mapNetworkToServer(meta.networkName);
+                const packCommandDiv = card.querySelector(".pack-command");
+                const existingDownloadBtn = packCommandDiv ? packCommandDiv.querySelector(".download-btn") : null;
 
-            const btn = get_download_btn(server, meta.channelName, meta.botname, meta.packnum, BUTTON_STYLES.xdccSearchHeader);
-            sizeEl.insertAdjacentElement("afterend", btn);
+                if (existingDownloadBtn) {
+                    // Reuse native layout button instead of injecting a second one.
+                    existingDownloadBtn.classList.add('dccbot-btn');
+                    existingDownloadBtn.classList.remove('download-btn');
+                    existingDownloadBtn.textContent = 'Down';
+                    existingDownloadBtn.removeAttribute('onclick');
+                    applyStyles(existingDownloadBtn, BUTTON_STYLES.default, BUTTON_STYLES.xdccSearchHeader);
+                    configure_dccbot_btn(existingDownloadBtn, server, channel, meta.botname, packnum);
+                } else if (packCommandDiv) {
+                    const btn = get_download_btn(server, channel, meta.botname, packnum, BUTTON_STYLES.xdccSearchHeader);
+                    packCommandDiv.appendChild(btn);
+                } else {
+                    const packHeader = card.querySelector(".pack-header");
+                    const sizeEl = packHeader ? packHeader.querySelector(".pack-size") : null;
+                    if (!packHeader || !sizeEl) return;
+                    const btn = get_download_btn(server, channel, meta.botname, packnum, BUTTON_STYLES.xdccSearchHeader);
+                    sizeEl.insertAdjacentElement("afterend", btn);
+                }
+            });
+        }
 
-            const packCommandDiv = card.querySelector(".pack-command");
-            if (packCommandDiv) {
-                packCommandDiv.remove();
-            }
-        });
+        processCards();
+
+        const resultsContainer = document.querySelector(".results-container");
+        observeMutations(resultsContainer || document.body, processCards);
     }
 
     const hostHandlers = {
@@ -382,11 +921,21 @@
         'nibl.co.uk': add_button_nibl,
         'xdcc.animk.info': add_button_animk_info,
         'xdcc.rocks': add_button_xdcc_rocks,
-        'xdcc-search.com': add_button_xdcc_search
+        'www.xdcc.rocks': add_button_xdcc_rocks,
+        'xdcc-search.com': add_button_xdcc_search,
+        'www.xdcc-search.com': add_button_xdcc_search
     };
 
     const handler = hostHandlers[window.location.hostname];
     if (handler) {
-        handler();
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function () {
+                initTransferOverlay();
+                handler();
+            }, { once: true });
+        } else {
+            initTransferOverlay();
+            handler();
+        }
     }
 })();
