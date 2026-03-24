@@ -3,7 +3,7 @@
 import asyncio
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
@@ -293,6 +293,52 @@ def test_on_privmsg_ignores_nonmatching_message(bot):
     assert bot.authenticated_event.is_set() is False
 
 
+def test_on_privmsg_transfer_completed_normalizes_sparse_transfer(bot, mock_bot_manager):
+    """MD5 completion notices should work even with sparse transfer records."""
+    bot.connection = MagicMock()
+    now = 1_700_000_000.0
+    mock_bot_manager.transfers = {
+        "movie.mkv": [
+            {
+                "server": "irc.example.com",
+                "nick": "sender",
+                "completed": now - 1,
+            }
+        ]
+    }
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["** Transfer Completed movie.mkv md5sum: 0123456789abcdef0123456789abcdef"]
+
+    with patch("time.time", return_value=now):
+        bot.on_privmsg(bot.connection, event)
+
+    transfer = mock_bot_manager.transfers["movie.mkv"][0]
+    assert transfer["md5"] == "0123456789abcdef0123456789abcdef"
+    assert "id" in transfer
+    assert transfer["filename"] == "movie.mkv"
+
+
+def test_on_privmsg_sending_pack_creates_normalized_pending_transfer(bot, mock_bot_manager):
+    """Pack announcement should create a normalized pending transfer record."""
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ['** Sending you pack #1 ("TEST.mkv") [1.0GB, MD5:82ce0f4fe6e5c862d54dae475b8a1b82] - (resume+ssl supported)']
+
+    bot.on_privmsg(bot.connection, event)
+
+    transfer = mock_bot_manager.transfers["TEST.mkv"][0]
+    assert transfer["filename"] == "TEST.mkv"
+    assert transfer["status"] == "started"
+    assert transfer["size"] == 0
+    assert transfer["peer_address"] is None
+    assert transfer["md5"] == "82ce0f4fe6e5c862d54dae475b8a1b82"
+
+
 def test_on_part(bot):
     """Test on_part handler."""
     bot.connection = MagicMock()
@@ -556,6 +602,30 @@ def test_on_dcc_send_file_too_large(bot):
 
     bot.on_dcc_send(bot.connection, event, False)
     # Should reject the file
+
+
+def test_on_dccmsg_normalizes_sparse_transfer_and_sends_ack(bot):
+    """on_dccmsg should hydrate sparse transfer data before processing."""
+    dcc = MagicMock()
+    event = MagicMock()
+    event.arguments = [b"abc"]
+    bot.allowed_mimetypes = None
+    bot.bot_channel_map = {}
+    bot.current_transfers = {
+        dcc: {
+            "filename": "movie.mkv",
+            "file_path": "/tmp/movie.mkv",
+            "size": 10,
+        }
+    }
+
+    with patch("builtins.open", mock_open()):
+        bot.on_dccmsg(dcc, event)
+
+    transfer = bot.current_transfers[dcc]
+    assert transfer["status"] == "in_progress"
+    assert transfer["bytes_received"] == 3
+    dcc.send_bytes.assert_called_once()
 
 
 def test_on_dcc_send_private_ip_rejected(bot):
