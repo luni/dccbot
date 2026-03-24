@@ -591,12 +591,30 @@ async def test_info_handles_partial_transfer_records(api_client):
 
 
 @pytest.mark.asyncio
-async def test_return_static_html_returns_html(api_client):
-    """Test static HTML endpoint."""
+async def test_root_returns_merged_index_html(api_client):
+    """Test merged index page endpoint."""
     client, _ = api_client
-    # This assumes the route '/log.html' is mapped to _return_static_html
-    resp = await client.get("/log.html")
+    resp = await client.get("/")
     assert resp.status == 200
     assert resp.headers["Content-Type"].startswith("text/html")
     text = await resp.text()
-    assert "<html" in text.lower()  # crude check for HTML content
+    assert "<html" in text.lower()
+    assert "dccbot" in text.lower()
+    assert "transfers" in text.lower()
+    assert "live log" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_legacy_log_html_not_found(api_client):
+    """Legacy log page should no longer be served."""
+    client, _ = api_client
+    resp = await client.get("/log.html")
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_legacy_info_html_not_found(api_client):
+    """Legacy transfers page should no longer be served."""
+    client, _ = api_client
+    resp = await client.get("/info.html")
+    assert resp.status == 404

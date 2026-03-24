@@ -81,7 +81,7 @@ async def test_websocket_handler_lifecycle(ws_session):
     assert msg.type == web.WSMsgType.TEXT
     data = msg.json()
     assert data["status"] == "ok"
-    assert "Available commands" in data["message"]
+    assert "Available websocket commands" in data["message"]
 
     # Close the websocket and ensure clean shutdown
     await ws.close()
@@ -182,8 +182,9 @@ async def test_websocket_handler_help_command(api_client):
     assert msg.type == web.WSMsgType.TEXT
     data = msg.json()
     assert data["status"] == "ok"
-    assert "part" in data["message"].lower()
-    assert "join" in data["message"].lower()
+    assert "available websocket commands" in data["message"].lower()
+    for command in ("help", "join", "part", "msg", "msgjoin", "info"):
+        assert f"/{command}" in data["message"].lower()
     await ws.close()
 
 
@@ -197,8 +198,49 @@ async def test_websocket_handler_help_with_command(api_client):
     assert msg.type == web.WSMsgType.TEXT
     data = msg.json()
     assert data["status"] == "ok"
-    assert "join" in data["message"].lower()
-    assert "server" in data["message"].lower()
+    assert "command: /join" in data["message"].lower()
+    assert "usage: /join <server> <channel> [<channel> ...]" in data["message"].lower()
+    assert "example:" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("help", "usage: /help [command]"),
+        ("join", "usage: /join <server> <channel> [<channel> ...]"),
+        ("part", "usage: /part <server> <channel> [<channel> ...]"),
+        ("msg", "usage: /msg <server> <target> <message>"),
+        ("msgjoin", "usage: /msgjoin <server> <channel> <target> <message>"),
+        ("info", "usage: /info"),
+    ],
+)
+async def test_websocket_handler_help_with_specific_commands(api_client, command, expected):
+    """Test websocket /help with all supported command names."""
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    await ws.send_str(f"/help {command}")
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "ok"
+    assert expected in data["message"].lower()
+    assert "example:" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_help_with_unknown_command(api_client):
+    """Test websocket /help with unknown command."""
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    await ws.send_str("/help foobar")
+    msg = await ws.receive(timeout=2)
+    assert msg.type == web.WSMsgType.TEXT
+    data = msg.json()
+    assert data["status"] == "ok"
+    assert "unknown command: foobar" in data["message"].lower()
     await ws.close()
 
 

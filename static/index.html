@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DCCBot</title>
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --panel: #2d2d2d;
+      --panel-border: #444;
+      --text: #e0e0e0;
+      --muted: #b0b0b0;
+      --danger: #ff4d4f;
+      --danger-hover: #d9363e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    h1 {
+      margin: 0;
+      color: #dfdfdf;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .topbar-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .conn-status {
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 4px 10px;
+      border: 1px solid #555;
+      color: #f0f0f0;
+      background: #333;
+      white-space: nowrap;
+    }
+
+    .conn-status.connected {
+      background: #1f5f33;
+      border-color: #2f8b4b;
+    }
+
+    .conn-status.connecting,
+    .conn-status.reconnecting {
+      background: #5a4a20;
+      border-color: #8f7430;
+    }
+
+    .conn-status.disconnected {
+      background: #5b2525;
+      border-color: #8d3939;
+    }
+
+    .reconnect-btn {
+      border: 1px solid #555;
+      background: #212121;
+      color: #ddd;
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 4px 10px;
+      cursor: pointer;
+    }
+
+    .reconnect-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .panel h2 {
+      margin: 0;
+      font-size: 18px;
+      color: #fff;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .panel-toggle {
+      display: none;
+      border: 1px solid #555;
+      background: #212121;
+      color: #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .panel-content {
+      min-width: 0;
+    }
+
+    .panel.collapsed .panel-content {
+      display: none;
+    }
+
+    .transfer-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .transfer {
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .transfer-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .transfer-title {
+      margin: 0;
+      font-size: 16px;
+      color: #fff;
+      flex: 1;
+      min-width: 180px;
+      overflow-wrap: anywhere;
+    }
+
+    .status {
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 12px;
+      background: #444;
+      color: #e0e0e0;
+      text-transform: capitalize;
+      white-space: nowrap;
+    }
+
+    .status.completed { background: #4caf50; color: #fff; }
+    .status.in_progress { background: #2196f3; color: #fff; }
+    .status.failed { background: #f4d836; color: #2b2b2b; }
+    .status.error, .status.cancelled { background: #f44336; color: #fff; }
+
+    .cancel-btn {
+      background-color: var(--danger);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 12px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .cancel-btn:hover {
+      background-color: var(--danger-hover);
+    }
+
+    .cancel-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    .transfer-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .transfer-error {
+      color: #f44336;
+      font-weight: bold;
+      overflow-wrap: anywhere;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 10px;
+      background: #444;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .progress {
+      height: 100%;
+      background: #4caf50;
+      transition: width 0.3s ease;
+    }
+
+    .speed {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    #logs {
+      height: clamp(220px, 45vh, 520px);
+      font-family: monospace;
+      font-size: 14px;
+      background-color: #000;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-y: auto;
+    }
+
+    .log-line {
+      margin: 0 0 2px;
+      overflow-wrap: anywhere;
+    }
+
+    #command-input {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #555;
+      background: #111;
+      color: #eee;
+    }
+
+    .log-info { color: #cccccc; }
+    .log-warning { color: #ffcc00; }
+    .log-error { color: #ff0000; }
+    .log-debug { color: #00ffff; }
+    .log-critical { color: #ff00ff; }
+
+    .placeholder {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    #toast-container {
+      position: fixed;
+      bottom: 14px;
+      right: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .toast {
+      max-width: min(88vw, 360px);
+      border-radius: 8px;
+      border: 1px solid #555;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: #f2f2f2;
+      background: #2d2d2d;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .toast.success {
+      border-color: #2f8b4b;
+      background: #1f5f33;
+    }
+
+    .toast.error {
+      border-color: #8d3939;
+      background: #5b2525;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      #logs {
+        height: clamp(160px, 28vh, 260px);
+      }
+
+      body {
+        padding: 12px;
+      }
+
+      .panel {
+        padding: 10px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+      }
+
+      .topbar-right {
+        gap: 6px;
+      }
+
+      .panel-toggle {
+        display: inline-flex;
+        align-items: center;
+      }
+
+      #toast-container {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+      }
+
+      .toast {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>DCCBot</h1>
+    <div class="topbar-right">
+      <button id="reconnect-btn" class="reconnect-btn" type="button" title="Reconnect now">Reconnect</button>
+      <div id="connection-status" class="conn-status connecting">Connecting...</div>
+    </div>
+  </div>
+  <div class="layout">
+    <section class="panel" id="transfers-panel">
+      <div class="panel-head">
+        <h2>Transfers</h2>
+        <button class="panel-toggle" id="toggle-transfers" type="button" aria-controls="transfers-content" aria-expanded="true">Collapse</button>
+      </div>
+      <div class="panel-content" id="transfers-content">
+        <div class="transfer-list" id="transfer-list">
+          <p class="placeholder">Waiting for transfers...</p>
+        </div>
+      </div>
+    </section>
+    <section class="panel" id="log-panel">
+      <div class="panel-head">
+        <h2>Live Log</h2>
+        <button class="panel-toggle" id="toggle-log" type="button" aria-controls="log-content" aria-expanded="true">Collapse</button>
+      </div>
+      <div class="panel-content" id="log-content">
+        <div id="logs"></div>
+        <input type="text" id="command-input" placeholder="Enter a command (e.g., /help)">
+      </div>
+    </section>
+  </div>
+  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="/static/ws.js"></script>
+  <script>
+    const COMMAND_HISTORY_KEY = "dccbot.command_history";
+    const PANEL_STATE_KEY = "dccbot.panel_state";
+    const MAX_COMMAND_HISTORY = 20;
+    const transferList = document.getElementById("transfer-list");
+    const logsElement = document.getElementById("logs");
+    const commandInput = document.getElementById("command-input");
+    const connectionStatus = document.getElementById("connection-status");
+    const reconnectBtn = document.getElementById("reconnect-btn");
+    const toastContainer = document.getElementById("toast-container");
+    const transfersPanel = document.getElementById("transfers-panel");
+    const logPanel = document.getElementById("log-panel");
+    const toggleTransfers = document.getElementById("toggle-transfers");
+    const toggleLog = document.getElementById("toggle-log");
+    const commandHistory = loadCommandHistory();
+    let historyIndex = commandHistory.length;
+    let socket = null;
+    let reconnectTimer = null;
+    let reconnectAttempt = 0;
+    let isConnecting = false;
+
+    function loadCommandHistory() {
+      try {
+        const raw = window.localStorage.getItem(COMMAND_HISTORY_KEY);
+        if (!raw) {
+          return [];
+        }
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+          return [];
+        }
+        return parsed.filter((entry) => typeof entry === "string").slice(-MAX_COMMAND_HISTORY);
+      } catch (_err) {
+        return [];
+      }
+    }
+
+    function saveCommandHistory() {
+      try {
+        window.localStorage.setItem(
+          COMMAND_HISTORY_KEY,
+          JSON.stringify(commandHistory.slice(-MAX_COMMAND_HISTORY)),
+        );
+      } catch (_err) {
+        // localStorage can fail in private mode or restrictive browser policies.
+      }
+    }
+
+    function loadPanelState() {
+      try {
+        const raw = window.localStorage.getItem(PANEL_STATE_KEY);
+        if (!raw) {
+          return {};
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") {
+          return {};
+        }
+        return parsed;
+      } catch (_err) {
+        return {};
+      }
+    }
+
+    function savePanelState(key, collapsed) {
+      try {
+        const existing = loadPanelState();
+        existing[key] = Boolean(collapsed);
+        window.localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(existing));
+      } catch (_err) {
+        // Ignore storage failures.
+      }
+    }
+
+    function cancelReconnectTimer() {
+      if (reconnectTimer === null) {
+        return;
+      }
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    function updateReconnectButton() {
+      reconnectBtn.disabled = isConnecting;
+      reconnectBtn.textContent = isConnecting ? "Connecting..." : "Reconnect";
+    }
+
+    function setConnectionState(state, detail = "") {
+      connectionStatus.className = `conn-status ${state}`;
+      const labels = {
+        connected: "Connected",
+        connecting: "Connecting...",
+        reconnecting: "Reconnecting...",
+        disconnected: "Disconnected",
+      };
+      const label = labels[state] || "Disconnected";
+      connectionStatus.textContent = detail ? `${label} ${detail}` : label;
+      commandInput.disabled = state !== "connected";
+      if (state !== "connected") {
+        commandInput.placeholder = "WebSocket offline - waiting to reconnect...";
+      } else {
+        commandInput.placeholder = "Enter a command (e.g., /help)";
+      }
+      isConnecting = state === "connecting" || state === "reconnecting";
+      updateReconnectButton();
+    }
+
+    function addTextElement(parent, tagName, className, text) {
+      const element = document.createElement(tagName);
+      if (className) {
+        element.className = className;
+      }
+      element.textContent = text;
+      parent.appendChild(element);
+      return element;
+    }
+
+    function showToast(message, type = "success") {
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.add("show");
+      });
+
+      window.setTimeout(() => {
+        toast.classList.remove("show");
+        window.setTimeout(() => {
+          toast.remove();
+        }, 220);
+      }, 2800);
+    }
+
+    function setPanelCollapsed(panel, button, collapsed) {
+      panel.classList.toggle("collapsed", collapsed);
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.textContent = collapsed ? "Expand" : "Collapse";
+    }
+
+    function statusDetails(transfer) {
+      let cssClass = transfer.status;
+      let text = String(transfer.status || "").replace("_", " ");
+
+      if (transfer.status === "completed" && transfer.md5) {
+        if (!transfer.file_md5) {
+          cssClass = "in_progress";
+          text += ", MD5 calculating...";
+        } else {
+          const matched = transfer.md5 === transfer.file_md5;
+          cssClass = matched ? "completed" : "failed";
+          text += matched ? ", MD5 matched" : ", MD5 mismatch";
+        }
+      }
+
+      return { cssClass, text };
+    }
+
+    function renderTransfers(transfers) {
+      transferList.replaceChildren();
+      if (!transfers || transfers.length === 0) {
+        addTextElement(transferList, "p", "placeholder", "No transfers.");
+        return;
+      }
+
+      const completedTransfers = transfers.filter((t) => t.status !== "in_progress").slice(-10);
+      const inProgressTransfers = transfers.filter((t) => t.status === "in_progress");
+      const allTransfers = [...inProgressTransfers, ...completedTransfers];
+
+      allTransfers.forEach((transfer) => {
+        const progress = transfer.size ? (transfer.received / transfer.size) * 100 : 0;
+        const { cssClass, text } = statusDetails(transfer);
+
+        const transferDiv = document.createElement("article");
+        transferDiv.className = "transfer";
+
+        const headerDiv = document.createElement("div");
+        headerDiv.className = "transfer-header";
+        transferDiv.appendChild(headerDiv);
+
+        addTextElement(headerDiv, "h3", "transfer-title", transfer.filename || "(unnamed file)");
+        addTextElement(headerDiv, "div", `status ${cssClass}`, text);
+
+        if (transfer.status === "in_progress") {
+          const btn = document.createElement("button");
+          btn.className = "cancel-btn";
+          btn.type = "button";
+          btn.textContent = "Cancel";
+          btn.dataset.server = transfer.server || "";
+          btn.dataset.nick = transfer.nick || "";
+          btn.dataset.filename = transfer.filename || "";
+          btn.addEventListener("click", async () => {
+            btn.disabled = true;
+            btn.textContent = "Cancelling...";
+            try {
+              const resp = await fetch("/cancel", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  server: btn.dataset.server,
+                  nick: btn.dataset.nick,
+                  filename: btn.dataset.filename,
+                }),
+              });
+              if (!resp.ok) {
+                btn.disabled = false;
+                btn.textContent = "Cancel";
+                appendCommandResponse({ status: "error", message: "Failed to cancel transfer." });
+                showToast("Failed to cancel transfer.", "error");
+                return;
+              }
+              const payload = await resp.json().catch(() => ({}));
+              showToast(payload.message || "Cancel request sent.", "success");
+            } catch (err) {
+              btn.disabled = false;
+              btn.textContent = "Cancel";
+              appendCommandResponse({ status: "error", message: `Failed to cancel transfer: ${err}` });
+              showToast("Failed to cancel transfer.", "error");
+            }
+          });
+          headerDiv.appendChild(btn);
+        }
+
+        const detailsDiv = document.createElement("div");
+        detailsDiv.className = "transfer-details";
+        const sizeMb = Number(transfer.size || 0) / 1024 / 1024;
+        addTextElement(detailsDiv, "div", "", `Server: ${transfer.server || "-"}`);
+        addTextElement(detailsDiv, "div", "", `User: ${transfer.nick || "-"}`);
+        addTextElement(detailsDiv, "div", "", `Size: ${sizeMb.toFixed(2)} MB`);
+        transferDiv.appendChild(detailsDiv);
+
+        if (transfer.error) {
+          addTextElement(transferDiv, "div", "transfer-error", transfer.error);
+        }
+
+        if (transfer.status === "in_progress") {
+          const progressBar = document.createElement("div");
+          progressBar.className = "progress-bar";
+          const progressInner = document.createElement("div");
+          progressInner.className = "progress";
+          progressInner.style.width = `${Math.max(0, Math.min(progress, 100))}%`;
+          progressBar.appendChild(progressInner);
+          transferDiv.appendChild(progressBar);
+          addTextElement(transferDiv, "div", "speed", `Speed: ${Number(transfer.speed || 0).toFixed(2)} KB/s`);
+        }
+
+        transferList.appendChild(transferDiv);
+      });
+    }
+
+    function trimLogs() {
+      while (logsElement.children.length > 300) {
+        logsElement.removeChild(logsElement.firstChild);
+      }
+    }
+
+    function appendLogLine(logEntry) {
+      const level = String(logEntry.level || "").toLowerCase();
+      const timestamp = logEntry.timestamp || "";
+      const paddedLevel = String(logEntry.level || "").padEnd(8);
+      const line = document.createElement("div");
+      line.className = `log-line ${level ? `log-${level}` : ""}`.trim();
+      line.textContent = `${timestamp} - ${paddedLevel} - ${logEntry.message || ""}`;
+      logsElement.appendChild(line);
+      trimLogs();
+      logsElement.scrollTop = logsElement.scrollHeight;
+    }
+
+    function appendCommandResponse(payload) {
+      const status = String(payload.status || "").toLowerCase();
+      const line = document.createElement("div");
+      line.className = `log-line ${status === "error" ? "log-error" : "log-warning"}`;
+      line.textContent = `${String(payload.status || "ok").toUpperCase()}: ${payload.message || ""}`;
+      logsElement.appendChild(line);
+      trimLogs();
+      logsElement.scrollTop = logsElement.scrollHeight;
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer !== null) {
+        return;
+      }
+      reconnectAttempt += 1;
+      const delay = Math.min(30000, 1000 * (2 ** (reconnectAttempt - 1)));
+      setConnectionState("reconnecting", `(in ${Math.ceil(delay / 1000)}s)`);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connectSocket();
+      }, delay);
+    }
+
+    function connectSocket() {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      setConnectionState(reconnectAttempt > 0 ? "reconnecting" : "connecting");
+      socket = createDccbotSocket({
+        onLog: appendLogLine,
+        onTransfers: ({ transfers }) => renderTransfers(transfers),
+        onCommandResponse: appendCommandResponse,
+        onOpen: () => {
+          cancelReconnectTimer();
+          reconnectAttempt = 0;
+          setConnectionState("connected");
+        },
+        onClose: () => {
+          setConnectionState("disconnected");
+          scheduleReconnect();
+        },
+        onError: () => {
+          // onclose will handle retry scheduling consistently.
+          setConnectionState("disconnected");
+        },
+      });
+    }
+
+    commandInput.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowUp") {
+        if (commandHistory.length > 0) {
+          if (historyIndex > 0) {
+            historyIndex -= 1;
+          }
+          commandInput.value = commandHistory[historyIndex];
+        }
+      } else if (event.key === "ArrowDown") {
+        if (commandHistory.length > 0) {
+          if (historyIndex < commandHistory.length - 1) {
+            historyIndex += 1;
+            commandInput.value = commandHistory[historyIndex];
+          } else {
+            historyIndex = commandHistory.length;
+            commandInput.value = "";
+          }
+        }
+      }
+    });
+
+    commandInput.addEventListener("keyup", (event) => {
+      if (event.key === "Enter") {
+        const command = commandInput.value.trim();
+        if (!command) {
+          return;
+        }
+        commandHistory.push(command);
+        if (commandHistory.length > MAX_COMMAND_HISTORY) {
+          commandHistory.shift();
+        }
+        saveCommandHistory();
+        historyIndex = commandHistory.length;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          appendCommandResponse({ status: "error", message: "WebSocket is not connected." });
+          return;
+        }
+        socket.send(command);
+        commandInput.value = "";
+      }
+    });
+
+    toggleTransfers.addEventListener("click", () => {
+      const currentlyExpanded = toggleTransfers.getAttribute("aria-expanded") === "true";
+      const nextCollapsed = currentlyExpanded;
+      setPanelCollapsed(transfersPanel, toggleTransfers, nextCollapsed);
+      savePanelState("transfers", nextCollapsed);
+    });
+
+    toggleLog.addEventListener("click", () => {
+      const currentlyExpanded = toggleLog.getAttribute("aria-expanded") === "true";
+      const nextCollapsed = currentlyExpanded;
+      setPanelCollapsed(logPanel, toggleLog, nextCollapsed);
+      savePanelState("log", nextCollapsed);
+    });
+
+    reconnectBtn.addEventListener("click", () => {
+      cancelReconnectTimer();
+      reconnectAttempt = 0;
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        try {
+          socket.close();
+        } catch (_err) {
+          // Ignore close errors and continue reconnecting.
+        }
+      }
+      socket = null;
+      setConnectionState("connecting");
+      connectSocket();
+    });
+
+    const panelState = loadPanelState();
+    const isMobile = window.matchMedia("(max-width: 980px)").matches;
+    const transfersCollapsed = Object.prototype.hasOwnProperty.call(panelState, "transfers")
+      ? Boolean(panelState.transfers)
+      : false;
+    const logCollapsed = Object.prototype.hasOwnProperty.call(panelState, "log")
+      ? Boolean(panelState.log)
+      : isMobile;
+    setPanelCollapsed(transfersPanel, toggleTransfers, transfersCollapsed);
+    setPanelCollapsed(logPanel, toggleLog, logCollapsed);
+
+    connectSocket();
+  </script>
+</body>
+</html>

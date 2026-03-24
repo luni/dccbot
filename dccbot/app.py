@@ -16,6 +16,38 @@ from dccbot.transfers import ensure_transfer_defaults
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+WS_COMMAND_HELP = {
+    "help": {
+        "usage": "/help [command]",
+        "example": "/help msg",
+        "description": "Show available websocket commands or detailed help for one command.",
+    },
+    "join": {
+        "usage": "/join <server> <channel> [<channel> ...]",
+        "example": "/join irc.example.net #movies #tv",
+        "description": "Join one or more channels on a server.",
+    },
+    "part": {
+        "usage": "/part <server> <channel> [<channel> ...]",
+        "example": "/part irc.example.net #movies",
+        "description": "Part one or more channels on a server.",
+    },
+    "msg": {
+        "usage": "/msg <server> <target> <message>",
+        "example": "/msg irc.example.net NickServ IDENTIFY hunter2",
+        "description": "Send a message to a user or channel target.",
+    },
+    "msgjoin": {
+        "usage": "/msgjoin <server> <channel> <target> <message>",
+        "example": "/msgjoin irc.example.net #movies SomeBot xdcc send #1",
+        "description": "Join a channel context and send a message to a target.",
+    },
+    "info": {
+        "usage": "/info",
+        "example": "/info",
+        "description": "Request the latest transfer snapshot.",
+    },
+}
 
 
 class CancelTransferRequestSchema(Schema):
@@ -374,6 +406,28 @@ class IRCBotAPI:
         transfers = self._build_transfer_snapshot()
         await ws.send_json({"type": "transfers", "transfers": transfers})
 
+    @staticmethod
+    def _build_ws_help_message(command: str | None = None) -> str:
+        """Build websocket help output for all commands or a specific one."""
+        if command is None:
+            lines = ["Available websocket commands:"]
+            for name in ("help", "join", "part", "msg", "msgjoin", "info"):
+                usage = WS_COMMAND_HELP[name]["usage"]
+                lines.append(f"- {usage}")
+            lines.append("Use /help <command> for details.")
+            return "\n".join(lines)
+
+        command_help = WS_COMMAND_HELP.get(command)
+        if not command_help:
+            return f"Unknown command: {command}"
+
+        return "\n".join([
+            f"Command: /{command}",
+            f"Usage: {command_help['usage']}",
+            f"Description: {command_help['description']}",
+            f"Example: {command_help['example']}",
+        ])
+
     async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
 
@@ -387,20 +441,8 @@ class IRCBotAPI:
         try:
             logging.info("Received command from client: %s %s", command, args)
             if command == "help":
-                command = None
-                msg = "Available commands: part, join, msg, msgjoin, info"
-                if len(args) > 0:
-                    command = args.pop(0)
-
-                if command in ("part", "join"):
-                    msg = f"Usage: {command} <server> <channel> [<channel> ...]"
-                elif command == "msg":
-                    msg = f"Usage: {command} <server> <target> <message>"
-                elif command == "msgjoin":
-                    msg = f"Usage: {command} <server> <channel> <target> <message>"
-                elif command:
-                    msg = f"Unknown command: {command}"
-
+                command_name = args[0].lower() if args else None
+                msg = self._build_ws_help_message(command_name)
                 await ws.send_json({"status": "ok", "message": msg})
             elif command == "part":
                 if len(args) < 2:
@@ -523,6 +565,12 @@ class IRCBotAPI:
         with open(fullpath, encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
+    async def _return_index_html(self, request: web.Request) -> web.Response:
+        """Serve the merged UI index page."""
+        del request
+        with open(self.static_dir / "index.html", encoding="utf-8") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+
     def setup_routes(self) -> None:
         """Set up routes for the aiohttp application."""
         self.app.router.add_post("/join", self.join)
@@ -532,8 +580,8 @@ class IRCBotAPI:
         self.app.router.add_post("/cancel", self.cancel)
         self.app.router.add_get("/info", self.info)
         self.app.router.add_get("/ws", self.websocket_handler)
-        self.app.router.add_get("/log.html", self._return_static_html)
-        self.app.router.add_get("/info.html", self._return_static_html)
+        self.app.router.add_get("/", self._return_index_html)
+        self.app.router.add_get("/index.html", self._return_static_html)
         self.app.router.add_static("/static/", path=str(self.static_dir))
 
     def setup_apispec(self) -> None:
