@@ -12,6 +12,7 @@ from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp
 from marshmallow import Schema, fields, validate
 
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
+from dccbot.transfers import ensure_transfer_defaults
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -150,7 +151,7 @@ class TransferInfo(Schema):
         allow_none=True,
     )
     status = fields.Str(
-        validate=validate.OneOf(["in_progress", "completed", "failed", "error", "cancelled"]),
+        validate=validate.OneOf(["started", "in_progress", "completed", "failed", "error", "cancelled"]),
     )
     error = fields.Str(
         allow_none=True,
@@ -324,6 +325,7 @@ class IRCBotAPI:
 
         for filename, transfers in transfers_data.items():
             for transfer in transfers:
+                ensure_transfer_defaults(filename, transfer, now=now)
                 transferred_bytes = transfer["bytes_received"]
                 transfer_time = now - transfer["start_time"] if transfer["start_time"] else 0
                 speed_avg = transferred_bytes / transfer_time / 1024 if transfer_time > 0 else 0
@@ -331,12 +333,17 @@ class IRCBotAPI:
                 recent_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
                 recent_duration = now - transfer["last_progress_update"]
                 speed = (recent_bytes / recent_duration) / 1024 if recent_duration > 0 else 0
+                peer_address = transfer.get("peer_address")
+                peer_port = transfer.get("peer_port")
+                host = ""
+                if peer_address and peer_port is not None:
+                    host = f"{peer_address}:{peer_port}"
 
                 snapshot.append({
                     "server": transfer["server"],
                     "filename": filename,
                     "nick": transfer["nick"],
-                    "host": transfer["peer_address"] + ":" + str(transfer["peer_port"]),
+                    "host": host,
                     "size": transfer["size"],
                     "received": transfer["bytes_received"] + transfer["offset"],
                     "speed": round(speed, 2),

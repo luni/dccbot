@@ -10,7 +10,6 @@ import ssl
 import string
 import struct
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
 import irc.client
@@ -21,6 +20,7 @@ from irc.connection import AioFactory
 
 from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
+from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults
 
 if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
@@ -870,23 +870,19 @@ class IRCBot(AioSimpleIRCClient):
         now = time.time()
 
         transfer_item = {
-            "id": uuid.uuid4().hex,
-            "nick": nick,
-            "server": self.server,
-            "peer_address": peer_address,
-            "peer_port": peer_port,
-            "file_path": download_path,
-            "filename": filename,
-            "start_time": now,
-            "bytes_received": 0,
-            "offset": offset,
-            "size": size,
-            "ssl": use_ssl,
-            "percent": 0,
-            "last_progress_update": 0,
-            "last_progress_bytes_received": 0,
-            "completed": completed,
-            "status": "started",
+            **create_transfer(
+                nick=nick,
+                server=self.server,
+                peer_address=peer_address,
+                peer_port=peer_port,
+                file_path=download_path,
+                filename=filename,
+                size=size,
+                offset=offset or 0,
+                use_ssl=bool(use_ssl),
+                completed=bool(completed),
+                now=now,
+            ),
         }
 
         # Store the information about the file transfer
@@ -925,6 +921,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         transfer = self.current_transfers[dcc]
+        ensure_transfer_defaults(transfer["filename"], transfer)
         transfer["connected"] = True
         transfer["status"] = "in_progress"
         data = event.arguments[0]
@@ -1126,6 +1123,7 @@ class IRCBot(AioSimpleIRCClient):
             now = time.time()
             for filename, transfers in self.bot_manager.transfers.items():
                 for transfer in transfers:
+                    ensure_transfer_defaults(filename, transfer)
                     if (
                         transfer["nick"] == sender
                         and transfer["server"] == self.server
@@ -1147,7 +1145,7 @@ class IRCBot(AioSimpleIRCClient):
             if not filename in self.bot_manager.transfers:
                 self.bot_manager.transfers[filename] = []
 
-            self.bot_manager.transfers[filename].append({"nick": sender, "server": self.server, "start_time": now, "completed": False, "md5": f.group(3)})
+            self.bot_manager.transfers[filename].append(create_pending_transfer(filename=filename, nick=sender, server=self.server, md5=f.group(3), now=now))
 
         f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
         if f:

@@ -316,6 +316,36 @@ async def test_check_queue_processor(manager, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_check_queue_processor_handles_partial_transfer_record(manager, tmp_path):
+    """Test MD5 queue processor does not crash on sparse transfer records."""
+    test_file = tmp_path / "test_sparse.txt"
+    test_file.write_text("test content")
+
+    transfer_job = {
+        "id": "missing-id-reference",
+        "filename": "test_sparse.txt",
+        "file_path": str(test_file),
+    }
+    manager.transfers = {
+        "test_sparse.txt": [
+            {
+                "server": "irc.example.com",
+            }
+        ]
+    }
+
+    await manager.md5_check_queue.put(transfer_job)
+    task = asyncio.create_task(manager.check_queue_processor(asyncio.get_running_loop(), manager.md5_check_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    await task
+
+    # Entry should be normalized but untouched for MD5 due to non-matching job id.
+    assert manager.transfers["test_sparse.txt"][0]["filename"] == "test_sparse.txt"
+    assert "file_md5" in manager.transfers["test_sparse.txt"][0]
+
+
+@pytest.mark.asyncio
 async def test_start_background_tasks():
     """Test starting background tasks."""
     app = web.Application()

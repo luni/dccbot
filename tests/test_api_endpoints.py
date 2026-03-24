@@ -562,6 +562,35 @@ async def test_info_no_bots_no_transfers(api_client):
 
 
 @pytest.mark.asyncio
+async def test_info_handles_partial_transfer_records(api_client):
+    """Test info endpoint with pre-transfer records lacking DCC metadata."""
+    client, mock_bot_manager = api_client
+    mock_bot_manager.bots = {}
+    mock_bot_manager.transfers = {
+        "queued-file.mkv": [
+            {
+                "server": "irc.example.com",
+                "nick": "sender",
+                "start_time": 1643723410,
+                "completed": False,
+                "md5": "82ce0f4fe6e5c862d54dae475b8a1b82",
+            }
+        ]
+    }
+
+    resp = await client.get("/info")
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["transfers"]) == 1
+    transfer = data["transfers"][0]
+    assert transfer["filename"] == "queued-file.mkv"
+    assert transfer["host"] == ""
+    assert transfer["status"] == "started"
+    assert transfer["received"] == 0
+    assert transfer["size"] == 0
+
+
+@pytest.mark.asyncio
 async def test_return_static_html_returns_html(api_client):
     """Test static HTML endpoint."""
     client, _ = api_client
