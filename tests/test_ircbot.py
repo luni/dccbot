@@ -520,6 +520,19 @@ async def test_handle_send_command_no_user(bot):
 
 
 @pytest.mark.asyncio
+async def test_handle_send_command_privmsg_exception(bot):
+    """Test _handle_send_command handles privmsg failure."""
+    bot.connection = MagicMock()
+    bot.connection.privmsg.side_effect = RuntimeError("send failed")
+    data = {
+        "user": "testuser",
+        "message": "Hello",
+    }
+    await bot._handle_send_command(data)
+    bot.connection.privmsg.assert_called_once_with("testuser", "Hello")
+
+
+@pytest.mark.asyncio
 async def test_handle_part_command(bot):
     """Test _handle_part_command."""
     bot.connection = MagicMock()
@@ -570,6 +583,16 @@ def test_on_ctcp_invalid(bot):
     # Should not crash
 
 
+@pytest.mark.asyncio
+async def test_add_md5_check_queue_item(bot):
+    """Test helper that enqueues transfer for md5 verification."""
+    bot.bot_manager.md5_check_queue = asyncio.Queue()
+    transfer = {"filename": "file.bin"}
+    await bot._add_md5_check_queue_item(transfer)
+    queued = await bot.bot_manager.md5_check_queue.get()
+    assert queued == transfer
+
+
 def test_on_dcc_send_invalid_arguments(bot):
     """Test on_dcc_send with invalid arguments."""
     bot.connection = MagicMock()
@@ -604,28 +627,22 @@ def test_on_dcc_send_file_too_large(bot):
     # Should reject the file
 
 
-def test_on_dccmsg_normalizes_sparse_transfer_and_sends_ack(bot):
-    """on_dccmsg should hydrate sparse transfer data before processing."""
-    dcc = MagicMock()
+def test_on_dccmsg_delegates_to_transfer_handler(bot):
+    """Test on_dccmsg delegates to TransferHandler."""
+    bot.transfer_handler = MagicMock()
+    connection = MagicMock()
     event = MagicMock()
-    event.arguments = [b"abc"]
-    bot.allowed_mimetypes = None
-    bot.bot_channel_map = {}
-    bot.current_transfers = {
-        dcc: {
-            "filename": "movie.mkv",
-            "file_path": "/tmp/movie.mkv",
-            "size": 10,
-        }
-    }
+    bot.on_dccmsg(connection, event)
+    bot.transfer_handler.on_dccmsg.assert_called_once_with(connection, event)
 
-    with patch("builtins.open", mock_open()):
-        bot.on_dccmsg(dcc, event)
 
-    transfer = bot.current_transfers[dcc]
-    assert transfer["status"] == "in_progress"
-    assert transfer["bytes_received"] == 3
-    dcc.send_bytes.assert_called_once()
+def test_on_dcc_disconnect_delegates_to_transfer_handler(bot):
+    """Test on_dcc_disconnect delegates to TransferHandler."""
+    bot.transfer_handler = MagicMock()
+    connection = MagicMock()
+    event = MagicMock()
+    bot.on_dcc_disconnect(connection, event)
+    bot.transfer_handler.on_dcc_disconnect.assert_called_once_with(connection, event)
 
 
 def test_on_dcc_send_private_ip_rejected(bot):
