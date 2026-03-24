@@ -1,5 +1,25 @@
 (function () {
   const noop = () => {};
+  const scriptSuffix = "/static/ws.js";
+
+  function getBasePath() {
+    const currentScript = document.currentScript;
+    if (currentScript && currentScript.src) {
+      const scriptUrl = new URL(currentScript.src, window.location.href);
+      const path = scriptUrl.pathname;
+      if (path.endsWith(scriptSuffix)) {
+        return `${path.slice(0, -scriptSuffix.length)}/`;
+      }
+    }
+
+    // Fallback to current page path when script URL inspection is unavailable.
+    const pagePath = window.location.pathname || "/";
+    if (pagePath.endsWith("/")) {
+      return pagePath;
+    }
+    const slash = pagePath.lastIndexOf("/");
+    return `${pagePath.slice(0, Math.max(0, slash))}/`;
+  }
 
   function createDccbotSocket(options = {}) {
     const callbacks = {
@@ -15,7 +35,8 @@
     const isSecure = window.location.protocol === "https:";
     const protocol = isSecure ? "wss:" : "ws:";
     const host = window.location.host;
-    const path = new URL("./ws", window.location.href).pathname;
+    const basePath = getBasePath();
+    const path = new URL("ws", `${window.location.origin}${basePath}`).pathname;
     const wsUrl = `${protocol}//${host}${path}`;
     const socket = new WebSocket(wsUrl);
 

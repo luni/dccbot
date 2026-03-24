@@ -1,17 +1,17 @@
 [project]
 name = "dccbot"
-version = "0.1.0"
+version = "0.2.0"
 description = "An IRC XDCC download bot written in python with aiohttp and ircpy"
 readme = "README.md"
 license = {text = "MIT License"}
 requires-python = ">=3.10"
 dependencies = [
-    "aiohttp>=3.13.2",
+    "aiohttp>=3.13.3",
     "irc>=20.5.0",
     "pytest-aiohttp>=1.1.0",
     "python-magic>=0.4.27",
-    "apispec>=6.8.4",
-    "marshmallow>=4.1.0",
+    "apispec>=6.10.0",
+    "marshmallow>=4.2.2",
     "aiohttp-apispec-acapy>=3.0.3",
 ]
 
