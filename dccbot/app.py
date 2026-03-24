@@ -19,7 +19,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 class CancelTransferRequestSchema(Schema):
-    """Schema for the /cancel_transfer endpoint."""
+    """Schema for the /cancel endpoint."""
 
     server = fields.Str(required=True, metadata={"description": "IRC server address"})
     nick = fields.Str(required=True, metadata={"description": "Sender nickname (the user sending the file)"})

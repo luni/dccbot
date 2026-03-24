@@ -100,10 +100,43 @@ class IRCBotManager:
                 config = json.load(f)
             if "servers" not in config:
                 raise ValueError("Missing 'servers' key in config")
+            if not isinstance(config["servers"], dict):
+                raise ValueError("'servers' must be a dictionary")
+
+            self._normalize_config_contract(config)
             return config
         except Exception as e:
             logger.error("Error loading config: %s", e)
             raise
+
+    @staticmethod
+    def _normalize_config_contract(config: dict[str, Any]) -> None:
+        """Normalize legacy config keys and validate key types."""
+        if "default_download_path" not in config and "download_path" in config:
+            config["default_download_path"] = config["download_path"]
+            logger.warning("Config key 'download_path' is deprecated; use 'default_download_path'.")
+
+        if "default_download_path" not in config:
+            config["default_download_path"] = "./downloads"
+
+        http_config = config.get("http")
+        if http_config is None:
+            return
+        if not isinstance(http_config, dict):
+            raise ValueError("'http' must be a dictionary if provided")
+
+        if "host" not in http_config and "bind_addr" in http_config:
+            http_config["host"] = http_config["bind_addr"]
+            logger.warning("Config key 'http.bind_addr' is deprecated; use 'http.host'.")
+
+        if "port" not in http_config and "bind_port" in http_config:
+            http_config["port"] = http_config["bind_port"]
+            logger.warning("Config key 'http.bind_port' is deprecated; use 'http.port'.")
+
+        if "host" in http_config and not isinstance(http_config["host"], str):
+            raise ValueError("'http.host' must be a string")
+        if "port" in http_config and not isinstance(http_config["port"], int):
+            raise ValueError("'http.port' must be an integer")
 
     async def get_bot(self, server: str) -> IRCBot:
         """Get an IRCBot instance for a server.
