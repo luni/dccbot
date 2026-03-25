@@ -416,6 +416,7 @@
     let socket = null;
     let reconnectTimer = null;
     let reconnectAttempt = 0;
+    let connectionState = "connecting";
     let isConnecting = false;
 
     function loadCommandHistory() {
@@ -480,11 +481,13 @@
     }
 
     function updateReconnectButton() {
+      reconnectBtn.hidden = connectionState === "connected";
       reconnectBtn.disabled = isConnecting;
       reconnectBtn.textContent = isConnecting ? "Connecting..." : "Reconnect";
     }
 
     function setConnectionState(state, detail = "") {
+      connectionState = state;
       connectionStatus.className = `conn-status ${state}`;
       const labels = {
         connected: "Connected",
