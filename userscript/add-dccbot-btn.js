@@ -78,12 +78,18 @@
 
     const BUTTON_STYLES = {
         default: {
+            display: 'inline-block',
             cursor: 'pointer',
-            padding: '4px 8px',
-            background: '#4CAF50',
+            padding: '5px 10px',
+            background: 'linear-gradient(180deg, #2ecb70 0%, #1f9f56 100%)',
             color: 'white',
-            border: 'none',
-            borderRadius: '3px',
+            border: '1px solid #187f44',
+            borderRadius: '5px',
+            fontWeight: '700',
+            letterSpacing: '0.2px',
+            textShadow: '0 1px 0 rgba(0,0,0,0.25)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+            userSelect: 'none',
         },
         xdccSearchHeader: {
             padding: '8px',
@@ -195,14 +201,26 @@
         evt.stopPropagation();
         const d = this.dataset;
         const btn = this;
-        btn.disabled = true;
-        btn.style.background = '#808080';
+        if (btn.getAttribute('aria-disabled') === 'true') return;
+        setDownloadButtonBusy(btn, true);
+        btn.style.background = '#6f7782';
+        btn.style.borderColor = '#5b616a';
         btn.textContent = 'Sending...';
         send_msg(d.server, d.channel, d.bot, "xdcc send #" + d.pack, function (ok) {
-            btn.style.background = ok ? '#CECECE' : '#b81d13';
+            btn.style.background = ok ? '#227a34' : '#b81d13';
+            btn.style.borderColor = ok ? '#1b612a' : '#8f160f';
             btn.textContent = ok ? 'Sent' : 'Retry';
-            btn.disabled = false;
+            setDownloadButtonBusy(btn, false);
         });
+    }
+
+    function setDownloadButtonBusy(btn, busy) {
+        if ('disabled' in btn) {
+            btn.disabled = busy;
+        }
+        btn.setAttribute('aria-disabled', busy ? 'true' : 'false');
+        btn.style.pointerEvents = busy ? 'none' : 'auto';
+        btn.style.opacity = busy ? '0.9' : '1';
     }
 
     function applyStyles(element, defaultStyle, styleOverrides) {
@@ -213,9 +231,11 @@
     }
 
     function get_download_btn(server, channel, botname, packnum, styleOverrides) {
-        const btn = document.createElement('button');
+        const btn = document.createElement('span');
         btn.className = 'dccbot-btn';
         btn.textContent = 'Down';
+        btn.setAttribute('role', 'button');
+        btn.setAttribute('tabindex', '0');
 
         applyStyles(btn, BUTTON_STYLES.default, styleOverrides);
         configure_dccbot_btn(btn, server, channel, botname, packnum);
@@ -228,6 +248,16 @@
         btn.dataset.bot = botname;
         btn.dataset.pack = packnum;
         btn.onclick = handleDccbotButtonClick;
+        btn.onkeydown = function (evt) {
+            if (evt.key === 'Enter' || evt.key === ' ') {
+                handleDccbotButtonClick.call(btn, evt);
+            }
+        };
+        if (!('disabled' in btn)) {
+            btn.setAttribute('role', 'button');
+            btn.setAttribute('tabindex', '0');
+        }
+        setDownloadButtonBusy(btn, false);
     }
 
     function send_msg(server, channel, user, message, done) {
@@ -265,15 +295,14 @@
 
     let transferOverlay = null;
     let transferBody = null;
-    let transferEvents = null;
     let transferStatusLine = null;
+    const TRANSFER_OVERLAY_COLLAPSED_KEY = 'dccbot.transfer_overlay_collapsed';
     let transferOverlayCollapsed = false;
     let transferSocket = null;
     let transferReconnectTimer = null;
     let transferPollTimer = null;
     let transferUsingPollingFallback = false;
     const transferStateByKey = {};
-    const transferEventList = [];
 
     function isTerminalTransferStatus(status) {
         return ['completed', 'failed', 'error', 'cancelled'].indexOf(status) !== -1;
@@ -281,6 +310,39 @@
 
     function transferKey(t) {
         return [t.server || '', t.nick || '', t.filename || ''].join('|');
+    }
+
+    function loadTransferOverlayCollapsed() {
+        try {
+            const stored = window.localStorage.getItem(TRANSFER_OVERLAY_COLLAPSED_KEY);
+            if (stored === null) return true;
+            return stored === '1';
+        } catch (e) {
+            return true;
+        }
+    }
+
+    function saveTransferOverlayCollapsed(collapsed) {
+        try {
+            window.localStorage.setItem(TRANSFER_OVERLAY_COLLAPSED_KEY, collapsed ? '1' : '0');
+        } catch (e) {
+            // Ignore storage failures (private mode / restrictive policies).
+        }
+    }
+
+    function applyTransferOverlayCollapsedState(overlay, content, header, title) {
+        const collapsed = Boolean(transferOverlayCollapsed);
+        overlay.style.width = collapsed ? 'auto' : 'min(360px, 92vw)';
+        content.style.display = collapsed ? 'none' : 'flex';
+        title.style.display = collapsed ? 'none' : 'block';
+        header.style.justifyContent = collapsed ? 'flex-end' : 'space-between';
+    }
+
+    function truncateWithEllipsis(text, maxLength) {
+        const safeText = String(text || '');
+        if (!maxLength || safeText.length <= maxLength) return safeText;
+        if (maxLength <= 3) return '.'.repeat(maxLength);
+        return safeText.slice(0, maxLength - 3) + '...';
     }
 
     function formatBytes(bytes) {
@@ -291,21 +353,26 @@
         return value.toFixed(0) + ' B';
     }
 
+    function formatSpeedFromKbps(kbps) {
+        const value = Number(kbps) || 0;
+        if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(2) + ' GB/s';
+        if (value >= 1024) return (value / 1024).toFixed(2) + ' MB/s';
+        return value.toFixed(2) + ' KB/s';
+    }
+
     function relativeNowTs() {
         return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     function addTransferEvent(text, kind) {
-        transferEventList.unshift({
-            text: text,
-            kind: kind || 'info',
-            at: relativeNowTs()
-        });
-        if (transferEventList.length > 6) transferEventList.length = 6;
+        const level = kind || 'info';
+        const timeoutMs = level === 'error' ? 9000 : 5500;
+        showNotice('[DCCBOT] ' + text, level, timeoutMs);
     }
 
     function ensureTransferOverlay() {
         if (transferOverlay && transferOverlay.isConnected) return transferOverlay;
+        transferOverlayCollapsed = loadTransferOverlayCollapsed();
         transferOverlay = document.createElement('div');
         transferOverlay.style.position = 'fixed';
         transferOverlay.style.top = '12px';
@@ -330,10 +397,19 @@
         header.style.cursor = 'pointer';
         header.style.borderBottom = '1px solid rgba(255,255,255,0.12)';
 
-        const title = document.createElement('div');
+        const title = document.createElement('a');
         title.textContent = 'DCCBot Transfers';
+        title.href = dccbot_api_base;
+        title.target = '_blank';
+        title.rel = 'noopener noreferrer';
+        title.title = 'Open DCCBot';
+        title.style.color = 'inherit';
+        title.style.textDecoration = 'none';
         title.style.fontWeight = '700';
         title.style.letterSpacing = '0.2px';
+        title.addEventListener('click', function (evt) {
+            evt.stopPropagation();
+        });
         header.appendChild(title);
 
         transferStatusLine = document.createElement('div');
@@ -354,22 +430,11 @@
         transferBody.style.gap = '6px';
         content.appendChild(transferBody);
 
-        const eventsTitle = document.createElement('div');
-        eventsTitle.textContent = 'Recent events';
-        eventsTitle.style.color = '#9fb2bf';
-        eventsTitle.style.fontSize = '11px';
-        eventsTitle.style.marginTop = '2px';
-        content.appendChild(eventsTitle);
-
-        transferEvents = document.createElement('div');
-        transferEvents.style.display = 'flex';
-        transferEvents.style.flexDirection = 'column';
-        transferEvents.style.gap = '4px';
-        content.appendChild(transferEvents);
-
+        applyTransferOverlayCollapsedState(transferOverlay, content, header, title);
         header.addEventListener('click', function () {
             transferOverlayCollapsed = !transferOverlayCollapsed;
-            content.style.display = transferOverlayCollapsed ? 'none' : 'flex';
+            applyTransferOverlayCollapsedState(transferOverlay, content, header, title);
+            saveTransferOverlayCollapsed(transferOverlayCollapsed);
         });
 
         transferOverlay.appendChild(header);
@@ -385,7 +450,26 @@
         const active = rows.filter(function (t) {
             return t && (t.status === 'in_progress' || t.status === 'started');
         });
-        transferStatusLine.textContent = active.length + ' active • ' + relativeNowTs();
+        const totalSize = active.reduce(function (sum, t) {
+            const size = Number(t.size) || 0;
+            return size > 0 ? (sum + size) : sum;
+        }, 0);
+        const totalReceived = active.reduce(function (sum, t) {
+            const received = Number(t.received) || 0;
+            return received > 0 ? (sum + received) : sum;
+        }, 0);
+        const totalSpeedKbps = active.reduce(function (sum, t) {
+            const speed = Number(t.speed) || 0;
+            return speed > 0 ? (sum + speed) : sum;
+        }, 0);
+        const totalPercent = totalSize > 0
+            ? Math.max(0, Math.min(100, Math.round((totalReceived / totalSize) * 100)))
+            : 0;
+        const activityIcon = active.length > 0 ? '⬇' : '○';
+        const activityColor = active.length > 0 ? '#37a169' : '#9fb2bf';
+        const rightSide = active.length > 0 ? formatSpeedFromKbps(totalSpeedKbps) : relativeNowTs();
+        const statusDetail = active.length + ' (' + totalPercent + '%) • ' + rightSide;
+        transferStatusLine.innerHTML = '<span style="color:' + activityColor + ';">' + activityIcon + '</span> ' + statusDetail;
 
         transferBody.innerHTML = '';
         if (active.length === 0) {
@@ -406,7 +490,9 @@
                 row.style.background = 'rgba(255,255,255,0.03)';
 
                 const name = document.createElement('div');
-                name.textContent = t.filename || 'unknown file';
+                const fullFilename = t.filename || 'unknown file';
+                name.textContent = truncateWithEllipsis(fullFilename, 42);
+                name.title = fullFilename;
                 name.style.fontWeight = '600';
                 row.appendChild(name);
 
@@ -481,20 +567,6 @@
             });
         }
 
-        transferEvents.innerHTML = '';
-        if (!transferEventList.length) {
-            const emptyEvent = document.createElement('div');
-            emptyEvent.textContent = 'No recent transfer events';
-            emptyEvent.style.color = '#aab5bf';
-            transferEvents.appendChild(emptyEvent);
-        } else {
-            transferEventList.forEach(function (item) {
-                const row = document.createElement('div');
-                row.textContent = '[' + item.at + '] ' + item.text;
-                row.style.color = item.kind === 'error' ? '#ff9898' : '#b7c4cf';
-                transferEvents.appendChild(row);
-            });
-        }
     }
 
     function processTransferEvents(transfers) {
