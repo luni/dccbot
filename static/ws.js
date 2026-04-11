@@ -77,5 +77,11 @@
     return socket;
   }
 
+  function createDccbotUrl(pathname) {
+    const normalizedPath = String(pathname || "").replace(/^\/+/, "");
+    return new URL(normalizedPath, `${window.location.origin}${getBasePath()}`).toString();
+  }
+
   window.createDccbotSocket = createDccbotSocket;
+  window.createDccbotUrl = createDccbotUrl;
 })();

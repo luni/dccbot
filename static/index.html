@@ -592,11 +592,16 @@
           btn.dataset.server = transfer.server || "";
           btn.dataset.nick = transfer.nick || "";
           btn.dataset.filename = transfer.filename || "";
-          btn.addEventListener("click", async () => {
+          btn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
             btn.disabled = true;
             btn.textContent = "Cancelling...";
             try {
-              const resp = await fetch("/cancel", {
+              const cancelUrl = typeof window.createDccbotUrl === "function"
+                ? window.createDccbotUrl("cancel")
+                : "/cancel";
+              const resp = await fetch(cancelUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
