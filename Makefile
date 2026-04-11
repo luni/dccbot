@@ -1,47 +1,67 @@
 # Makefile
 
-.PHONY: all format check validate
+.PHONY: all format check validate test test-cov test-integration test-all irc-up irc-down test-integration-local vulture complexity xenon bandit pyright fix reformat-ruff fix-ruff
 
 # Default target: runs format and check
 all: validate test
 
 # Format the code using ruff
 format:
-	ruff format --check --diff .
+	uv run ruff format --check --diff .
 
 reformat-ruff:
-	ruff format .
+	uv run ruff format .
 
 # Check the code using ruff
 check:
-	ruff check .
+	uv run ruff check .
 
 fix-ruff:
-	ruff check . --fix
+	uv run ruff check . --fix
 
 fix: reformat-ruff fix-ruff
 	@echo "Updated code."
 
 test:
-	pytest
+	uv run pytest tests/unit
 
 test-cov:
-	pytest --cov --cov-report=xml --cov-report=term-missing
+	uv run pytest tests/unit --cov --cov-report=xml --cov-report=term-missing
+
+test-integration:
+	uv run pytest tests/integration -v -m integration --timeout=120
+
+test-all: test-cov
+	uv run pytest tests/integration -v -m integration --timeout=120
+
+# Integration test helpers
+irc-up:
+	docker compose up -d ircd
+	@echo "Waiting for IRC server to be ready..."
+	@timeout 60 bash -c 'until nc -z localhost 6667 2>/dev/null; do sleep 1; done' || echo "Timeout waiting for IRC server"
+	@echo "IRC server is ready!"
+
+irc-down:
+	docker compose down
+
+test-integration-local: irc-up
+	uv run pytest tests/integration -v -m integration --timeout=120
+	$(MAKE) irc-down
 
 vulture:
-	vulture . --exclude .venv,migrations,tests --make-whitelist
+	uv run vulture . --exclude .venv,migrations,tests --make-whitelist
 
 complexity:
-	radon cc . -a -nc
+	uv run radon cc . -a -nc
 
 xenon:
-	xenon -b D -m B -a B .
+	uv run xenon -b D -m B -a B .
 
 bandit:
-	bandit -c pyproject.toml -r .
+	uv run bandit -c pyproject.toml -r .
 
 pyright:
-	pyright
+	uv run pyright
 
 # Validate the code (format + check)
 validate: format check complexity bandit pyright vulture

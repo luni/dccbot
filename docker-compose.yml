@@ -1,0 +1,40 @@
+services:
+  ircd:
+    image: inspircd/inspircd-docker:latest
+    container_name: dccbot-test-ircd
+    ports:
+      - "6667:6667"
+      - "6697:6697"
+    environment:
+      - INSP_NET_NAME=TestIRC
+      - INSP_ADMIN_NAME=Test Admin
+      - INSP_ADMIN_EMAIL=test@localhost
+      - INSP_ADMIN_NICK=TestAdmin
+      - INSP_SERVER_NAME=test.local
+      - INSP_SERVER_DESCRIPTION=Test IRC Server for dccbot
+      - INSP_ENABLE_SSL=yes
+      - INSP_SSL_CERT_PATH=/inspircd/certs/cert.pem
+      - INSP_SSL_KEY_PATH=/inspircd/certs/key.pem
+    volumes:
+      - ircd_certs:/inspircd/certs
+    entrypoint: >
+      sh -c "
+        mkdir -p /inspircd/certs &&
+        if [ ! -f /inspircd/certs/cert.pem ] || [ ! -f /inspircd/certs/key.pem ]; then
+          echo 'Generating self-signed SSL certificate...';
+          openssl req -x509 -newkey rsa:4096 -keyout /inspircd/certs/key.pem
+            -out /inspircd/certs/cert.pem -days 1 -nodes
+            -subj '/CN=test.local' 2>/dev/null ||
+          echo 'SSL cert generation may have failed, continuing...';
+        fi &&
+        exec /entrypoint.sh
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 6667 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  ircd_certs:
