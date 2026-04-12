@@ -41,7 +41,7 @@ def irc_bot_manager(tmp_path) -> IRCBotManager:
 
     config = {
         "servers": {},
-        "download_path": str(tmp_path / "downloads"),
+        "default_download_path": str(tmp_path / "downloads"),
         "allowed_mimetypes": None,
         "max_file_size": 1073741824,
         "server_idle_timeout": 60,
@@ -72,7 +72,7 @@ def irc_bot_factory(irc_bot_manager, unique_nick):
         bot = IRCBot(
             server=server,
             server_config=server_config,
-            download_path=irc_bot_manager.config.get("download_path", "/tmp"),
+            download_path=irc_bot_manager.config.get("default_download_path", "/tmp"),
             allowed_mimetypes=irc_bot_manager.config.get("allowed_mimetypes"),
             max_file_size=irc_bot_manager.config.get("max_file_size", 1073741824),
             bot_manager=irc_bot_manager,

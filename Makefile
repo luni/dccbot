@@ -36,10 +36,13 @@ test-all: test-cov
 
 # Integration test helpers
 irc-up:
-	docker compose up -d ircd
+	docker compose up -d ircd xdccbot
 	@echo "Waiting for IRC server to be ready..."
-	@timeout 60 bash -c 'until nc -z localhost 6667 2>/dev/null; do sleep 1; done' || echo "Timeout waiting for IRC server"
+	@bash -c 'for i in $$(seq 1 60); do nc -z localhost 6667 2>/dev/null && exit 0; sleep 1; done; exit 1' || echo "Timeout waiting for IRC server"
 	@echo "IRC server is ready!"
+	@echo "Waiting for XDCC bot to be ready..."
+	@bash -c 'for i in $$(seq 1 90); do [ "$$(docker inspect -f "{{.State.Health.Status}}" dccbot-test-xdcc 2>/dev/null)" = "healthy" ] && exit 0; sleep 2; done; exit 1' || echo "Timeout waiting for XDCC bot health check"
+	@echo "XDCC bot is ready!"
 
 irc-down:
 	docker compose down
