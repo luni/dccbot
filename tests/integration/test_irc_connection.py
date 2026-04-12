@@ -70,7 +70,7 @@ async def test_irc_connection_with_random_nick(irc_bot_manager):
     bot = IRCBot(
         server="localhost",
         server_config=server_config,
-        download_path=irc_bot_manager.config.get("download_path", "/tmp"),
+        download_path=irc_bot_manager.config.get("default_download_path", "/tmp"),
         allowed_mimetypes=irc_bot_manager.config.get("allowed_mimetypes"),
         max_file_size=irc_bot_manager.config.get("max_file_size", 1073741824),
         bot_manager=irc_bot_manager,
@@ -124,7 +124,7 @@ async def test_irc_authentication_timeout(tmp_path):
     # Create a valid config file
     config = {
         "servers": {},
-        "download_path": str(tmp_path / "downloads"),
+        "default_download_path": str(tmp_path / "downloads"),
         "allowed_mimetypes": None,
         "max_file_size": 1073741824,
     }

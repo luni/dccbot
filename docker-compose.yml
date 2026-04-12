@@ -1,3 +1,12 @@
+volumes:
+  ircd_certs:
+  iroffer_files:
+  iroffer_config:
+
+networks:
+  ircnet:
+    driver: bridge
+
 services:
   ircd:
     image: inspircd/inspircd-docker:latest
@@ -35,6 +44,50 @@ services:
       timeout: 3s
       retries: 10
       start_period: 15s
+    networks:
+      - ircnet
 
-volumes:
-  ircd_certs:
+  xdccbot:
+    build:
+      context: .
+      dockerfile: tests/integration/iroffer.Dockerfile
+    container_name: dccbot-test-xdcc
+    hostname: xdccbot
+    depends_on:
+      ircd:
+        condition: service_healthy
+    ports:
+      - "10000-10010:10000-10010"
+    volumes:
+      - iroffer_files:/files
+      - iroffer_config:/config
+    networks:
+      - ircnet
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /config/iroffer.log && grep -q 'Added: \\[Pack 1\\]' /config/iroffer.log"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+    command: >
+      sh -c "
+        echo 'Cleaning up old files and state...' &&
+        rm -f /files/test1.txt /files/test2.txt /config/iroffer.state /config/iroffer.log &&
+        echo 'Generating test files...' &&
+        mkdir -p /files &&
+        # Create a 512KB test file (takes ~4 seconds at 100KB/s)
+        dd if=/dev/urandom bs=1024 count=512 of=/files/test1.bin 2>/dev/null &&
+        # Create a smaller 64KB backup test file
+        dd if=/dev/urandom bs=1024 count=64 of=/files/test2.bin 2>/dev/null &&
+        echo 'Test files generated:' &&
+        ls -la /files/ &&
+        echo 'Refreshing iroffer config...' &&
+        cp /config-template/mybot.config /config/mybot.config &&
+        echo 'Waiting for IRC server to be ready...' &&
+        sleep 5 &&
+        echo 'Starting iroffer (daemon mode for non-TTY container)...' &&
+        cd /config &&
+        iroffer -b mybot.config &&
+        echo 'iroffer started, tailing logs...' &&
+        exec tail -F /config/iroffer.log
+      "

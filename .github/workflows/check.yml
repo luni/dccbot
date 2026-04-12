@@ -82,13 +82,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Start InspIRCd
+      - name: Start InspIRCd and XDCC bot
         run: |
-          docker compose up -d ircd
+          docker compose up -d ircd xdccbot
           # Wait for IRC server to be ready
           echo "Waiting for IRC server to start..."
           timeout 60 bash -c 'until nc -z localhost 6667; do sleep 1; done'
           echo "IRC server is ready!"
+          # Wait for XDCC bot to connect
+          echo "Waiting for XDCC bot to be ready..."
+          timeout 180 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" dccbot-test-xdcc 2>/dev/null)" = "healthy" ]; do sleep 2; done'
+          echo "XDCC bot is ready!"
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -110,6 +114,6 @@ jobs:
           cp config.json.sample config.json
           uv run pytest tests/integration -v -m integration --timeout=120
 
-      - name: Stop InspIRCd
+      - name: Stop services
         if: always()
         run: docker compose down
