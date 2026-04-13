@@ -29,7 +29,7 @@ dev = [
     "vulture>=2.14",
     "pyright>=1.1.407",
     "bandit>=1.9.2",
-    "pre-commit>=4.5.0",
+    "pre-commit>=4.5.1",
 ]
 
 [tool.ruff]
