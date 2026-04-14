@@ -6,7 +6,7 @@ readme = "README.md"
 license = {text = "MIT License"}
 requires-python = ">=3.10"
 dependencies = [
-    "aiohttp>=3.13.3",
+    "aiohttp>=3.13.4",
     "irc>=20.5.0",
     "pytest-aiohttp>=1.1.0",
     "python-magic>=0.4.27",
