@@ -808,7 +808,12 @@
             h4.onclick = function () {
                 const msg = document.getElementById('msg');
                 if (msg) {
-                    msg.innerHTML = '<textarea style="width:100%;" rows=8>' + all_results.join('\n') + '</textarea>';
+                    msg.textContent = '';
+                    const textarea = document.createElement('textarea');
+                    textarea.style.width = '100%';
+                    textarea.rows = 8;
+                    textarea.value = all_results.join('\n');
+                    msg.appendChild(textarea);
                 }
             };
         }
