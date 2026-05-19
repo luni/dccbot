@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-03-24
+// @version      2026-05-19
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -11,6 +11,8 @@
 // @match        https://xdcc.rocks/*
 // @match        https://www.xdcc.rocks/*
 // @match        https://xdcc-search.com/*
+// @match        https://www.xdcc.info/*
+// @match        https://sunxdcc.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
 // @grant        GM_xmlhttpRequest
@@ -1099,6 +1101,117 @@
         observeMutations(resultsContainer || document.body, processCards);
     }
 
+    function add_button_xdcc_info() {
+        function processInfoRows() {
+            const rows = document.querySelectorAll('table.pack-table tbody tr');
+            rows.forEach(function (row) {
+                if (row.querySelector('.dccbot-btn')) return;
+
+                const d = row.dataset;
+                const botname = (d.bot || '').trim();
+                const packnum = extractPackNumber(d.packNum);
+                const server = (d.networkAddress || '').trim();
+                const channel = normalizeChannel(d.channel || '');
+
+                if (!botname || !packnum || !server || !channel) return;
+
+                const actionsCell = row.querySelector('.td-actions');
+                if (!actionsCell) return;
+
+                const btn = get_download_btn(server, channel, botname, packnum);
+                actionsCell.appendChild(btn);
+            });
+        }
+
+        processInfoRows();
+
+        const table = document.querySelector('table.pack-table');
+        if (table) {
+            observeMutations(table, processInfoRows);
+        }
+    }
+
+    function add_button_sunxdcc() {
+        function processSunxdccRows() {
+            const resultsDiv = document.querySelector('.results');
+            if (!resultsDiv) return;
+
+            const tables = Array.from(resultsDiv.querySelectorAll('.table'));
+            let currentServer = null;
+            let currentChannel = null;
+            let currentBot = null;
+            let currentHeaderTable = null;
+
+            tables.forEach(function (table) {
+                const netCell = table.querySelector('.cell.net');
+                if (netCell) {
+                    const m = netCell.textContent.match(/Network:\s*(.+)/i);
+                    if (m) currentServer = m[1].trim();
+                }
+
+                const chanCell = table.querySelector('.cell.chan');
+                if (chanCell) {
+                    const a = chanCell.querySelector('a[href^="irc://"]');
+                    if (a) {
+                        const parsed = a.getAttribute('href').match(/^irc:\/\/([^/]+)\/(?:#)?(.+)$/i);
+                        if (parsed) {
+                            currentServer = parsed[1];
+                            currentChannel = normalizeChannel(parsed[2]);
+                        }
+                    }
+                }
+
+                const botCell = table.querySelector('.cell.bot');
+                if (botCell) {
+                    const m = botCell.textContent.match(/Bot:\s*(.+)/i);
+                    if (m) currentBot = m[1].trim();
+                }
+
+                const hasPackHeader = table.querySelector('.cell.packnum') && !table.querySelector('.cell.packnum.val');
+                if (hasPackHeader) {
+                    currentHeaderTable = table;
+                }
+
+                const packCell = table.querySelector('.cell.packnum.val');
+                if (packCell && currentServer && currentChannel && currentBot) {
+                    if (table.querySelector('.dccbot-btn')) return;
+
+                    const a = packCell.querySelector('a.msgPrompt');
+                    const packnum = a ? extractPackNumber(a.dataset.packnum) : '';
+                    if (!packnum) return;
+
+                    if (currentHeaderTable && !currentHeaderTable.querySelector('.cell.dccbot-action')) {
+                        const fnameHeader = currentHeaderTable.querySelector('.cell.fname');
+                        if (fnameHeader) {
+                            const actionHeader = document.createElement('div');
+                            actionHeader.className = 'cell dccbot-action';
+                            actionHeader.textContent = 'Down';
+                            fnameHeader.insertAdjacentElement('afterend', actionHeader);
+                        }
+                    }
+
+                    const fnameCell = table.querySelector('.cell.fname.val');
+                    if (fnameCell) {
+                        const btn = get_download_btn(currentServer, currentChannel, currentBot, packnum);
+                        const btnCell = document.createElement('div');
+                        btnCell.className = 'cell val dccbot-action';
+                        btnCell.appendChild(btn);
+                        fnameCell.insertAdjacentElement('afterend', btnCell);
+                    } else {
+                        const btn = get_download_btn(currentServer, currentChannel, currentBot, packnum);
+                        packCell.appendChild(btn);
+                    }
+                }
+            });
+        }
+
+        processSunxdccRows();
+        const resultsDiv = document.querySelector('.results');
+        if (resultsDiv) {
+            observeMutations(resultsDiv, processSunxdccRows);
+        }
+    }
+
     const hostHandlers = {
         'www.xdcc.eu': add_button_xdcc_eu,
         'nibl.co.uk': add_button_nibl,
@@ -1106,7 +1219,9 @@
         'xdcc.rocks': add_button_xdcc_rocks,
         'www.xdcc.rocks': add_button_xdcc_rocks,
         'xdcc-search.com': add_button_xdcc_search,
-        'www.xdcc-search.com': add_button_xdcc_search
+        'www.xdcc-search.com': add_button_xdcc_search,
+        'www.xdcc.info': add_button_xdcc_info,
+        'sunxdcc.com': add_button_sunxdcc
     };
 
     const handler = hostHandlers[window.location.hostname];

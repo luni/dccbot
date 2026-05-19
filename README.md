@@ -99,11 +99,12 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 #### Supported Websites
 
 * XDCC.eu
-
 * NIBL
 * xdcc.rocks
 * xdcc.animk.info
 * xdcc-search.com
+* xdcc.info
+* sunxdcc.com
 
 #### Installation
 
@@ -118,7 +119,7 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 
 #### Usage
 
-* On XDCC.eu and NIBL, you'll see a "Down" button next to each search result
+* On supported sites (XDCC.eu, NIBL, xdcc.info, etc.), you'll see a "Down" button next to each search result
 * Click the button to automatically send the download command to your DCCBot
 * For NIBL, you can also select multiple items and use the "Download selected" button to batch download
 
