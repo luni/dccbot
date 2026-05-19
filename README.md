@@ -1,16 +1,29 @@
 dccbot
 ========
 
+![CI](https://github.com/luni/dccbot/actions/workflows/check.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+
 An IRC XDCC download bot written in python with aiohttp and [irc.py](https://github.com/jaraco/irc).
 
 Features
 --------
 
-* join channels
+* join channels (auto-join on connect, with `also_join` cascades)
 * send messages to channels or users
-* part channels
-* support for dcc connections
-* support for receiving files over dcc
+* NickServ authentication
+* random nickname generation
+* TLS/SSL server connections (with optional certificate verification bypass)
+* DCC file transfer support (SEND / RESUME / SSEND)
+* SSL DCC (SSEND) support
+* MIME type filtering for received files
+* file size limits
+* private IP filtering for DCC transfers
+* transfer cancellation via API
+* auto-disconnect from idle servers and channels
+* MD5 verification of completed transfers
+* incomplete file suffix support (auto-renamed on completion)
 
 Usage
 -----
@@ -21,7 +34,7 @@ The bot can be configured by creating a `config.json` file in the current workin
 directory. The configuration file should contain a json object with the following
 keys:
 
-* `servers`: a list of servers the bot can connect to. Each server is an
+* `servers`: a dictionary of servers the bot can connect to, keyed by server address. Each server is an
     object with the following keys:
   * `nick`: the nickname to use when connecting to the server, default: dccbot
   * `nickserv_password`: the password to use when connecting to the server, optional
@@ -49,7 +62,7 @@ keys:
     from the transfer list in /info response
 * `auto_md5sum`: a boolean indicating to verify the md5sum of the file if
     the bot sends the md5sum as message on start of transfer or after successful transfer
-    `incomplete_suffix`: a string that is appended to the filename while downloading.
+* `incomplete_suffix`: a string that is appended to the filename while downloading.
     If file was transferred successfully this suffix is removed.
 * `ssend_map`: a dictionary of users which support ssend (secure send). xdcc send command is
     replaced with ssend for these users.
@@ -71,10 +84,15 @@ available at `http://localhost:8080/` by default.
 * `POST /cancel`: cancel a running transfer
 * `POST /shutdown`: shutdown the bot
 * `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers)
+* `GET /ws`: WebSocket endpoint for live transfer updates and log streaming
+* `GET /swagger`: interactive OpenAPI/Swagger UI documentation
+* `GET /static/`: static web assets (unified web UI)
 
 ### Additional browser features
 
 * `/`: unified web UI with current transfers, live log output, and websocket command input.
+
+![DCCBot Web Interface](assets/dccbot-interface.png)
 
 ### WebSocket command help
 
@@ -95,6 +113,8 @@ Supported websocket commands:
 ### Browser Userscript for Easy Downloads
 
 A Violentmonkey userscript is provided to add download buttons to popular XDCC search websites, making it easy to send download commands directly to your DCCBot.
+
+![XDCC Search with Download Buttons](assets/xdcc-search.png)
 
 #### Supported Websites
 
@@ -130,3 +150,11 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 * Batch download support on NIBL
 * Customizable API endpoint
 * Lightweight and fast
+
+### Developer / Testing
+
+The repository includes a full local development and testing setup:
+
+* **Makefile targets**: `make test`, `make test-integration`, `make irc-up`, `make irc-down`, `make validate` (format + lint + complexity + security + type-check + vulture)
+* **Docker Compose**: `docker compose up -d ircd` starts a local InspIRCd test server for integration tests
+* **Dependabot**: configured for pip (weekly) and GitHub Actions (monthly)

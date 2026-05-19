@@ -1,4 +1,4 @@
-name: Python Code Checks
+name: Code Checks
 
 permissions:
   contents: read
@@ -64,13 +64,22 @@ jobs:
           cp config.json.sample config.json
           uv run pytest tests/unit -v --cov --cov-report=xml --cov-report=term-missing
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          fail_ci_if_error: false
-          verbose: true
+          name: coverage-report
+          path: ./coverage.xml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Run JavaScript tests
+        run: |
+          npm ci
+          npm test
 
   integration:
     name: Integration Tests

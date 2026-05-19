@@ -417,6 +417,8 @@ class IRCBotAPI:
             lines.append("Use /help <command> for details.")
             return "\n".join(lines)
 
+        if command is not None:
+            command = command.lower()
         command_help = WS_COMMAND_HELP.get(command)
         if not command_help:
             return f"Unknown command: {command}"
@@ -439,6 +441,8 @@ class IRCBotAPI:
 
         """
         try:
+            if command is not None:
+                command = command.lower()
             logging.info("Received command from client: %s %s", command, args)
             if command == "help":
                 command_name = args[0].lower() if args else None

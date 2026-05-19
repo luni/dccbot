@@ -175,3 +175,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 .windsurf/rules/use-uv.md
+
+node_modules/
