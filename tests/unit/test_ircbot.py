@@ -735,3 +735,113 @@ async def test_handle_authentication_timeout(bot_factory, mock_bot_manager):
     with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
         await bot._handle_authentication()
         # Should handle timeout gracefully
+
+
+def test_get_passive_dcc_config_disabled(bot):
+    """Test passive DCC config defaults to disabled."""
+    enabled, listen_ip, port_range = bot._get_passive_dcc_config()
+    assert enabled is False
+    assert listen_ip is None
+    assert port_range is None
+
+
+def test_get_passive_dcc_config_global(bot_factory, mock_bot_manager):
+    """Test passive DCC config from global config."""
+    mock_bot_manager.config = {
+        "passive_dcc": True,
+        "passive_dcc_listen_ip": "0.0.0.0",
+        "passive_dcc_port_range": [10000, 20000],
+    }
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    enabled, listen_ip, port_range = bot._get_passive_dcc_config()
+    assert enabled is True
+    assert listen_ip == "0.0.0.0"
+    assert port_range == (10000, 20000)
+
+
+def test_get_passive_dcc_config_server_override(bot_factory, mock_bot_manager):
+    """Test per-server config overrides global config."""
+    mock_bot_manager.config = {
+        "passive_dcc": True,
+        "passive_dcc_listen_ip": "0.0.0.0",
+        "passive_dcc_port_range": [10000, 20000],
+    }
+    bot = bot_factory(
+        allowed_mimetypes=None,
+        manager=mock_bot_manager,
+        server_config={
+            "passive_dcc": False,
+            "passive_dcc_listen_ip": "127.0.0.1",
+            "passive_dcc_port_range": [30000, 40000],
+        },
+    )
+    enabled, listen_ip, port_range = bot._get_passive_dcc_config()
+    assert enabled is False
+    assert listen_ip == "127.0.0.1"
+    assert port_range == (30000, 40000)
+
+
+def test_on_dcc_send_passive_disabled(bot):
+    """Test on_dcc_send rejects passive DCC when not enabled."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_not_called()
+
+
+def test_on_dcc_send_passive_enabled(bot_factory, mock_bot_manager):
+    """Test on_dcc_send initiates passive DCC when enabled."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None)
+
+
+@pytest.mark.asyncio
+async def test_init_passive_dcc_connection(bot):
+    """Test passive DCC connection setup."""
+    bot.connection = MagicMock()
+    mock_dcc = MagicMock()
+    mock_dcc.localaddress = "192.168.1.100"
+    mock_dcc.localport = 12345
+
+    mock_listen = AsyncMock(return_value=mock_dcc)
+    mock_dcc.listen = mock_listen
+
+    with patch.object(bot, "dcc", return_value=mock_dcc) as mock_dcc_factory:
+        with patch.object(bot.loop, "create_task") as mock_create_task:
+            bot.init_passive_dcc_connection("sender", "test.txt", 1000, "0.0.0.0", (10000, 20000))
+            mock_dcc_factory.assert_called_once_with("raw")
+            # Verify task was scheduled
+            mock_create_task.assert_called_once()
+            # Await the inner coroutine directly to verify behavior
+            coro = mock_create_task.call_args[0][0]
+            await coro
+
+    mock_listen.assert_called_once_with(addr="0.0.0.0", port=(10000, 20000))
+    bot.connection.ctcp_reply.assert_called_once()
+    assert len(bot.current_transfers) == 1
+    transfer = list(bot.current_transfers.values())[0]
+    assert transfer["filename"] == "test.txt"
+    assert transfer["nick"] == "sender"
+    assert transfer["size"] == 1000
+
+
+def test_on_dcc_connect(bot):
+    """Test on_dcc_connect handler."""
+    event = MagicMock()
+    event.source = "192.168.1.1"
+    # Should not raise
+    bot.on_dcc_connect(MagicMock(), event)

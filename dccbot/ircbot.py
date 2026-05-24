@@ -156,6 +156,22 @@ class IRCBot(AioSimpleIRCClient):
         random_suffix = "".join(random.choices(string.digits, k=3))  # nosec
         return f"{base_nick}{random_suffix}"
 
+    def _get_passive_dcc_config(self) -> tuple[bool, str | None, tuple[int, int] | None]:
+        """Get passive DCC configuration.
+
+        Returns a tuple of (enabled, listen_ip, port_range).
+        Per-server config overrides global config.
+
+        """
+        enabled = self.server_config.get("passive_dcc", self.config.get("passive_dcc", False))
+        listen_ip = self.server_config.get("passive_dcc_listen_ip", self.config.get("passive_dcc_listen_ip"))
+        port_range = self.server_config.get("passive_dcc_port_range", self.config.get("passive_dcc_port_range"))
+        if port_range and len(port_range) == 2:
+            port_range = (int(port_range[0]), int(port_range[1]))
+        else:
+            port_range = None
+        return bool(enabled), listen_ip, port_range
+
     async def connect(self) -> None:  # type: ignore
         """Establish a connection to the IRC server.
 
@@ -588,8 +604,13 @@ class IRCBot(AioSimpleIRCClient):
         filename, peer_address, peer_port, size = parsed.filename, parsed.peer_address, parsed.peer_port, parsed.size
 
         if peer_port == 0:
-            logger.warning("Passive DCC transfers are not supported yet.")
-            return
+            passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
+            if not passive_enabled:
+                logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
+                return
+            if use_ssl:
+                logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
+            return self.init_passive_dcc_connection(event.source.nick, filename, size, listen_ip, port_range)
 
         if size > self.max_file_size:
             logger.warning("Rejected %s: File size exceeds limit (%d > %d)", filename, size, self.max_file_size)
@@ -793,9 +814,96 @@ class IRCBot(AioSimpleIRCClient):
         # Schedule the connection to be established
         self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item))
 
+    def init_passive_dcc_connection(
+        self,
+        nick: str,
+        filename: str,
+        size: int,
+        listen_ip: str | None = None,
+        port_range: tuple[int, int] | None = None,
+    ) -> None:
+        """Initialize a passive DCC connection (listen for incoming connection).
+
+        This method sets up a listening socket for the peer to connect to,
+        sends a CTCP reply with the bot's IP and port, and stores the transfer
+        information in the ``current_transfers`` dictionary.
+
+        Args:
+            nick (str): The name of the peer.
+            filename (str): The name of the file to receive.
+            size (int): The size of the file.
+            listen_ip (str | None): IP address to bind to. If None, uses the default.
+            port_range (tuple[int, int] | None): Port range to try. If None, uses OS-assigned port.
+
+        """
+        logger.info("[%s] Setting up passive DCC for %s, size: %d bytes", nick, filename, size)
+
+        dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
+
+        async def _setup() -> None:
+            try:
+                if listen_ip and port_range:
+                    await dcc.listen(addr=listen_ip, port=port_range)
+                elif listen_ip:
+                    await dcc.listen(addr=listen_ip)
+                elif port_range:
+                    await dcc.listen(port=port_range)
+                else:
+                    await dcc.listen()
+            except Exception as e:
+                logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
+                return
+
+            ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
+            self.connection.ctcp_reply(
+                nick,
+                " ".join(["DCC", "SEND", '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)]),
+            )
+            logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
+
+            local_download_path = os.path.join(self.download_path, filename)
+            if self.config.get("incomplete_suffix"):
+                local_download_path += self.config["incomplete_suffix"]
+
+            now = time.time()
+            transfer_item = {
+                **create_transfer(
+                    nick=nick,
+                    server=self.server,
+                    peer_address=dcc.localaddress,
+                    peer_port=dcc.localport,
+                    file_path=local_download_path,
+                    filename=filename,
+                    size=size,
+                    offset=0,
+                    use_ssl=False,
+                    completed=False,
+                    now=now,
+                ),
+            }
+
+            # Merge with existing pending transfer if available
+            for item in self.bot_manager.transfers.get(filename, []):
+                if item.get("peer_address") is None and item["start_time"] >= now - 30 and item["nick"] == nick and item["server"] == self.server:
+                    item.update(transfer_item)
+                    transfer_item = item
+                    break
+            else:
+                if not self.bot_manager.transfers.get(filename):
+                    self.bot_manager.transfers[filename] = []
+                self.bot_manager.transfers[filename].append(transfer_item)
+
+            self.current_transfers[dcc] = transfer_item
+
+        self.loop.create_task(_setup())
+
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Delegate DCC message handling to transfer handler."""
         self.transfer_handler.on_dccmsg(cast(AioDCCConnection, connection), event)
+
+    def on_dcc_connect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle DCC connect event for passive DCC connections."""
+        logger.info("DCC connection established from %s", event.source)
 
     async def _add_md5_check_queue_item(self, transfer: dict) -> None:
         """Add a transfer to the MD5 check queue.

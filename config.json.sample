@@ -7,7 +7,10 @@
       "random_nick": true,
       "channels": ["#channel"],
       "port": 6667,
-      "rewrite_to_ssend": ["#channel"]
+      "rewrite_to_ssend": ["#channel"],
+      "passive_dcc": true,
+      "passive_dcc_listen_ip": "192.168.1.10",
+      "passive_dcc_port_range": [15000, 16000]
     },
     "irc.buggyirc.net": {
       "nick": "MyBotNick",
@@ -51,6 +54,9 @@
   "auto_md5sum": true,
   "incomplete_suffix": ".incomplete",
   "allow_private_ips": false,
+  "passive_dcc": false,
+  "passive_dcc_listen_ip": "0.0.0.0",
+  "passive_dcc_port_range": [10000, 20000],
   "http": {
     "host": "0.0.0.0",
     "port": 9999,

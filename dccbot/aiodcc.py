@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import socket
 from asyncio.transports import Transport
 
 import irc.client
@@ -12,10 +14,26 @@ log = logging.getLogger(__name__)
 class DCCProtocol(irc.client_aio.IrcProtocol):
     """Subclass of IrcProtocol handling DCC connections.
 
-    Note that unlike IrcProtocol, this class does not implement the
-    connection_made callback, as the connection is made by the user
-    when calling the dcc method of the reactor.
+    Handles passive DCC incoming connections via connection_made.
     """
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        """Handle connection made for passive DCC connections."""
+        if self.connection.passive and not self.connection.connected:
+            self.connection.transport = transport
+            self.connection.connected = True
+            self.connection.peeraddress, self.connection.peerport = transport.get_extra_info('peername')
+            log.debug("DCC connection from %s:%d", self.connection.peeraddress, self.connection.peerport)
+            self.connection.reactor._handle_event(
+                self.connection, irc.client.Event("dcc_connect", self.connection.peeraddress, None, None)
+            )
+            if hasattr(self.connection, 'server') and self.connection.server:
+                self.connection.server.close()
+            return
+
+        # For active connections, ensure transport is set if not already
+        if not getattr(self.connection, 'transport', None):
+            self.connection.transport = transport
 
 
 class NonStrictDecodingLineBuffer(buffer.DecodingLineBuffer):
@@ -109,16 +127,79 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.reactor._on_connect(self.protocol, self.transport)
         return self
 
-    # TODO: implement listen() in asyncio way
-    async def listen(self, _addr=None) -> "AioDCCConnection":  # type: ignore # noqa: ANN001
+    async def listen(
+        self,
+        addr: str | tuple[str, int] | None = None,
+        port: int | tuple[int, int] | list[int] | None = None,
+        ipv6: bool = False,
+    ) -> "AioDCCConnection":  # type: ignore
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
 
         The local IP address and port are available as
+        self.localaddress and self.localport. After connection from a
+        peer, the peer address and port are available as
         self.peeraddress and self.peerport.
+
+        Args:
+            addr: Host string or (host, port) tuple to bind to.
+                  If a tuple, the port is only used if `port` is None.
+            port: Port to listen on. Can be an int, a (min, max) tuple
+                  to try a range, or a list of ports to try in order.
+                  Overrides the port in `addr` if both are provided.
+            ipv6: Use IPv6 if True.
+
         """
-        raise NotImplementedError()
+        self.passive = True
+        self.handlers = {}
+        self.buffer = self.buffer_class()
+
+        # Resolve host and default port from addr
+        if addr is None:
+            host = socket.gethostbyname(socket.gethostname())
+            addr_port = 0
+        elif isinstance(addr, str):
+            host = addr
+            addr_port = 0
+        else:
+            host, addr_port = addr
+
+        # port parameter overrides addr port if specified
+        if port is None:
+            port = addr_port
+
+        def factory() -> DCCProtocol:
+            return self.protocol_class(self, self.reactor.loop)
+
+        family = socket.AF_INET6 if ipv6 else socket.AF_INET
+
+        # Build iterable of ports to try
+        if isinstance(port, int):
+            ports = [port]
+        elif isinstance(port, tuple):
+            ports = range(port[0], port[1] + 1)
+        else:
+            ports = port  # assume list/iterable
+
+        last_error = None
+        for try_port in ports:
+            try:
+                self.server = await self.reactor.loop.create_server(
+                    factory, host, try_port, family=family
+                )
+                break
+            except OSError as ex:
+                last_error = ex
+                continue
+        else:
+            raise irc.client.DCCConnectionError(f"Couldn't bind socket: {last_error}") from last_error
+
+        # Get the actual bound address and port
+        socket_obj = self.server.sockets[0]
+        self.localaddress, self.localport = socket_obj.getsockname()
+
+        return self
 
     def disconnect(self, message: str = "") -> None:
         """Hang up the connection and close the object.
@@ -132,9 +213,20 @@ class AioDCCConnection(irc.client.DCCConnection):
         except AttributeError:
             return
 
-        self.transport.close()
+        try:
+            if hasattr(self, 'server') and self.server:
+                self.server.close()
+        except AttributeError:
+            pass
 
-        self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
+        try:
+            self.transport.close()
+        except AttributeError:
+            pass
+
+        self.reactor._handle_event(
+            self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message])
+        )
         self.reactor._remove_connection(self)
 
     def process_data(self, new_data: bytes) -> None:  # type: ignore
@@ -144,10 +236,6 @@ class AioDCCConnection(irc.client.DCCConnection):
             new_data: The data to process.
 
         """
-        if self.passive and not self.connected:
-            raise NotImplementedError()
-            # TODO: implement passive DCC connection
-
         if self.dcctype == "chat":
             self.buffer.feed(new_data)
 
@@ -165,20 +253,38 @@ class AioDCCConnection(irc.client.DCCConnection):
         prefix = self.peeraddress
         target = None
         for chunk in chunks:
+            log.debug("FROM PEER: %s", chunk)
             arguments = [chunk]
+            log.debug(
+                "command: %s, source: %s, target: %s, arguments: %s",
+                command,
+                prefix,
+                target,
+                arguments,
+            )
             event = irc.client.Event(command, prefix, target, arguments)
             self.reactor._handle_event(self, event)
 
-    def send_bytes(self, bytes: bytes) -> None:
+    def privmsg(self, text: str) -> None:
+        """Send text to DCC peer.
+
+        The text will be padded with a newline if it's a DCC CHAT session.
+        """
+        if self.dcctype == 'chat':
+            text += '\n'
+        return self.send_bytes(self.encode(text))
+
+    def send_bytes(self, data: bytes) -> None:
         """Send data to DCC peer.
 
         Args:
-            bytes: The data to send.
+            data: The data to send.
 
         """
         try:
-            self.transport.write(bytes)
-        except OSError:
+            self.transport.write(data)
+            log.debug("TO PEER: %r\n", data)
+        except (OSError, AttributeError):
             self.disconnect("Connection reset by peer.")
 
 
