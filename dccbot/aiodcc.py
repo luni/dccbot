@@ -22,17 +22,15 @@ class DCCProtocol(irc.client_aio.IrcProtocol):
         if self.connection.passive and not self.connection.connected:
             self.connection.transport = transport
             self.connection.connected = True
-            self.connection.peeraddress, self.connection.peerport = transport.get_extra_info('peername')
+            self.connection.peeraddress, self.connection.peerport = transport.get_extra_info("peername")
             log.debug("DCC connection from %s:%d", self.connection.peeraddress, self.connection.peerport)
-            self.connection.reactor._handle_event(
-                self.connection, irc.client.Event("dcc_connect", self.connection.peeraddress, None, None)
-            )
-            if hasattr(self.connection, 'server') and self.connection.server:
+            self.connection.reactor._handle_event(self.connection, irc.client.Event("dcc_connect", self.connection.peeraddress, None, None))
+            if hasattr(self.connection, "server") and self.connection.server:
                 self.connection.server.close()
             return
 
         # For active connections, ensure transport is set if not already
-        if not getattr(self.connection, 'transport', None):
+        if not getattr(self.connection, "transport", None):
             self.connection.transport = transport
 
 
@@ -127,12 +125,12 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.reactor._on_connect(self.protocol, self.transport)
         return self
 
-    async def listen(
+    async def listen(  # type: ignore[reportIncompatibleMethodOverride]
         self,
         addr: str | tuple[str, int] | None = None,
         port: int | tuple[int, int] | list[int] | None = None,
         ipv6: bool = False,
-    ) -> "AioDCCConnection":  # type: ignore
+    ) -> "AioDCCConnection":
         """Wait for a connection/reconnection from a DCC peer.
 
         Returns the DCCConnection object.
@@ -185,9 +183,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         last_error = None
         for try_port in ports:
             try:
-                self.server = await self.reactor.loop.create_server(
-                    factory, host, try_port, family=family
-                )
+                self.server = await self.reactor.loop.create_server(factory, host, try_port, family=family)
                 break
             except OSError as ex:
                 last_error = ex
@@ -214,7 +210,7 @@ class AioDCCConnection(irc.client.DCCConnection):
             return
 
         try:
-            if hasattr(self, 'server') and self.server:
+            if hasattr(self, "server") and self.server:
                 self.server.close()
         except AttributeError:
             pass
@@ -224,9 +220,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         except AttributeError:
             pass
 
-        self.reactor._handle_event(
-            self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message])
-        )
+        self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
         self.reactor._remove_connection(self)
 
     def process_data(self, new_data: bytes) -> None:  # type: ignore
@@ -270,11 +264,11 @@ class AioDCCConnection(irc.client.DCCConnection):
 
         The text will be padded with a newline if it's a DCC CHAT session.
         """
-        if self.dcctype == 'chat':
-            text += '\n'
+        if self.dcctype == "chat":
+            text += "\n"
         return self.send_bytes(self.encode(text))
 
-    def send_bytes(self, data: bytes) -> None:
+    def send_bytes(self, data: bytes) -> None:  # type: ignore[reportIncompatibleMethodOverride]
         """Send data to DCC peer.
 
         Args:
