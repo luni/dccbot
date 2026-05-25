@@ -22,7 +22,12 @@ class DCCProtocol(irc.client_aio.IrcProtocol):
         if self.connection.passive and not self.connection.connected:
             self.connection.transport = transport
             self.connection.connected = True
-            self.connection.peeraddress, self.connection.peerport = transport.get_extra_info("peername")
+            peername = transport.get_extra_info("peername")
+            if peername and len(peername) >= 2:
+                self.connection.peeraddress, self.connection.peerport = peername[0], peername[1]
+            else:
+                self.connection.peeraddress = None
+                self.connection.peerport = None
             log.debug("DCC connection from %s:%d", self.connection.peeraddress, self.connection.peerport)
             self.connection.reactor._handle_event(self.connection, irc.client.Event("dcc_connect", self.connection.peeraddress, None, None))
             if hasattr(self.connection, "server") and self.connection.server:
@@ -193,7 +198,12 @@ class AioDCCConnection(irc.client.DCCConnection):
 
         # Get the actual bound address and port
         socket_obj = self.server.sockets[0]
-        self.localaddress, self.localport = socket_obj.getsockname()
+        sockname = socket_obj.getsockname()
+        if sockname and len(sockname) >= 2:
+            self.localaddress, self.localport = sockname[0], sockname[1]
+        else:
+            self.localaddress = None
+            self.localport = None
 
         return self
 

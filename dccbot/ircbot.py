@@ -603,15 +603,7 @@ class IRCBot(AioSimpleIRCClient):
 
         filename, peer_address, peer_port, size = parsed.filename, parsed.peer_address, parsed.peer_port, parsed.size
 
-        if peer_port == 0:
-            passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
-            if not passive_enabled:
-                logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
-                return
-            if use_ssl:
-                logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
-            return self.init_passive_dcc_connection(event.source.nick, filename, size, listen_ip, port_range)
-
+        # Validate size and filename before proceeding with any DCC transfer
         if size > self.max_file_size:
             logger.warning("Rejected %s: File size exceeds limit (%d > %d)", filename, size, self.max_file_size)
             return
@@ -620,14 +612,19 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Rejected %s: File size is too small (%d)", filename, size)
             return
 
-        if ipaddress.ip_address(peer_address).is_private and not self.config.get("allow_private_ips"):
-            logger.warning("Rejected %s: Private IP address %s", filename, peer_address)
-            return
-
         # validate file name
         if not self.is_valid_filename(self.download_path, filename):
             logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
             return
+
+        if peer_port == 0:
+            passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
+            if not passive_enabled:
+                logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
+                return
+            if use_ssl:
+                logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
+            return self.init_passive_dcc_connection(event.source.nick, filename, size, listen_ip, port_range)
 
         # check if transfer for same file already running
         for item in self.bot_manager.transfers.get(filename, []):
@@ -864,6 +861,9 @@ class IRCBot(AioSimpleIRCClient):
             local_download_path = os.path.join(self.download_path, filename)
             if self.config.get("incomplete_suffix"):
                 local_download_path += self.config["incomplete_suffix"]
+
+            if dcc.localaddress is None or dcc.localport is None:
+                raise RuntimeError("Passive DCC listen succeeded but localaddress/localport not set")
 
             now = time.time()
             transfer_item = {

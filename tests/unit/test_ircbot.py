@@ -809,6 +809,43 @@ def test_on_dcc_send_passive_enabled(bot_factory, mock_bot_manager):
         mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None)
 
 
+def test_on_dcc_send_passive_enabled_invalid_filename(bot_factory, mock_bot_manager):
+    """Test on_dcc_send rejects passive DCC with invalid filename."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_not_called()
+
+
+def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager):
+    """Test on_dcc_send rejects passive DCC with invalid size (0 and oversized)."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+
+    # Zero size
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 0']
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_not_called()
+
+    # Oversized
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 9999999999']
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_init_passive_dcc_connection(bot):
     """Test passive DCC connection setup."""
