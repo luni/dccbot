@@ -2,10 +2,14 @@
   const noop = () => {};
   const scriptSuffix = "/static/ws.js";
 
+  function getLocation() {
+    return window.__testLocation || window.location;
+  }
+
   function getBasePath() {
     const currentScript = document.currentScript;
     if (currentScript && currentScript.src) {
-      const scriptUrl = new URL(currentScript.src, window.location.href);
+      const scriptUrl = new URL(currentScript.src, getLocation().href);
       const path = scriptUrl.pathname;
       if (path.endsWith(scriptSuffix)) {
         return `${path.slice(0, -scriptSuffix.length)}/`;
@@ -13,7 +17,7 @@
     }
 
     // Fallback to current page path when script URL inspection is unavailable.
-    const pagePath = window.location.pathname || "/";
+    const pagePath = getLocation().pathname || "/";
     if (pagePath.endsWith("/")) {
       return pagePath;
     }
@@ -32,11 +36,12 @@
       ...options,
     };
 
-    const isSecure = window.location.protocol === "https:";
+    const location = getLocation();
+    const isSecure = location.protocol === "https:";
     const protocol = isSecure ? "wss:" : "ws:";
-    const host = window.location.host;
+    const host = location.host;
     const basePath = getBasePath();
-    const path = new URL("ws", `${window.location.origin}${basePath}`).pathname;
+    const path = new URL("ws", `${location.origin}${basePath}`).pathname;
     const wsUrl = `${protocol}//${host}${path}`;
     const socket = new WebSocket(wsUrl);
 
@@ -79,7 +84,7 @@
 
   function createDccbotUrl(pathname) {
     const normalizedPath = String(pathname || "").replace(/^\/+/, "");
-    return new URL(normalizedPath, `${window.location.origin}${getBasePath()}`).toString();
+    return new URL(normalizedPath, `${getLocation().origin}${getBasePath()}`).toString();
   }
 
   window.createDccbotSocket = createDccbotSocket;

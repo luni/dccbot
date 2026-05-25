@@ -3,8 +3,6 @@
  */
 
 describe("ws.js", () => {
-  const originalLocation = window.location;
-
   beforeEach(() => {
     delete window.createDccbotSocket;
     delete window.createDccbotUrl;
@@ -12,7 +10,7 @@ describe("ws.js", () => {
 
   afterEach(() => {
     jest.resetModules();
-    window.location = originalLocation;
+    delete window.__testLocation;
   });
 
   function loadWsModule() {
@@ -43,17 +41,13 @@ describe("ws.js", () => {
       global.WebSocket = MockWebSocket;
 
       // Simulate page at http://localhost:8080/
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:8080",
-          origin: "http://localhost:8080",
-          pathname: "/",
-          href: "http://localhost:8080/",
-        },
-        writable: true,
-        configurable: true,
-      });
+      window.__testLocation = {
+        protocol: "http:",
+        host: "localhost:8080",
+        origin: "http://localhost:8080",
+        pathname: "/",
+        href: "http://localhost:8080/",
+      };
 
       // Remove any existing currentScript
       Object.defineProperty(document, "currentScript", {
@@ -74,8 +68,8 @@ describe("ws.js", () => {
     });
 
     test("uses wss when page is served over https", () => {
-      window.location.protocol = "https:";
-      window.location.origin = "https://localhost:8080";
+      window.__testLocation.protocol = "https:";
+      window.__testLocation.origin = "https://localhost:8080";
       loadWsModule();
       window.createDccbotSocket({});
       expect(MockWebSocket).toHaveBeenCalledWith("wss://localhost:8080/ws");
@@ -169,17 +163,13 @@ describe("ws.js", () => {
 
   describe("createDccbotUrl", () => {
     beforeEach(() => {
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:8080",
-          origin: "http://localhost:8080",
-          pathname: "/",
-          href: "http://localhost:8080/",
-        },
-        writable: true,
-        configurable: true,
-      });
+      window.__testLocation = {
+        protocol: "http:",
+        host: "localhost:8080",
+        origin: "http://localhost:8080",
+        pathname: "/",
+        href: "http://localhost:8080/",
+      };
     });
 
     test("builds URL from pathname", () => {
@@ -212,17 +202,13 @@ describe("ws.js", () => {
 
   describe("getBasePath", () => {
     test("derives base path from currentScript src", () => {
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:8080",
-          origin: "http://localhost:8080",
-          pathname: "/",
-          href: "http://localhost:8080/",
-        },
-        writable: true,
-        configurable: true,
-      });
+      window.__testLocation = {
+        protocol: "http:",
+        host: "localhost:8080",
+        origin: "http://localhost:8080",
+        pathname: "/",
+        href: "http://localhost:8080/",
+      };
 
       const script = document.createElement("script");
       script.src = "http://localhost:8080/static/ws.js";
@@ -237,17 +223,13 @@ describe("ws.js", () => {
     });
 
     test("falls back to window.location.pathname when no currentScript", () => {
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:8080",
-          origin: "http://localhost:8080",
-          pathname: "/dccbot/",
-          href: "http://localhost:8080/dccbot/",
-        },
-        writable: true,
-        configurable: true,
-      });
+      window.__testLocation = {
+        protocol: "http:",
+        host: "localhost:8080",
+        origin: "http://localhost:8080",
+        pathname: "/dccbot/",
+        href: "http://localhost:8080/dccbot/",
+      };
 
       Object.defineProperty(document, "currentScript", {
         value: null,
@@ -260,17 +242,13 @@ describe("ws.js", () => {
     });
 
     test("handles non-trailing-slash pathname fallback", () => {
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:8080",
-          origin: "http://localhost:8080",
-          pathname: "/dccbot/index.html",
-          href: "http://localhost:8080/dccbot/index.html",
-        },
-        writable: true,
-        configurable: true,
-      });
+      window.__testLocation = {
+        protocol: "http:",
+        host: "localhost:8080",
+        origin: "http://localhost:8080",
+        pathname: "/dccbot/index.html",
+        href: "http://localhost:8080/dccbot/index.html",
+      };
 
       Object.defineProperty(document, "currentScript", {
         value: null,
