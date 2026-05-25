@@ -26,18 +26,8 @@ services:
       - INSP_SSL_KEY_PATH=/inspircd/certs/key.pem
     volumes:
       - ircd_certs:/inspircd/certs
-    entrypoint: >
-      sh -c "
-        mkdir -p /inspircd/certs &&
-        if [ ! -f /inspircd/certs/cert.pem ] || [ ! -f /inspircd/certs/key.pem ]; then
-          echo 'Generating self-signed SSL certificate...';
-          openssl req -x509 -newkey rsa:4096 -keyout /inspircd/certs/key.pem
-            -out /inspircd/certs/cert.pem -days 1 -nodes
-            -subj '/CN=test.local' 2>/dev/null ||
-          echo 'SSL cert generation may have failed, continuing...';
-        fi &&
-        exec /entrypoint.sh
-      "
+      - ./tests/integration/inspircd_config:/inspircd/conf.d:ro
+    entrypoint: /inspircd/conf.d/inspircd_entrypoint.sh
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 6667 || exit 1"]
       interval: 5s

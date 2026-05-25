@@ -39,9 +39,12 @@ def irc_bot_manager(tmp_path) -> IRCBotManager:
     """Create an IRCBotManager with a temporary config file."""
     import json
 
+    download_path = tmp_path / "downloads"
+    download_path.mkdir(parents=True, exist_ok=True)
+
     config = {
         "servers": {},
-        "default_download_path": str(tmp_path / "downloads"),
+        "default_download_path": str(download_path),
         "allowed_mimetypes": None,
         "max_file_size": 1073741824,
         "server_idle_timeout": 60,
