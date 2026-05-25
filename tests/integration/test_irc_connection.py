@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -153,3 +154,79 @@ async def test_irc_authentication_timeout(tmp_path):
     # Connection should fail quickly with OSError (network unreachable) or timeout
     with pytest.raises((asyncio.TimeoutError, OSError)):
         await asyncio.wait_for(bot.connect(), timeout=5.0)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_passive_dcc_listen_setup(irc_bot_factory):
+    """Test that passive DCC creates a listening socket and sends a CTCP reply.
+
+    This test validates:
+    - Bot connects to IRC server
+    - Upon receiving a DCC SEND with port=0, bot starts a listener
+    - Bot sends a CTCP reply with its IP and port
+    - A peer can connect to the listening socket
+    """
+    import socket
+
+    bot = irc_bot_factory()
+    bot.server_config["passive_dcc"] = True
+    bot.server_config["passive_dcc_listen_ip"] = "127.0.0.1"
+    bot.server_config["passive_dcc_port_range"] = [40000, 41000]
+
+    ctcp_replies: list[tuple[str, str]] = []
+
+    try:
+        await asyncio.wait_for(bot.connect(), timeout=30.0)
+        assert bot.connection is not None
+        assert bot.connection.connected
+
+        # Capture CTCP replies
+        original_ctcp_reply = bot.connection.ctcp_reply
+
+        def capture_ctcp_reply(target, message):
+            ctcp_replies.append((target, message))
+            return original_ctcp_reply(target, message)
+
+        bot.connection.ctcp_reply = capture_ctcp_reply
+
+        # Simulate receiving a passive DCC SEND (port=0)
+        event = MagicMock()
+        event.source = MagicMock()
+        event.source.nick = "test_sender"
+        event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+        bot.on_dcc_send(bot.connection, event, False)
+
+        # Wait for the listener to be set up
+        await asyncio.sleep(2)
+
+        # Verify a CTCP reply was sent
+        assert len(ctcp_replies) == 1
+        target, message = ctcp_replies[0]
+        assert target == "test_sender"
+        assert message.startswith("DCC SEND")
+
+        # Extract the port from the CTCP reply
+        parts = message.split()
+        listen_port = int(parts[-2])
+        assert 40000 <= listen_port <= 41000
+
+        # Verify the listener is actually accepting connections
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        test_sock.settimeout(5)
+        try:
+            test_sock.connect(("127.0.0.1", listen_port))
+            # Successfully connected - passive DCC listener is working
+        finally:
+            test_sock.close()
+
+    finally:
+        # Clean up any remaining DCC connections
+        for dcc in list(bot.current_transfers):
+            try:
+                dcc.disconnect("Test complete")
+            except Exception:
+                pass
+        if bot.connection and bot.connection.connected:
+            await bot.disconnect("Test complete")

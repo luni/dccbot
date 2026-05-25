@@ -169,10 +169,106 @@ def test_dcc_connection_send_bytes_oserror(dcc_connection):
     dcc_connection.disconnect.assert_called_once_with("Connection reset by peer.")
 
 
-def test_dcc_connection_listen_not_implemented(dcc_connection):
-    """Test that listen() raises NotImplementedError."""
-    with pytest.raises(NotImplementedError):
-        asyncio.run(dcc_connection.listen())
+def test_dcc_connection_send_bytes_not_connected(dcc_connection):
+    """Test sending bytes when not connected does not raise."""
+    # transport is None by default - should not raise
+    dcc_connection.disconnect = MagicMock()
+    dcc_connection.send_bytes(b"hello")
+    dcc_connection.disconnect.assert_called_once_with("Connection reset by peer.")
+
+
+def test_dcc_connection_privmsg_chat(dcc_connection):
+    """Test privmsg adds newline for chat type."""
+    dcc_connection.dcctype = "chat"
+    dcc_connection.transport = MagicMock()
+    dcc_connection.privmsg("hello")
+    dcc_connection.transport.write.assert_called_once_with(b"hello\n")
+
+
+def test_dcc_connection_privmsg_raw(dcc_connection):
+    """Test privmsg does not add newline for raw type."""
+    dcc_connection.dcctype = "raw"
+    dcc_connection.transport = MagicMock()
+    dcc_connection.privmsg("hello")
+    dcc_connection.transport.write.assert_called_once_with(b"hello")
+
+
+@pytest.mark.asyncio
+async def test_dcc_connection_listen(dcc_connection, mock_reactor):
+    """Test listen() creates a server."""
+    import socket
+
+    async def mock_create_server(factory, *args, **kwargs):
+        mock_server = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.getsockname.return_value = ("127.0.0.1", 54321)
+        mock_server.sockets = [mock_socket]
+        return mock_server
+
+    mock_reactor.loop.create_server = mock_create_server
+
+    result = await dcc_connection.listen()
+
+    assert result == dcc_connection
+    assert dcc_connection.passive is True
+    assert dcc_connection.localaddress == "127.0.0.1"
+    assert dcc_connection.localport == 54321
+
+
+@pytest.mark.asyncio
+async def test_dcc_connection_listen_and_accept(dcc_connection, mock_reactor):
+    """Test listen() followed by passive connection via connection_made."""
+    async def mock_create_server(factory, *args, **kwargs):
+        mock_server = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.getsockname.return_value = ("127.0.0.1", 54321)
+        mock_server.sockets = [mock_socket]
+        return mock_server
+
+    mock_reactor.loop.create_server = mock_create_server
+    await dcc_connection.listen()
+
+    mock_transport = MagicMock()
+    mock_transport.get_extra_info.return_value = ("192.168.1.1", 12345)
+
+    protocol = dcc_connection.protocol_class(dcc_connection, mock_reactor.loop)
+    protocol.connection_made(mock_transport)
+
+    assert dcc_connection.connected is True
+    assert dcc_connection.transport is mock_transport
+    assert dcc_connection.peeraddress == "192.168.1.1"
+    assert dcc_connection.peerport == 12345
+    dcc_connection.server.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dcc_connection_disconnect_with_server(dcc_connection, mock_reactor):
+    """Test disconnect closes server and transport."""
+    async def mock_create_server(factory, *args, **kwargs):
+        mock_server = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.getsockname.return_value = ("127.0.0.1", 54321)
+        mock_server.sockets = [mock_socket]
+        return mock_server
+
+    mock_reactor.loop.create_server = mock_create_server
+    await dcc_connection.listen()
+
+    mock_transport = MagicMock()
+    dcc_connection.transport = mock_transport
+    dcc_connection.connected = True
+    dcc_connection.peeraddress = "127.0.0.1"
+
+    dcc_connection.disconnect("test message")
+
+    dcc_connection.server.close.assert_called_once()
+    mock_transport.close.assert_called_once()
+    mock_reactor._handle_event.assert_called_once()
+    mock_reactor._remove_connection.assert_called_once()
+
+    # Calling disconnect again should be a no-op (idempotent)
+    dcc_connection.disconnect("test message again")
+    mock_transport.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -210,12 +306,3 @@ async def test_aio_reactor_dcc_chat():
     assert dcc.dcctype == "chat"
 
 
-@pytest.mark.asyncio
-async def test_dcc_connection_process_data_passive_not_implemented(mock_reactor):
-    """Test that passive DCC raises NotImplementedError."""
-    dcc_connection = AioDCCConnection(mock_reactor, "raw")
-    dcc_connection.passive = True
-    dcc_connection.connected = False
-
-    with pytest.raises(NotImplementedError):
-        dcc_connection.process_data(b"test")
