@@ -43,14 +43,17 @@ describe("ws.js", () => {
       global.WebSocket = MockWebSocket;
 
       // Simulate page at http://localhost:8080/
-      delete window.location;
-      window.location = {
-        protocol: "http:",
-        host: "localhost:8080",
-        origin: "http://localhost:8080",
-        pathname: "/",
-        href: "http://localhost:8080/",
-      };
+      Object.defineProperty(window, "location", {
+        value: {
+          protocol: "http:",
+          host: "localhost:8080",
+          origin: "http://localhost:8080",
+          pathname: "/",
+          href: "http://localhost:8080/",
+        },
+        writable: true,
+        configurable: true,
+      });
 
       // Remove any existing currentScript
       Object.defineProperty(document, "currentScript", {
@@ -166,14 +169,17 @@ describe("ws.js", () => {
 
   describe("createDccbotUrl", () => {
     beforeEach(() => {
-      delete window.location;
-      window.location = {
-        protocol: "http:",
-        host: "localhost:8080",
-        origin: "http://localhost:8080",
-        pathname: "/",
-        href: "http://localhost:8080/",
-      };
+      Object.defineProperty(window, "location", {
+        value: {
+          protocol: "http:",
+          host: "localhost:8080",
+          origin: "http://localhost:8080",
+          pathname: "/",
+          href: "http://localhost:8080/",
+        },
+        writable: true,
+        configurable: true,
+      });
     });
 
     test("builds URL from pathname", () => {
@@ -206,14 +212,17 @@ describe("ws.js", () => {
 
   describe("getBasePath", () => {
     test("derives base path from currentScript src", () => {
-      delete window.location;
-      window.location = {
-        protocol: "http:",
-        host: "localhost:8080",
-        origin: "http://localhost:8080",
-        pathname: "/",
-        href: "http://localhost:8080/",
-      };
+      Object.defineProperty(window, "location", {
+        value: {
+          protocol: "http:",
+          host: "localhost:8080",
+          origin: "http://localhost:8080",
+          pathname: "/",
+          href: "http://localhost:8080/",
+        },
+        writable: true,
+        configurable: true,
+      });
 
       const script = document.createElement("script");
       script.src = "http://localhost:8080/static/ws.js";
@@ -228,14 +237,17 @@ describe("ws.js", () => {
     });
 
     test("falls back to window.location.pathname when no currentScript", () => {
-      delete window.location;
-      window.location = {
-        protocol: "http:",
-        host: "localhost:8080",
-        origin: "http://localhost:8080",
-        pathname: "/dccbot/",
-        href: "http://localhost:8080/dccbot/",
-      };
+      Object.defineProperty(window, "location", {
+        value: {
+          protocol: "http:",
+          host: "localhost:8080",
+          origin: "http://localhost:8080",
+          pathname: "/dccbot/",
+          href: "http://localhost:8080/dccbot/",
+        },
+        writable: true,
+        configurable: true,
+      });
 
       Object.defineProperty(document, "currentScript", {
         value: null,
@@ -248,14 +260,17 @@ describe("ws.js", () => {
     });
 
     test("handles non-trailing-slash pathname fallback", () => {
-      delete window.location;
-      window.location = {
-        protocol: "http:",
-        host: "localhost:8080",
-        origin: "http://localhost:8080",
-        pathname: "/dccbot/index.html",
-        href: "http://localhost:8080/dccbot/index.html",
-      };
+      Object.defineProperty(window, "location", {
+        value: {
+          protocol: "http:",
+          host: "localhost:8080",
+          origin: "http://localhost:8080",
+          pathname: "/dccbot/index.html",
+          href: "http://localhost:8080/dccbot/index.html",
+        },
+        writable: true,
+        configurable: true,
+      });
 
       Object.defineProperty(document, "currentScript", {
         value: null,
