@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-05-19
+// @version      2026-06-01
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -11,6 +11,7 @@
 // @match        https://xdcc.rocks/*
 // @match        https://www.xdcc.rocks/*
 // @match        https://xdcc-search.com/*
+// @match        https://xdcc.info/*
 // @match        https://www.xdcc.info/*
 // @match        https://sunxdcc.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
