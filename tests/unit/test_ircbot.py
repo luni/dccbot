@@ -805,6 +805,33 @@ def test_on_dcc_send_private_ip_allowed(bot_factory, mock_bot_manager):
         # Should not reject
 
 
+def test_on_dcc_send_resume_small_completed_file(bot_factory, mock_bot_manager, tmp_path):
+    """Test on_dcc_send resumes from 0 for completed files smaller than 4096 bytes."""
+    mock_bot_manager.config = {"allow_private_ips": True}
+    bot = bot_factory(
+        allowed_mimetypes=None,
+        manager=mock_bot_manager,
+        server_config={"channels": []},
+        download_path=str(tmp_path),
+    )
+    bot.connection = MagicMock()
+    bot.mime_checker = MagicMock()
+    (tmp_path / "test.txt").write_bytes(b"x" * 100)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    # 127.0.0.1 as 32-bit integer, port 5000, size 100
+    event.arguments = ["DCC", 'SEND "test.txt" 2130706433 5000 100']
+
+    bot.on_dcc_send(bot.connection, event, False)
+
+    ctcp_call = bot.connection.ctcp_reply.call_args[0]
+    assert "RESUME" in ctcp_call[1]
+    assert "5000" in ctcp_call[1]
+    assert ctcp_call[1].endswith(" 0")
+
+
 def test_on_ctcp_with_missing_arguments(bot):
     """Test on_ctcp with malformed/short argument list."""
     bot.connection = MagicMock()

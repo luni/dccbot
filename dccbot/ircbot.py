@@ -669,7 +669,7 @@ class IRCBot(AioSimpleIRCClient):
                 if local_size == size:
                     completed = True
                     logger.info("%s: File already completed, send resume command for last 4096 to complete transfer request.", filename)
-                    local_size -= 4096
+                    local_size = max(0, local_size - 4096)
 
                 logger.info("Send DCC RESUME %s starting at %d bytes", filename, local_size)
                 self.connection.ctcp_reply(nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)]))
