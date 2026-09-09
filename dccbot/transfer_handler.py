@@ -156,6 +156,10 @@ class TransferHandler:
 
     def _finalize_transfer(self, dcc: AioDCCConnection, transfer: dict) -> None:
         """Check the output file and finalize the transfer state."""
+        if transfer.get("status") == "cancelled":
+            self.bot.current_transfers.pop(dcc, None)
+            return
+
         file_path = transfer["file_path"]
         elapsed = time.time() - transfer["start_time"]
         transfer_rate = (transfer["bytes_received"] / elapsed) / 1024 if elapsed > 0 else 0

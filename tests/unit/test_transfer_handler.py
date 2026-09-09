@@ -213,6 +213,27 @@ def test_on_dcc_disconnect_missing_file_sets_error():
     assert "does not exist" in transfer["error"]
 
 
+def test_on_dcc_disconnect_preserves_cancelled_status(tmp_path):
+    """Test disconnect does not overwrite an already cancelled transfer."""
+    dcc = MagicMock()
+    file_path = tmp_path / "file.bin"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["status"] = "cancelled"
+    transfer["error"] = "Cancelled by user"
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    handler.on_dcc_disconnect(dcc, event)
+    assert transfer["status"] == "cancelled"
+    assert transfer["error"] == "Cancelled by user"
+    assert dcc not in bot.current_transfers
+
+
 def test_on_dcc_disconnect_size_mismatch_sets_failed(tmp_path):
     """Test size mismatch marks transfer as failed."""
     dcc = MagicMock()
