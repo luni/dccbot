@@ -9,6 +9,12 @@ from typing import Any
 TRANSFER_STATUSES = {"started", "in_progress", "completed", "failed", "error", "cancelled"}
 
 
+def get_incomplete_suffix(config: dict[str, Any]) -> str | None:
+    """Return the configured incomplete file suffix if it is a non-empty string."""
+    suffix = config.get("incomplete_suffix")
+    return suffix if isinstance(suffix, str) and suffix else None
+
+
 def normalize_status(transfer: dict[str, Any]) -> str:
     """Return a valid transfer status based on the current transfer data."""
     status = transfer.get("status")

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from dccbot.aiodcc import AioDCCConnection
     from dccbot.ircbot import IRCBot
+from dccbot.transfers import get_incomplete_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +132,9 @@ class TransferHandler:
                 if transfer.get("md5"):
                     asyncio.create_task(self.bot._add_md5_check_queue_item(transfer))
 
-                if self.bot.config.get("incomplete_suffix") and file_path.endswith(self.bot.config["incomplete_suffix"]):
-                    target = file_path[: -len(self.bot.config["incomplete_suffix"])]
+                incomplete_suffix = get_incomplete_suffix(self.bot.config)
+                if incomplete_suffix and file_path.endswith(incomplete_suffix):
+                    target = file_path[: -len(incomplete_suffix)]
                     try:
                         os.rename(file_path, target)
                         logger.info("Renamed downloaded file to %s", transfer["filename"])

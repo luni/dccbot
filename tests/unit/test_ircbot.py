@@ -250,6 +250,26 @@ async def test_on_welcome_with_nickserv(bot_factory, mock_bot_manager):
         mock_process.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_process_command_queue_handles_join(bot):
+    """Test process_command_queue processes a join command."""
+    bot.authenticated = True
+    bot.authenticated_event.set()
+
+    with (
+        patch.object(bot, "_handle_authentication"),
+        patch.object(bot, "join_channel", new_callable=AsyncMock),
+        patch.object(bot, "_join_channels", new_callable=AsyncMock) as mock_join,
+    ):
+        bot.command_queue.put_nowait({"command": "join", "channels": ["#test"]})
+        try:
+            await asyncio.wait_for(bot.process_command_queue(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+
+    mock_join.assert_awaited_once_with(["#test"])
+
+
 def test_on_bannedfromchan(bot):
     """Test on_bannedfromchan handler."""
     bot.connection = MagicMock()

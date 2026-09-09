@@ -21,7 +21,7 @@ from dccbot.aiodcc import NonStrictAioConnection as AioConnection
 from dccbot.command_pipeline import handle_part_command, handle_send_command
 from dccbot.dcc_parsing import is_valid_filename, parse_dcc_accept, parse_dcc_send
 from dccbot.transfer_handler import TransferHandler
-from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults
+from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
 
 if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
@@ -366,6 +366,11 @@ class IRCBot(AioSimpleIRCClient):
             for channel in self.bot_channel_map[user]:
                 self.joined_channels[channel] = time.time()
 
+    async def _handle_join_command(self, data: dict[str, Any]) -> None:
+        """Join the channels specified in the command."""
+        if data.get("channels"):
+            await self._join_channels(data["channels"])
+
     async def _handle_send_command(self, data: dict[str, Any]) -> None:
         """Delegate send command to command pipeline."""
         await handle_send_command(self, data)
@@ -395,6 +400,8 @@ class IRCBot(AioSimpleIRCClient):
 
             if data["command"] == "send":
                 await self._handle_send_command(data)
+            elif data["command"] == "join":
+                await self._handle_join_command(data)
             elif data["command"] == "part":
                 await self._handle_part_command(data)
 
@@ -641,9 +648,10 @@ class IRCBot(AioSimpleIRCClient):
 
         local_download_path = os.path.join(self.download_path, filename)
         local_files = [local_download_path]
-        if self.config.get("incomplete_suffix"):
-            local_files.append(local_download_path + self.config["incomplete_suffix"])
-            local_download_path += self.config["incomplete_suffix"]
+        incomplete_suffix = get_incomplete_suffix(self.config)
+        if incomplete_suffix:
+            local_files.append(local_download_path + incomplete_suffix)
+            local_download_path += incomplete_suffix
 
         local_size = 0
         completed = False
@@ -868,8 +876,9 @@ class IRCBot(AioSimpleIRCClient):
             logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
 
             local_download_path = os.path.join(self.download_path, filename)
-            if self.config.get("incomplete_suffix"):
-                local_download_path += self.config["incomplete_suffix"]
+            incomplete_suffix = get_incomplete_suffix(self.config)
+            if incomplete_suffix:
+                local_download_path += incomplete_suffix
 
             if dcc.localaddress is None or dcc.localport is None:
                 raise RuntimeError("Passive DCC listen succeeded but localaddress/localport not set")
