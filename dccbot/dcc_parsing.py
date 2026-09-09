@@ -19,6 +19,16 @@ class DccSendPayload:
     peer_address: str
     peer_port: int
     size: int
+    token: int | None = None
+
+
+@dataclass(frozen=True)
+class DccAcceptPayload:
+    """Parsed payload from a DCC ACCEPT message."""
+
+    port: int
+    position: int
+    token: int | None = None
 
 
 def is_valid_filename(path: str, filename: str) -> bool:
@@ -41,17 +51,35 @@ def is_valid_filename(path: str, filename: str) -> bool:
     return True
 
 
-def parse_dcc_accept(payload: str) -> tuple[int, int] | None:
-    """Parse DCC ACCEPT payload into (peer_port, resume_position)."""
-    match = re.search(r"(\d+) (\d+)$", payload)
-    if not match:
+def parse_dcc_accept(payload: str) -> DccAcceptPayload | None:
+    """Parse DCC ACCEPT payload into structured data."""
+    try:
+        parts = shlex.split(payload)
+    except ValueError:
+        return None
+    if len(parts) < 4:
         return None
 
-    peer_port = int(match.group(1))
-    resume_position = int(match.group(2))
-    if peer_port < 1 or peer_port > 65535 or resume_position < 0:
+    try:
+        port = int(parts[2])
+        position = int(parts[3])
+    except ValueError:
         return None
-    return peer_port, resume_position
+    if port < 0 or port > 65535 or position < 0:
+        return None
+
+    token: int | None = None
+    if len(parts) == 5:
+        try:
+            token = int(parts[4])
+        except ValueError:
+            return None
+        if token < 0:
+            return None
+    elif len(parts) > 5:
+        return None
+
+    return DccAcceptPayload(port=port, position=position, token=token)
 
 
 def parse_dcc_send(payload: str) -> DccSendPayload | None:
@@ -60,7 +88,7 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
         parts = shlex.split(payload)
     except ValueError:
         return None
-    if len(parts) < 5:
+    if len(parts) < 5 or len(parts) > 6:
         return None
 
     filename, raw_address, raw_port, raw_size = parts[1:5]
@@ -73,6 +101,15 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
     if peer_port < 0 or peer_port > 65535 or size < 1:
         return None
 
+    token: int | None = None
+    if len(parts) == 6:
+        try:
+            token = int(parts[5])
+        except ValueError:
+            return None
+        if token < 0:
+            return None
+
     try:
         if "." in raw_address or ":" in raw_address:
             ipaddress.ip_address(raw_address)
@@ -82,4 +119,4 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
     except ValueError:
         return None
 
-    return DccSendPayload(filename=filename, peer_address=peer_address, peer_port=peer_port, size=size)
+    return DccSendPayload(filename=filename, peer_address=peer_address, peer_port=peer_port, size=size, token=token)

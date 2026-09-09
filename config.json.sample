@@ -55,8 +55,9 @@
   "incomplete_suffix": ".incomplete",
   "allow_private_ips": false,
   "passive_dcc": false,
-  "passive_dcc_listen_ip": "0.0.0.0",
+  "passive_dcc_listen_ip": null,
   "passive_dcc_port_range": [10000, 20000],
+  "passive_dcc_timeout": 60,
   "http": {
     "host": "0.0.0.0",
     "port": 9999,

@@ -158,9 +158,15 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.handlers = {}
         self.buffer = self.buffer_class()
 
+        def _default_host() -> str:
+            try:
+                return socket.gethostbyname(socket.gethostname())
+            except (OSError, ValueError):
+                return "127.0.0.1"
+
         # Resolve host and default port from addr
         if addr is None:
-            host = socket.gethostbyname(socket.gethostname())
+            host = _default_host()
             addr_port = 0
         elif isinstance(addr, str):
             host = addr
@@ -201,6 +207,8 @@ class AioDCCConnection(irc.client.DCCConnection):
         sockname = socket_obj.getsockname()
         if sockname and len(sockname) >= 2:
             self.localaddress, self.localport = sockname[0], sockname[1]
+            if self.localaddress == "0.0.0.0":  # nosec B104
+                self.localaddress = _default_host()
         else:
             self.localaddress = None
             self.localport = None

@@ -13,7 +13,10 @@ In CI, the GitHub Actions workflow handles starting the IRC server.
 from __future__ import annotations
 
 import asyncio
+import shlex
+import socket
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -190,11 +193,11 @@ async def test_passive_dcc_listen_setup(irc_bot_factory):
 
         bot.connection.ctcp_reply = capture_ctcp_reply
 
-        # Simulate receiving a passive DCC SEND (port=0)
+        # Simulate receiving a passive DCC SEND (port=0) with token
         event = MagicMock()
         event.source = MagicMock()
         event.source.nick = "test_sender"
-        event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+        event.arguments = ["DCC", 'SEND "test.txt" 127.0.0.1 0 1000 4242']
 
         bot.on_dcc_send(bot.connection, event, False)
 
@@ -206,10 +209,11 @@ async def test_passive_dcc_listen_setup(irc_bot_factory):
         target, message = ctcp_replies[0]
         assert target == "test_sender"
         assert message.startswith("DCC SEND")
+        assert "4242" in message
 
         # Extract the port from the CTCP reply
-        parts = message.split()
-        listen_port = int(parts[-2])
+        parts = shlex.split(message)
+        listen_port = int(parts[-3])
         assert 40000 <= listen_port <= 41000
 
         # Verify the listener is actually accepting connections
@@ -223,6 +227,91 @@ async def test_passive_dcc_listen_setup(irc_bot_factory):
 
     finally:
         # Clean up any remaining DCC connections
+        for dcc in list(bot.current_transfers):
+            try:
+                dcc.disconnect("Test complete")
+            except Exception:
+                pass
+        if bot.connection and bot.connection.connected:
+            await bot.disconnect("Test complete")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_passive_dcc_download(irc_bot_factory, irc_bot_manager):
+    """Test a full passive DCC file transfer.
+
+    The bot receives a passive DCC SEND offer, opens a listener, sends a
+    reverse DCC SEND with the same token, and receives the file payload from a
+    fake peer connecting to that listener.
+    """
+    bot = irc_bot_factory()
+    bot.server_config["passive_dcc"] = True
+    bot.server_config["passive_dcc_listen_ip"] = "127.0.0.1"
+    bot.server_config["passive_dcc_port_range"] = [40000, 41000]
+    bot.server_config["passive_dcc_timeout"] = 10
+
+    ctcp_replies: list[tuple[str, str]] = []
+
+    def capture_ctcp_reply(target: str, message: str) -> None:
+        ctcp_replies.append((target, message))
+
+    try:
+        await asyncio.wait_for(bot.connect(), timeout=30.0)
+        assert bot.connection is not None
+        assert bot.connection.connected
+
+        bot.connection.ctcp_reply = capture_ctcp_reply
+
+        event = MagicMock()
+        event.source = MagicMock()
+        event.source.nick = "test_sender"
+        event.arguments = ["DCC", 'SEND "test.txt" 127.0.0.1 0 1000 4242']
+
+        bot.on_dcc_send(bot.connection, event, False)
+
+        # Wait for the listener to be set up and the CTCP reply to be sent.
+        await asyncio.sleep(2)
+
+        assert len(ctcp_replies) == 1
+        target, message = ctcp_replies[0]
+        assert target == "test_sender"
+        assert message.startswith("DCC SEND")
+
+        parts = shlex.split(message)
+        listen_port = int(parts[-3])
+        assert 40000 <= listen_port <= 41000
+
+        # Act as the peer: connect, send 1000 bytes, then close.
+        peer = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        peer.settimeout(10)
+        try:
+            peer.connect(("127.0.0.1", listen_port))
+            payload = b"x" * 1000
+            peer.sendall(payload)
+        finally:
+            peer.close()
+
+        # Wait for the transfer to be recorded as completed.
+        completed = False
+        for _ in range(30):
+            await asyncio.sleep(0.5)
+            for transfer_list in irc_bot_manager.transfers.values():
+                for transfer in transfer_list:
+                    if transfer.get("status") == "completed" and transfer.get("size") == 1000:
+                        completed = True
+                        break
+                if completed:
+                    break
+            if completed:
+                break
+
+        assert completed, f"Passive DCC transfer did not complete: {irc_bot_manager.transfers}"
+
+        download_path = Path(irc_bot_manager.config["default_download_path"])
+        assert (download_path / "test.txt").stat().st_size == 1000
+
+    finally:
         for dcc in list(bot.current_transfers):
             try:
                 dcc.disconnect("Test complete")

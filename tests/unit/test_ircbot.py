@@ -943,13 +943,27 @@ def test_get_passive_dcc_config_global(bot_factory, mock_bot_manager):
     """Test passive DCC config from global config."""
     mock_bot_manager.config = {
         "passive_dcc": True,
+        "passive_dcc_listen_ip": "192.168.1.10",
+        "passive_dcc_port_range": [10000, 20000],
+    }
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    enabled, listen_ip, port_range = bot._get_passive_dcc_config()
+    assert enabled is True
+    assert listen_ip == "192.168.1.10"
+    assert port_range == (10000, 20000)
+
+
+def test_get_passive_dcc_config_unset_wildcard_listen_ip(bot_factory, mock_bot_manager):
+    """Test 0.0.0.0 / :: are treated as unset listen IPs."""
+    mock_bot_manager.config = {
+        "passive_dcc": True,
         "passive_dcc_listen_ip": "0.0.0.0",
         "passive_dcc_port_range": [10000, 20000],
     }
     bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
     enabled, listen_ip, port_range = bot._get_passive_dcc_config()
     assert enabled is True
-    assert listen_ip == "0.0.0.0"
+    assert listen_ip is None
     assert port_range == (10000, 20000)
 
 
@@ -957,7 +971,7 @@ def test_get_passive_dcc_config_server_override(bot_factory, mock_bot_manager):
     """Test per-server config overrides global config."""
     mock_bot_manager.config = {
         "passive_dcc": True,
-        "passive_dcc_listen_ip": "0.0.0.0",
+        "passive_dcc_listen_ip": "192.168.1.10",
         "passive_dcc_port_range": [10000, 20000],
     }
     bot = bot_factory(
@@ -975,13 +989,25 @@ def test_get_passive_dcc_config_server_override(bot_factory, mock_bot_manager):
     assert port_range == (30000, 40000)
 
 
+def test_get_passive_dcc_config_invalid_port_range(bot_factory, mock_bot_manager):
+    """Test invalid port ranges fall back to None."""
+    mock_bot_manager.config = {
+        "passive_dcc": True,
+        "passive_dcc_port_range": [70000, 80000],
+    }
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    enabled, listen_ip, port_range = bot._get_passive_dcc_config()
+    assert enabled is True
+    assert port_range is None
+
+
 def test_on_dcc_send_passive_disabled(bot):
     """Test on_dcc_send rejects passive DCC when not enabled."""
     bot.connection = MagicMock()
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000 42']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
@@ -996,11 +1022,11 @@ def test_on_dcc_send_passive_enabled(bot_factory, mock_bot_manager):
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000 42']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
-        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42)
 
 
 def test_on_dcc_send_passive_lower_cases_nick(bot_factory, mock_bot_manager):
@@ -1011,11 +1037,26 @@ def test_on_dcc_send_passive_lower_cases_nick(bot_factory, mock_bot_manager):
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "SeNdEr"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42)
+
+
+def test_on_dcc_send_passive_missing_token(bot_factory, mock_bot_manager):
+    """Test on_dcc_send rejects passive DCC offer without a token."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
     event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
-        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None)
+        mock_init.assert_not_called()
 
 
 def test_on_dcc_send_passive_enabled_invalid_filename(bot_factory, mock_bot_manager):
@@ -1026,7 +1067,7 @@ def test_on_dcc_send_passive_enabled_invalid_filename(bot_factory, mock_bot_mana
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
-    event.arguments = ["DCC", 'SEND "" 0 0 1000']
+    event.arguments = ["DCC", 'SEND "" 0 0 1000 42']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
@@ -1069,7 +1110,7 @@ def test_on_dcc_send_passive_skips_existing_complete_file(bot_factory, mock_bot_
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000 42']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
@@ -1077,8 +1118,8 @@ def test_on_dcc_send_passive_skips_existing_complete_file(bot_factory, mock_bot_
     mock_init.assert_not_called()
 
 
-def test_on_dcc_send_passive_rejects_partial_existing_file(bot_factory, mock_bot_manager, tmp_path):
-    """Test passive DCC rejects the request when a partial file exists."""
+def test_on_dcc_send_passive_resumes_partial_existing_file(bot_factory, mock_bot_manager, tmp_path):
+    """Test passive DCC sends RESUME for a partial file and stores a resume entry."""
     mock_bot_manager.config = {"passive_dcc": True}
     bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, download_path=str(tmp_path))
     bot.connection = MagicMock()
@@ -1087,12 +1128,19 @@ def test_on_dcc_send_passive_rejects_partial_existing_file(bot_factory, mock_bot
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000 42']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
 
     mock_init.assert_not_called()
+    assert ("sender", 42) in bot.passive_resume_queue
+    bot.connection.ctcp_reply.assert_called_once()
+    reply = bot.connection.ctcp_reply.call_args[0][1]
+    assert "RESUME" in reply
+    assert "0" in reply
+    assert "500" in reply
+    assert "42" in reply
 
 
 def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager):
@@ -1105,13 +1153,13 @@ def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager)
     event.source.nick = "sender"
 
     # Zero size
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 0']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 0 42']
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
         mock_init.assert_not_called()
 
     # Oversized
-    event.arguments = ["DCC", 'SEND "test.txt" 0 0 9999999999']
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 9999999999 42']
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
         mock_init.assert_not_called()
@@ -1119,8 +1167,9 @@ def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager)
 
 @pytest.mark.asyncio
 async def test_init_passive_dcc_connection(bot):
-    """Test passive DCC connection setup."""
+    """Test passive DCC connection setup with token."""
     bot.connection = MagicMock()
+    bot.server_config["passive_dcc_timeout"] = 0
     mock_dcc = MagicMock()
     mock_dcc.localaddress = "192.168.1.100"
     mock_dcc.localport = 12345
@@ -1130,16 +1179,19 @@ async def test_init_passive_dcc_connection(bot):
 
     with patch.object(bot, "dcc", return_value=mock_dcc) as mock_dcc_factory:
         with patch.object(bot.loop, "create_task") as mock_create_task:
-            bot.init_passive_dcc_connection("sender", "test.txt", 1000, "0.0.0.0", (10000, 20000))
+            bot.init_passive_dcc_connection("sender", "test.txt", 1000, "192.168.1.100", (10000, 20000), token=42)
             mock_dcc_factory.assert_called_once_with("raw")
-            # Verify task was scheduled
+            # Verify the setup task was scheduled
             mock_create_task.assert_called_once()
             # Await the inner coroutine directly to verify behavior
             coro = mock_create_task.call_args[0][0]
             await coro
 
-    mock_listen.assert_called_once_with(addr="0.0.0.0", port=(10000, 20000))
+    mock_listen.assert_called_once_with(addr="192.168.1.100", port=(10000, 20000))
     bot.connection.ctcp_reply.assert_called_once()
+    reply = bot.connection.ctcp_reply.call_args[0][1]
+    assert reply.startswith("DCC SEND")
+    assert "42" in reply
     assert len(bot.current_transfers) == 1
     transfer = list(bot.current_transfers.values())[0]
     assert transfer["filename"] == "test.txt"
@@ -1180,3 +1232,57 @@ def test_init_dcc_connection_creates_download_directory(bot, mock_bot_manager, t
         bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", str(tmp_path / "missing" / "test.txt"), 1024, 0, False, False)
 
     assert (tmp_path / "missing").is_dir()
+
+
+def test_on_dcc_accept_active_resume(bot):
+    """Test on_dcc_accept triggers an active DCC resume."""
+    bot.connection = MagicMock()
+    bot.resume_queue["sender"] = [
+        ("127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1000, 500, False, False, time.time()),
+    ]
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'ACCEPT "test.txt" 5000 500']
+
+    with patch.object(bot, "init_dcc_connection") as mock_init:
+        bot.on_dcc_accept(bot.connection, event)
+
+    mock_init.assert_called_once_with("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1000, 500, False, False)
+    assert "sender" not in bot.resume_queue
+
+
+def test_on_dcc_accept_passive_resume(bot):
+    """Test on_dcc_accept triggers a passive DCC resume from the queue."""
+    bot.connection = MagicMock()
+    bot.server_config["passive_dcc_timeout"] = 0
+    bot.passive_resume_queue[("sender", 42)] = {
+        "filename": "test.txt",
+        "size": 1000,
+        "offset": 500,
+        "file_path": "/tmp/downloads/test.txt",
+        "listen_ip": "127.0.0.1",
+        "port_range": (15000, 16000),
+        "requested_time": time.time(),
+    }
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'ACCEPT "test.txt" 0 500 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_accept(bot.connection, event)
+
+    mock_init.assert_called_once_with(
+        "sender",
+        "test.txt",
+        1000,
+        "127.0.0.1",
+        (15000, 16000),
+        token=42,
+        offset=500,
+        file_path="/tmp/downloads/test.txt",
+    )
+    assert ("sender", 42) not in bot.passive_resume_queue

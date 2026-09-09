@@ -121,6 +121,7 @@ class IRCBot(AioSimpleIRCClient):
         self.current_transfers = {}  # track active DCC connections
         self.banned_channels = set()
         self.resume_queue = {}
+        self.passive_resume_queue: dict[tuple[str, int], dict] = {}
         self.pending_join_failures: dict[str, str] = {}
         self.command_queue = asyncio.Queue()
         self.mime_checker = magic.Magic(mime=True)
@@ -165,9 +166,22 @@ class IRCBot(AioSimpleIRCClient):
         """
         enabled = self.server_config.get("passive_dcc", self.config.get("passive_dcc", False))
         listen_ip = self.server_config.get("passive_dcc_listen_ip", self.config.get("passive_dcc_listen_ip"))
+        if listen_ip and listen_ip in ("0.0.0.0", "::"):  # nosec B104
+            listen_ip = None
+
         port_range = self.server_config.get("passive_dcc_port_range", self.config.get("passive_dcc_port_range"))
         if port_range and len(port_range) == 2:
-            port_range = (int(port_range[0]), int(port_range[1]))
+            try:
+                low = int(port_range[0])
+                high = int(port_range[1])
+                if 1 <= low <= high <= 65535:
+                    port_range = (low, high)
+                else:
+                    logger.warning("Invalid passive_dcc_port_range %s, must satisfy 1 <= low <= high <= 65535", port_range)
+                    port_range = None
+            except (TypeError, ValueError):
+                logger.warning("Invalid passive_dcc_port_range %s", port_range)
+                port_range = None
         else:
             port_range = None
         return bool(enabled), listen_ip, port_range
@@ -574,19 +588,39 @@ class IRCBot(AioSimpleIRCClient):
         """
         nick = event.source.nick.lower()
 
-        if nick not in self.resume_queue:
-            logger.warning("DCC ACCEPT not in queue: %s", event)
-            return
-
         parsed = parse_dcc_accept(event.arguments[1])
         if not parsed:
             logger.warning("Invalid DCC ACCEPT command: %s", event)
             return
 
-        peer_port, resume_position = parsed
+        if parsed.token is not None:
+            # Passive resume ACCEPT: DCC ACCEPT "file" 0 position token
+            queue_key = (nick, parsed.token)
+            resume = self.passive_resume_queue.get(queue_key)
+            if resume and parsed.port == 0 and parsed.position == resume["offset"] and parsed.position < resume["size"]:
+                # The sender echoed the offset we requested.
+                del self.passive_resume_queue[queue_key]
+                self.init_passive_dcc_connection(
+                    nick,
+                    resume["filename"],
+                    resume["size"],
+                    resume["listen_ip"],
+                    resume["port_range"],
+                    token=parsed.token,
+                    offset=resume["offset"],
+                    file_path=resume["file_path"],
+                )
+                return
+            if resume is None:
+                logger.warning("DCC ACCEPT for unknown passive resume: token=%s", parsed.token)
+                return
+
+        if nick not in self.resume_queue:
+            logger.warning("DCC ACCEPT not in queue: %s", event)
+            return
 
         for item in self.resume_queue[nick]:
-            if peer_port != item[1] or resume_position != item[5]:
+            if parsed.port != item[1] or parsed.position != item[5]:
                 continue
 
             self.resume_queue[nick].remove(item)
@@ -598,7 +632,7 @@ class IRCBot(AioSimpleIRCClient):
         if not self.resume_queue[nick]:
             del self.resume_queue[nick]
 
-        self.init_dcc_connection(nick, item[0], peer_port, item[2], item[3], item[4], resume_position, item[6], item[7])
+        self.init_dcc_connection(nick, item[0], parsed.port, item[2], item[3], item[4], parsed.position, item[6], item[7])
 
     def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool) -> None:
         """Handle DCC SEND command.
@@ -621,7 +655,13 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         nick = event.source.nick.lower()
-        filename, peer_address, peer_port, size = parsed.filename, parsed.peer_address, parsed.peer_port, parsed.size
+        filename, peer_address, peer_port, size, token = (
+            parsed.filename,
+            parsed.peer_address,
+            parsed.peer_port,
+            parsed.size,
+            parsed.token,
+        )
 
         # Validate size and filename before proceeding with any DCC transfer
         if size > self.max_file_size:
@@ -649,18 +689,37 @@ class IRCBot(AioSimpleIRCClient):
                 return
             if use_ssl:
                 logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
+            if token is None:
+                logger.warning("Rejected %s: passive DCC offer is missing the required token", filename)
+                return
 
             local_download_path = os.path.join(self.download_path, filename)
-            for path in [local_download_path, local_download_path + (get_incomplete_suffix(self.config) or "")]:
+            incomplete_suffix = get_incomplete_suffix(self.config) or ""
+            for path in [local_download_path, local_download_path + incomplete_suffix]:
                 if os.path.exists(path):
                     local_size = os.path.getsize(path)
-                    if local_size >= size:
+                    if local_size > size:
+                        logger.warning("Rejected %s: Local file larger than remote file (%d > %d)", filename, local_size, size)
+                        return
+                    if local_size == size:
                         logger.info("%s: file already complete, ignoring passive DCC request", filename)
                         return
-                    logger.warning("%s: partial file exists, passive DCC resume not supported", filename)
-                    return
+                    if local_size > 0:
+                        # Partial file: negotiate passive RESUME using the same token.
+                        logger.info("%s: partial file (%d bytes), sending passive DCC RESUME", filename, local_size)
+                        self._send_passive_resume(nick, filename, local_size, token)
+                        self.passive_resume_queue[(nick, token)] = {
+                            "filename": filename,
+                            "size": size,
+                            "offset": local_size,
+                            "file_path": path,
+                            "listen_ip": listen_ip,
+                            "port_range": port_range,
+                            "requested_time": time.time(),
+                        }
+                        return
 
-            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range)
+            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range, token=token)
 
         # check if transfer for same file already running from the same user/server
         for item in self.bot_manager.transfers.get(filename, []):
@@ -861,6 +920,21 @@ class IRCBot(AioSimpleIRCClient):
         # Schedule the connection to be established
         self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item))
 
+    def _send_passive_resume(self, nick: str, filename: str, offset: int, token: int) -> None:
+        """Send a passive DCC RESUME request including the negotiation token."""
+        self.connection.ctcp_reply(
+            nick,
+            " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', "0", str(offset), str(token)]),
+        )
+
+    def _get_passive_dcc_timeout(self) -> int:
+        """Return the timeout in seconds to wait for a passive DCC peer to connect."""
+        timeout = self.server_config.get("passive_dcc_timeout", self.config.get("passive_dcc_timeout", 60))
+        try:
+            return int(timeout)
+        except (TypeError, ValueError):
+            return 60
+
     def init_passive_dcc_connection(
         self,
         nick: str,
@@ -868,6 +942,9 @@ class IRCBot(AioSimpleIRCClient):
         size: int,
         listen_ip: str | None = None,
         port_range: tuple[int, int] | None = None,
+        token: int | None = None,
+        offset: int = 0,
+        file_path: str | None = None,
     ) -> None:
         """Initialize a passive DCC connection (listen for incoming connection).
 
@@ -881,6 +958,9 @@ class IRCBot(AioSimpleIRCClient):
             size (int): The size of the file.
             listen_ip (str | None): IP address to bind to. If None, uses the default.
             port_range (tuple[int, int] | None): Port range to try. If None, uses OS-assigned port.
+            token (int | None): Passive negotiation token to echo in the reverse DCC SEND.
+            offset (int): Resume offset for the file.
+            file_path (str | None): Optional explicit download path (used for resumes).
 
         """
         nick = nick.lower()
@@ -903,24 +983,24 @@ class IRCBot(AioSimpleIRCClient):
                 logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
                 return
 
+            if dcc.localaddress is None or dcc.localport is None:
+                logger.error("Passive DCC listen succeeded but localaddress/localport not set")
+                return
+
             ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
-            self.connection.ctcp_reply(
-                nick,
-                " ".join(["DCC", "SEND", '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)]),
-            )
+            reverse_message = " ".join(["DCC", "SEND", '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)])
+            if token is not None:
+                reverse_message += " " + str(token)
+            self.connection.ctcp_reply(nick, reverse_message)
             logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
 
-            local_download_path = os.path.join(self.download_path, filename)
+            local_download_path = file_path or os.path.join(self.download_path, filename)
             incomplete_suffix = get_incomplete_suffix(self.config)
-            if incomplete_suffix:
+            if not file_path and incomplete_suffix:
                 local_download_path += incomplete_suffix
 
             # Ensure the download directory exists before the peer connects
             os.makedirs(os.path.dirname(local_download_path), exist_ok=True)
-
-            if dcc.localaddress is None or dcc.localport is None:
-                logger.error("Passive DCC listen succeeded but localaddress/localport not set")
-                return
 
             now = time.time()
             transfer_item = {
@@ -932,7 +1012,7 @@ class IRCBot(AioSimpleIRCClient):
                     file_path=local_download_path,
                     filename=filename,
                     size=size,
-                    offset=0,
+                    offset=offset,
                     use_ssl=False,
                     completed=False,
                     now=now,
@@ -952,7 +1032,23 @@ class IRCBot(AioSimpleIRCClient):
 
             self.current_transfers[dcc] = transfer_item
 
+            timeout = self._get_passive_dcc_timeout()
+            if timeout > 0:
+                self.loop.create_task(self._wait_passive_timeout(dcc, transfer_item, timeout))
+
         self.loop.create_task(_setup())
+
+    async def _wait_passive_timeout(self, dcc: AioDCCConnection, transfer: dict, timeout: int) -> None:
+        """Close a passive listener if no peer connects within the timeout."""
+        await asyncio.sleep(timeout)
+        if getattr(dcc, "connected", False) or transfer.get("connected") or transfer.get("status") in ("completed", "failed", "error", "cancelled"):
+            return
+        transfer["status"] = "failed"
+        transfer["error"] = f"Passive DCC timeout: no peer connected after {timeout}s"
+        try:
+            dcc.disconnect()
+        except Exception as e:
+            logger.debug("Error disconnecting stale passive DCC listener: %s", e)
 
     def on_dccmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Delegate DCC message handling to transfer handler."""
@@ -1097,3 +1193,9 @@ class IRCBot(AioSimpleIRCClient):
                 requested_time = resume_item[-1]
                 if now - requested_time > resume_timeout:
                     resume_queue.remove(resume_item)
+
+        # Passive resume queue should stay around at least as long as the listener timeout.
+        passive_timeout = max(resume_timeout, self._get_passive_dcc_timeout())
+        for key, resume in list(self.passive_resume_queue.items()):
+            if now - resume["requested_time"] > passive_timeout:
+                del self.passive_resume_queue[key]

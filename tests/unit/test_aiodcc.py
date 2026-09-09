@@ -216,6 +216,31 @@ async def test_dcc_connection_listen(dcc_connection, mock_reactor):
 
 
 @pytest.mark.asyncio
+async def test_dcc_connection_listen_port_range(dcc_connection, mock_reactor):
+    """Test listen() picks a port inside the requested range, retrying on failure."""
+    call_log: list[tuple] = []
+
+    async def mock_create_server(factory, host, port, *args, **kwargs):
+        call_log.append((host, port))
+        if port < 15005:
+            raise OSError(f"port {port} in use")
+        mock_server = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.getsockname.return_value = (host, port)
+        mock_server.sockets = [mock_socket]
+        return mock_server
+
+    mock_reactor.loop.create_server = mock_create_server
+
+    result = await dcc_connection.listen(port=(15000, 15010))
+
+    assert result == dcc_connection
+    assert dcc_connection.passive is True
+    assert 15000 <= dcc_connection.localport <= 15010
+    assert all(15000 <= p <= 15010 for _, p in call_log)
+
+
+@pytest.mark.asyncio
 async def test_dcc_connection_listen_and_accept(dcc_connection, mock_reactor):
     """Test listen() followed by passive connection via connection_made."""
     async def mock_create_server(factory, *args, **kwargs):
