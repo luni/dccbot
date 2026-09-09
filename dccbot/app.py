@@ -527,10 +527,16 @@ class IRCBotAPI:
             # Send periodic ping frames to keep the connection alive
             async def send_ping() -> None:
                 while True:
-                    await asyncio.sleep(10)  # Send a ping every 10 seconds
-                    if ws.closed:
+                    try:
+                        await asyncio.sleep(10)  # Send a ping every 10 seconds
+                        if ws.closed:
+                            break
+                        await ws.ping()
+                    except ConnectionResetError:
                         break
-                    await ws.ping()
+                    except Exception:
+                        logger.exception("WebSocket ping failed")
+                        break
 
             # Start the ping task
             ping_task = asyncio.create_task(send_ping())

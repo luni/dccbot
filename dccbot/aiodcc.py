@@ -28,7 +28,7 @@ class DCCProtocol(irc.client_aio.IrcProtocol):
             else:
                 self.connection.peeraddress = None
                 self.connection.peerport = None
-            log.debug("DCC connection from %s:%d", self.connection.peeraddress, self.connection.peerport)
+            log.debug("DCC connection from %s:%s", self.connection.peeraddress, self.connection.peerport)
             self.connection.reactor._handle_event(self.connection, irc.client.Event("dcc_connect", self.connection.peeraddress, None, None))
             if hasattr(self.connection, "server") and self.connection.server:
                 self.connection.server.close()
