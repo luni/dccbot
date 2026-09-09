@@ -140,6 +140,26 @@ def test_on_dccmsg_write_failure_sets_error():
     dcc.disconnect.assert_called_once()
 
 
+def test_on_dccmsg_skips_mime_check_for_completed_transfer():
+    """Test transfer handler does not MIME-check already-completed transfers."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=1024)
+    transfer["completed"] = True
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot.allowed_mimetypes = ["video/mp4"]
+    bot.mime_checker.from_buffer.return_value = "text/plain"
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = [b"abc"]
+
+    with patch("builtins.open", mock_open()):
+        handler.on_dccmsg(dcc, event)
+
+    bot.mime_checker.from_buffer.assert_not_called()
+    dcc.disconnect.assert_not_called()
+    dcc.send_bytes.assert_called_once()
+
+
 def test_on_dcc_disconnect_unknown_connection():
     """Test unknown disconnect events are ignored safely."""
     dcc = MagicMock()
