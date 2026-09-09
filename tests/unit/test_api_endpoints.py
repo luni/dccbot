@@ -510,6 +510,26 @@ async def test_cancel_transfer_exception(api_client):
 
 
 @pytest.mark.asyncio
+async def test_info_success_with_joined_channels(api_client):
+    """Test info endpoint serializes channel last_active timestamps."""
+    client, mock_bot_manager = api_client
+
+    bot = IRCBot("irc.example.com", {}, "download_path", ["mimetype"], 1000000, mock_bot_manager)
+    bot.nick = "testbot"
+    bot.joined_channels = {"#movies": 1_700_000_000.0}
+    mock_bot_manager.bots = {"irc.example.com": bot}
+    mock_bot_manager.transfers = {}
+
+    resp = await client.get("/info")
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["networks"]) == 1
+    channel = data["networks"][0]["channels"][0]
+    assert channel["name"] == "#movies"
+    assert "2023" in channel["last_active"]
+
+
+@pytest.mark.asyncio
 async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
     """Test info endpoint with bots and transfers."""
     # Mock bot manager with bots and transfers

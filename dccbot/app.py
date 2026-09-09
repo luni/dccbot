@@ -396,7 +396,10 @@ class IRCBotAPI:
             network_info = {"server": server, "nickname": bot.nick, "channels": []}
 
             for channel, last_active in bot.joined_channels.items():
-                network_info["channels"].append({"name": channel, "last_active": last_active})
+                network_info["channels"].append({
+                    "name": channel,
+                    "last_active": datetime.datetime.fromtimestamp(last_active).isoformat(),
+                })
 
             response["networks"].append(network_info)
         return response
