@@ -482,12 +482,14 @@ class IRCBotAPI:
                     raise RuntimeError("Not enough arguments")
                 server = args.pop(0)
                 bot = await self.bot_manager.get_bot(server)
-                channel = args.pop(0)
+                channels = self._clean_channel_list([args.pop(0)])
+                if not channels:
+                    raise RuntimeError("Invalid channel")
                 target = args.pop(0).lower().strip()
                 await bot.queue_command({
                     "command": "send",
                     "user": target,
-                    "channels": [channel.lower().strip()],
+                    "channels": [channels[0]],
                     "message": " ".join(args),
                 })
             elif command == "info":

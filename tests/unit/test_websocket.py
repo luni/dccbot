@@ -277,3 +277,17 @@ async def test_websocket_handler_msgjoin_command(ws_session):
     assert call_args["channels"] == ["#channel"]
     assert call_args["message"] == "hello world"
     await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_msgjoin_normalizes_channel(ws_session):
+    """Test websocket /msgjoin adds # to bare channel names."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.queue_command = AsyncMock()
+    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
+    await ws.send_str("/msgjoin server Channel target hello world")
+    await asyncio.sleep(0.1)
+    call_args = mock_bot.queue_command.call_args[0][0]
+    assert call_args["channels"] == ["#channel"]
+    await ws.close()
