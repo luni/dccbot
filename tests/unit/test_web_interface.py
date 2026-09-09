@@ -132,7 +132,7 @@ async def test_websocket_msg_command(ws_session):
     mock_bot_manager.get_bot.assert_awaited_once_with("irc.example.com")
     mock_bot.queue_command.assert_awaited_once_with({
         "command": "send",
-        "user": "MyUser",
+        "user": "myuser",
         "message": "hello world",
     })
 
@@ -152,7 +152,7 @@ async def test_websocket_msgjoin_command(ws_session):
     mock_bot_manager.get_bot.assert_awaited_once_with("irc.example.com")
     mock_bot.queue_command.assert_awaited_once_with({
         "command": "send",
-        "user": "MyUser",
+        "user": "myuser",
         "channels": ["#test"],
         "message": "hello world",
     })

@@ -62,6 +62,19 @@ def test_ircbot_initialization(bot):
     assert len(bot.joined_channels) == 0
 
 
+def test_ircbot_server_lowercase(mock_bot_manager, loop_patch):
+    """Test IRCBot stores server address in lowercase."""
+    bot = IRCBot(
+        server="IRC.Example.COM",
+        server_config={"nick": "testbot"},
+        download_path="/tmp/downloads",
+        allowed_mimetypes=["application/x-bittorrent"],
+        max_file_size=1_000_000,
+        bot_manager=mock_bot_manager,
+    )
+    assert bot.server == "irc.example.com"
+
+
 def test_ircbot_random_nick(bot_factory):
     """Test IRCBot with random nick generation."""
     bot = bot_factory(server_config={"random_nick": True}, allowed_mimetypes=None)
@@ -211,25 +224,30 @@ def test_is_valid_filename():
     assert IRCBot.is_valid_filename(path, "../test.txt") is False
 
 
-def test_on_welcome(bot):
+@pytest.mark.asyncio
+async def test_on_welcome(bot):
     """Test on_welcome handler."""
     bot.connection = MagicMock()
     event = MagicMock()
 
-    with patch("asyncio.create_task") as mock_create_task:
+    with patch.object(bot, "process_command_queue", new_callable=AsyncMock) as mock_process:
         bot.on_welcome(bot.connection, event)
-        mock_create_task.assert_called_once()
+        await asyncio.sleep(0)
+        mock_process.assert_awaited_once()
 
 
-def test_on_welcome_with_nickserv(bot_factory, mock_bot_manager):
+@pytest.mark.asyncio
+async def test_on_welcome_with_nickserv(bot_factory, mock_bot_manager):
     """Test on_welcome with NickServ authentication."""
     bot = bot_factory(server_config={"nickserv_password": "secret"}, allowed_mimetypes=None)
     bot.connection = MagicMock()
     event = MagicMock()
 
-    with patch("asyncio.create_task"):
+    with patch.object(bot, "process_command_queue", new_callable=AsyncMock) as mock_process:
         bot.on_welcome(bot.connection, event)
+        await asyncio.sleep(0)
         bot.connection.privmsg.assert_called_once_with("NickServ", "IDENTIFY secret")
+        mock_process.assert_awaited_once()
 
 
 def test_on_bannedfromchan(bot):
@@ -497,14 +515,15 @@ async def test_handle_send_command(bot):
     """Test _handle_send_command."""
     bot.connection = MagicMock()
     data = {
-        "user": "testuser",
+        "user": "MyUser",
         "message": "Hello",
         "channels": ["#test"],
     }
 
     with patch.object(bot, "_join_channels", new_callable=AsyncMock):
         await bot._handle_send_command(data)
-        bot.connection.privmsg.assert_called_once_with("testuser", "Hello")
+        bot.connection.privmsg.assert_called_once_with("myuser", "Hello")
+        assert "myuser" in bot.bot_channel_map
 
 
 @pytest.mark.asyncio
@@ -525,11 +544,11 @@ async def test_handle_send_command_privmsg_exception(bot):
     bot.connection = MagicMock()
     bot.connection.privmsg.side_effect = RuntimeError("send failed")
     data = {
-        "user": "testuser",
+        "user": "MyUser",
         "message": "Hello",
     }
     await bot._handle_send_command(data)
-    bot.connection.privmsg.assert_called_once_with("testuser", "Hello")
+    bot.connection.privmsg.assert_called_once_with("myuser", "Hello")
 
 
 @pytest.mark.asyncio
@@ -731,8 +750,14 @@ async def test_handle_authentication_timeout(bot_factory, mock_bot_manager):
     """Test _handle_authentication with timeout."""
     bot = bot_factory(server_config={"nickserv_password": "secret"}, allowed_mimetypes=None, manager=mock_bot_manager)
 
-    # Don't set authenticated event, should timeout
-    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+    # Don't set authenticated event, should timeout. Use a short real wait_for
+    # so the event's wait() coroutine is scheduled and cancelled instead of discarded.
+    real_wait_for = asyncio.wait_for
+
+    async def fake_wait_for(coro, timeout):
+        await real_wait_for(coro, 0.01)
+
+    with patch("asyncio.wait_for", new=fake_wait_for):
         await bot._handle_authentication()
         # Should handle timeout gracefully
 

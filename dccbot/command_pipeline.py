@@ -16,6 +16,9 @@ async def handle_send_command(bot: IRCBot, data: dict[str, Any]) -> None:
     if not data.get("user") or not data.get("message"):
         return
 
+    user = data["user"].lower().strip()
+    data["user"] = user
+
     if data.get("channels"):
         await bot._join_channels(data["channels"])
 

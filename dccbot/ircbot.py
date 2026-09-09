@@ -107,7 +107,7 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         super().__init__()
-        self.server = server
+        self.server = server.lower()
         self.server_config = server_config
         if server_config.get("random_nick", False):
             self.nick = self._generate_random_nick(server_config.get("nick", "dccbot"))

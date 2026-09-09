@@ -41,6 +41,58 @@ def test_load_config_success(manager):
     assert "irc.example.com" in manager.config["servers"]
 
 
+def test_load_config_lower_cases_server_keys():
+    """Test server config keys are normalized to lowercase."""
+    config = {
+        "servers": {
+            "IRC.Example.COM": {"nick": "testbot"},
+        },
+        "default_download_path": "/tmp/downloads",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    assert "irc.example.com" in manager.config["servers"]
+    assert "IRC.Example.COM" not in manager.config["servers"]
+
+
+def test_load_config_lower_cases_ssend_map():
+    """Test ssend_map user keys are normalized to lowercase."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "ssend_map": {"SomeBot": True},
+        "default_download_path": "/tmp/downloads",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    assert "somebot" in manager.config["ssend_map"]
+    assert "SomeBot" not in manager.config["ssend_map"]
+
+
+def test_load_config_lower_cases_rewrite_to_ssend():
+    """Test rewrite_to_ssend channel values are normalized to lowercase."""
+    config = {
+        "servers": {
+            "irc.example.com": {
+                "nick": "testbot",
+                "rewrite_to_ssend": ["#Test"],
+            },
+        },
+        "default_download_path": "/tmp/downloads",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    assert manager.config["servers"]["irc.example.com"]["rewrite_to_ssend"] == ["#test"]
+
+
 def test_load_config_missing_servers():
     """Test config loading with missing servers key."""
     config = {"other_key": "value"}
@@ -137,6 +189,21 @@ async def test_get_bot_returns_existing_bot(manager):
 
 
 @pytest.mark.asyncio
+async def test_get_bot_matches_mixed_case_server(manager):
+    """Test that get_bot is case-insensitive for server addresses."""
+    with patch("dccbot.manager.IRCBot") as mock_ircbot:
+        mock_bot = AsyncMock()
+        mock_ircbot.return_value = mock_bot
+
+        bot1 = await manager.get_bot("irc.example.com")
+        bot2 = await manager.get_bot("IRC.Example.COM")
+        bot3 = await manager.get_bot("irc.Example.Com")
+        assert bot1 == bot2 == bot3
+        # connect should only be called once despite different cases
+        assert mock_bot.connect.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_get_bot_unknown_server(manager):
     """Test get_bot with unknown server and no default config."""
     with pytest.raises(ValueError, match="No configuration found"):
@@ -211,6 +278,33 @@ async def test_cancel_transfer_success(manager):
 
 
 @pytest.mark.asyncio
+async def test_cancel_transfer_matches_mixed_case_server(manager):
+    """Test cancel_transfer is case-insensitive for server addresses."""
+    mock_bot = MagicMock()
+    mock_dcc = MagicMock()
+    transfer = {
+        "filename": "test.txt",
+        "status": "in_progress",
+        "nick": "sender",
+    }
+    mock_bot.current_transfers = {mock_dcc: transfer}
+    manager.bots = {"irc.example.com": mock_bot}
+    manager.transfers = {
+        "test.txt": [
+            {
+                "server": "IRC.Example.COM",
+                "status": "in_progress",
+                "nick": "sender",
+            }
+        ]
+    }
+
+    result = await manager.cancel_transfer("IRC.Example.COM", "sender", "test.txt")
+    assert result is True
+    assert transfer["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_cancel_transfer_not_found(manager):
     """Test transfer cancellation when transfer not found."""
     mock_bot = MagicMock()
@@ -281,7 +375,7 @@ async def test_cleanup_bots_idle_server(manager):
     mock_bot = AsyncMock()
     mock_bot.joined_channels = {}
     mock_bot.current_transfers = {}
-    mock_bot.command_queue = AsyncMock()
+    mock_bot.command_queue = MagicMock()
     mock_bot.command_queue.empty.return_value = True
     mock_bot.last_active = time.time() - 2000
     mock_bot.cleanup = AsyncMock()
@@ -303,7 +397,7 @@ async def test_cleanup_bots_active_server(manager):
     mock_bot = AsyncMock()
     mock_bot.joined_channels = {"#test": time.time()}
     mock_bot.current_transfers = {}
-    mock_bot.command_queue = AsyncMock()
+    mock_bot.command_queue = MagicMock()
     mock_bot.command_queue.empty.return_value = True
     mock_bot.last_active = time.time()
     mock_bot.cleanup = AsyncMock()

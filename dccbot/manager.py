@@ -56,6 +56,8 @@ class IRCBotManager:
 
         Returns True if cancelled, False if not found or not running.
         """
+        server = server.lower()
+
         # Find the bot
         bot = self.bots.get(server)
         if not bot:
@@ -82,7 +84,7 @@ class IRCBotManager:
 
                 # Update in manager.transfers if present
                 for t in self.transfers.get(filename, []):
-                    if t.get("server") == server and t.get("status") == "in_progress" and t.get("nick") == nick:
+                    if t.get("server", "").lower() == server and t.get("status") == "in_progress" and t.get("nick") == nick:
                         t["status"] = "cancelled"
                         t["error"] = "Cancelled by user"
                         t["connected"] = False
@@ -112,6 +114,26 @@ class IRCBotManager:
     @staticmethod
     def _normalize_config_contract(config: dict[str, Any]) -> None:
         """Normalize legacy config keys and validate key types."""
+        if "servers" in config and isinstance(config["servers"], dict):
+            config["servers"] = {k.lower(): v for k, v in config["servers"].items()}
+
+        if "ssend_map" in config and isinstance(config["ssend_map"], dict):
+            config["ssend_map"] = {k.lower(): v for k, v in config["ssend_map"].items()}
+
+        for server_config in config.get("servers", {}).values():
+            if not isinstance(server_config, dict):
+                continue
+            if "rewrite_to_ssend" in server_config and isinstance(server_config["rewrite_to_ssend"], list):
+                server_config["rewrite_to_ssend"] = [c.lower() for c in server_config["rewrite_to_ssend"]]
+
+        default_server_config = config.get("default_server_config")
+        if (
+            isinstance(default_server_config, dict)
+            and "rewrite_to_ssend" in default_server_config
+            and isinstance(default_server_config["rewrite_to_ssend"], list)
+        ):
+            default_server_config["rewrite_to_ssend"] = [c.lower() for c in default_server_config["rewrite_to_ssend"]]
+
         if "default_download_path" not in config and "download_path" in config:
             config["default_download_path"] = config["download_path"]
             logger.warning("Config key 'download_path' is deprecated; use 'default_download_path'.")
@@ -151,6 +173,8 @@ class IRCBotManager:
             The IRCBot instance for the server.
 
         """
+        server = server.lower()
+
         if server not in self.bots:
             server_config = self.config["servers"].get(server, {})
             if not server_config and self.config.get("default_server_config") is not None:

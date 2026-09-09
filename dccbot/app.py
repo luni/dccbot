@@ -471,7 +471,7 @@ class IRCBotAPI:
                     raise RuntimeError("Not enough arguments")
                 server = args.pop(0)
                 bot = await self.bot_manager.get_bot(server)
-                target = args.pop(0)
+                target = args.pop(0).lower().strip()
                 await bot.queue_command({
                     "command": "send",
                     "user": target,
@@ -483,7 +483,7 @@ class IRCBotAPI:
                 server = args.pop(0)
                 bot = await self.bot_manager.get_bot(server)
                 channel = args.pop(0)
-                target = args.pop(0)
+                target = args.pop(0).lower().strip()
                 await bot.queue_command({
                     "command": "send",
                     "user": target,
