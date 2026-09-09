@@ -30,7 +30,12 @@ def is_valid_filename(path: str, filename: str) -> bool:
     if re.search(r"[/\\:\*?\"<>\|]", filename):
         return False
 
-    if not os.path.abspath(file_path).startswith(path):
+    abs_file_path = os.path.abspath(file_path)
+    abs_base_path = os.path.abspath(path)
+    try:
+        if os.path.commonpath([abs_file_path, abs_base_path]) != abs_base_path:
+            return False
+    except ValueError:
         return False
 
     return True

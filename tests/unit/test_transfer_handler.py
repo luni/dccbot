@@ -263,10 +263,8 @@ def test_on_dcc_disconnect_md5_enqueue_and_rename_error(tmp_path):
     event = MagicMock()
     event.arguments = []
 
-    fake_loop = MagicMock()
-    fake_loop.run_until_complete = MagicMock()
-    with patch.object(asyncio, "get_event_loop", return_value=fake_loop), patch("os.rename", side_effect=OSError("rename failed")):
+    with patch("os.rename", side_effect=OSError("rename failed")), patch("asyncio.create_task") as mock_create_task:
         handler.on_dcc_disconnect(dcc, event)
 
-    fake_loop.run_until_complete.assert_called_once()
+    mock_create_task.assert_called_once()
     assert transfer["status"] == "completed"

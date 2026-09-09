@@ -50,7 +50,7 @@ class TransferHandler:
                 transfer_rate_avg = (transfer["bytes_received"] / elapsed_time) / 1024 if elapsed_time > 0 else 0
                 elapsed_time = now - transfer["last_progress_update"]
                 transferred_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
-                transfer_rate = (transferred_bytes / elapsed_time) / 1024
+                transfer_rate = (transferred_bytes / elapsed_time) / 1024 if elapsed_time > 0 else 0
 
                 logger.info(
                     "[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s",
@@ -110,7 +110,7 @@ class TransferHandler:
 
         file_path = transfer["file_path"]
         elapsed_time = time.time() - transfer["start_time"]
-        transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024
+        transfer_rate = (transfer["bytes_received"] / elapsed_time) / 1024 if elapsed_time > 0 else 0
 
         if not os.path.exists(file_path):
             logger.error("[%s] Download failed: %s does not exist", transfer["nick"], file_path)
@@ -129,8 +129,7 @@ class TransferHandler:
                 transfer["completed"] = time.time()
                 transfer["status"] = "completed"
                 if transfer.get("md5"):
-                    loop = asyncio.get_event_loop()
-                    loop.run_until_complete(self.bot._add_md5_check_queue_item(transfer))
+                    asyncio.create_task(self.bot._add_md5_check_queue_item(transfer))
 
                 if self.bot.config.get("incomplete_suffix") and file_path.endswith(self.bot.config["incomplete_suffix"]):
                     target = file_path[: -len(self.bot.config["incomplete_suffix"])]

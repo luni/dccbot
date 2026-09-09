@@ -43,6 +43,15 @@ def test_parse_dcc_send_rejects_invalid():
 def test_is_valid_filename():
     """Test filename path validation helper."""
     assert is_valid_filename("/tmp/downloads", "file.mkv") is True
+
+
+def test_is_valid_filename_rejects_traversal():
+    """Test filename validation rejects path traversal."""
+    assert is_valid_filename("/tmp/downloads", "../etc/passwd") is False
+
+
+def test_is_valid_filename_accepts_relative_base():
+    """Test filename validation works with relative download paths."""
+    assert is_valid_filename("./downloads", "file.mkv") is True
     assert is_valid_filename("/tmp/downloads", "../file.mkv") is False
     assert is_valid_filename("/tmp/downloads", "dir/file.mkv") is False
-    assert is_valid_filename("./downloads", "file.mkv") is False
