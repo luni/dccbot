@@ -357,6 +357,21 @@ def test_on_privmsg_sending_pack_creates_normalized_pending_transfer(bot, mock_b
     assert transfer["md5"] == "82ce0f4fe6e5c862d54dae475b8a1b82"
 
 
+def test_on_privmsg_stores_nick_lowercase(bot, mock_bot_manager):
+    """Pack announcement should store the sender nick in lowercase."""
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "SeNdEr"
+    event.arguments = ['** Sending you pack #1 ("TEST.mkv") [1.0GB, MD5:82ce0f4fe6e5c862d54dae475b8a1b82] - (resume+ssl supported)']
+
+    bot.on_privmsg(bot.connection, event)
+
+    transfer = mock_bot_manager.transfers["TEST.mkv"][0]
+    assert transfer["nick"] == "sender"
+
+
 def test_on_part(bot):
     """Test on_part handler."""
     bot.connection = MagicMock()
@@ -419,6 +434,45 @@ def test_on_kick(bot):
 
     bot.on_kick(bot.connection, event)
     assert "#test" not in bot.joined_channels
+
+
+def test_on_join_mixed_case_nick(bot):
+    """Test on_join recognizes the bot despite case differences in nick."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "TestBot"
+    event.target = "#test"
+    event.arguments = []
+
+    bot.on_join(bot.connection, event)
+    assert "#test" in bot.joined_channels
+
+
+def test_on_part_mixed_case_nick(bot):
+    """Test on_part recognizes the bot despite case differences in nick."""
+    bot.connection = MagicMock()
+    bot.joined_channels["#test"] = 123456.0
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "TestBot"
+    event.target = "#test"
+    event.arguments = []
+
+    bot.on_part(bot.connection, event)
+    assert "#test" not in bot.joined_channels
+
+
+def test_on_kick_other_user_ignored(bot):
+    """Test on_kick does not remove the channel when another user is kicked."""
+    bot.connection = MagicMock()
+    bot.joined_channels["#test"] = 123456.0
+    event = MagicMock()
+    event.target = "#test"
+    event.arguments = ["otheruser", "reason"]
+
+    bot.on_kick(bot.connection, event)
+    assert "#test" in bot.joined_channels
 
 
 def test_resolve_channel_from_event_fallback_priority(bot):
@@ -827,6 +881,21 @@ def test_on_dcc_send_passive_enabled(bot_factory, mock_bot_manager):
     event = MagicMock()
     event.source = MagicMock()
     event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None)
+
+
+def test_on_dcc_send_passive_lower_cases_nick(bot_factory, mock_bot_manager):
+    """Test on_dcc_send passes a lowercased nick to passive DCC init."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "SeNdEr"
     event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:

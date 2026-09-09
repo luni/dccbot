@@ -57,6 +57,7 @@ class IRCBotManager:
         Returns True if cancelled, False if not found or not running.
         """
         server = server.lower()
+        nick = nick.lower()
 
         # Find the bot
         bot = self.bots.get(server)
@@ -65,7 +66,7 @@ class IRCBotManager:
 
         # Find the transfer in bot.current_transfers
         for dcc, transfer in bot.current_transfers.items():
-            if transfer.get("filename") == filename and transfer.get("status") == "in_progress" and transfer.get("nick") == nick:
+            if transfer.get("filename") == filename and transfer.get("status") == "in_progress" and transfer.get("nick", "").lower() == nick:
                 # Disconnect the DCC connection
                 try:
                     dcc.disconnect("Cancelled by user")
@@ -84,7 +85,7 @@ class IRCBotManager:
 
                 # Update in manager.transfers if present
                 for t in self.transfers.get(filename, []):
-                    if t.get("server", "").lower() == server and t.get("status") == "in_progress" and t.get("nick") == nick:
+                    if t.get("server", "").lower() == server and t.get("status") == "in_progress" and t.get("nick", "").lower() == nick:
                         t["status"] = "cancelled"
                         t["error"] = "Cancelled by user"
                         t["connected"] = False
@@ -112,6 +113,18 @@ class IRCBotManager:
             raise
 
     @staticmethod
+    def _normalize_server_config(server_config: dict[str, Any]) -> None:
+        """Normalize case-insensitive values inside a single server config block."""
+        if not isinstance(server_config, dict):
+            return
+        if "rewrite_to_ssend" in server_config and isinstance(server_config["rewrite_to_ssend"], list):
+            server_config["rewrite_to_ssend"] = [c.lower() for c in server_config["rewrite_to_ssend"]]
+        if "channels" in server_config and isinstance(server_config["channels"], list):
+            server_config["channels"] = [c.lower() for c in server_config["channels"]]
+        if "also_join" in server_config and isinstance(server_config["also_join"], dict):
+            server_config["also_join"] = {k.lower(): [c.lower() for c in v] for k, v in server_config["also_join"].items()}
+
+    @staticmethod
     def _normalize_config_contract(config: dict[str, Any]) -> None:
         """Normalize legacy config keys and validate key types."""
         if "servers" in config and isinstance(config["servers"], dict):
@@ -121,18 +134,10 @@ class IRCBotManager:
             config["ssend_map"] = {k.lower(): v for k, v in config["ssend_map"].items()}
 
         for server_config in config.get("servers", {}).values():
-            if not isinstance(server_config, dict):
-                continue
-            if "rewrite_to_ssend" in server_config and isinstance(server_config["rewrite_to_ssend"], list):
-                server_config["rewrite_to_ssend"] = [c.lower() for c in server_config["rewrite_to_ssend"]]
+            IRCBotManager._normalize_server_config(server_config)
 
-        default_server_config = config.get("default_server_config")
-        if (
-            isinstance(default_server_config, dict)
-            and "rewrite_to_ssend" in default_server_config
-            and isinstance(default_server_config["rewrite_to_ssend"], list)
-        ):
-            default_server_config["rewrite_to_ssend"] = [c.lower() for c in default_server_config["rewrite_to_ssend"]]
+        if isinstance(config.get("default_server_config"), dict):
+            IRCBotManager._normalize_server_config(config["default_server_config"])
 
         if "default_download_path" not in config and "download_path" in config:
             config["default_download_path"] = config["download_path"]

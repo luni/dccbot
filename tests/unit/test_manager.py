@@ -93,6 +93,30 @@ def test_load_config_lower_cases_rewrite_to_ssend():
     assert manager.config["servers"]["irc.example.com"]["rewrite_to_ssend"] == ["#test"]
 
 
+def test_load_config_normalizes_channels_and_also_join():
+    """Test channels and also_join values are normalized to lowercase."""
+    config = {
+        "servers": {
+            "irc.example.com": {
+                "nick": "testbot",
+                "channels": ["#Test"],
+                "also_join": {
+                    "#Test": ["#Extra", "#More"],
+                },
+            },
+        },
+        "default_download_path": "/tmp/downloads",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    server_config = manager.config["servers"]["irc.example.com"]
+    assert server_config["channels"] == ["#test"]
+    assert server_config["also_join"] == {"#test": ["#extra", "#more"]}
+
+
 def test_load_config_missing_servers():
     """Test config loading with missing servers key."""
     config = {"other_key": "value"}
@@ -300,6 +324,33 @@ async def test_cancel_transfer_matches_mixed_case_server(manager):
     }
 
     result = await manager.cancel_transfer("IRC.Example.COM", "sender", "test.txt")
+    assert result is True
+    assert transfer["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_transfer_matches_mixed_case_nick(manager):
+    """Test cancel_transfer is case-insensitive for nicks."""
+    mock_bot = MagicMock()
+    mock_dcc = MagicMock()
+    transfer = {
+        "filename": "test.txt",
+        "status": "in_progress",
+        "nick": "Sender",
+    }
+    mock_bot.current_transfers = {mock_dcc: transfer}
+    manager.bots = {"irc.example.com": mock_bot}
+    manager.transfers = {
+        "test.txt": [
+            {
+                "server": "irc.example.com",
+                "status": "in_progress",
+                "nick": "SeNdEr",
+            }
+        ]
+    }
+
+    result = await manager.cancel_transfer("irc.example.com", "sender", "test.txt")
     assert result is True
     assert transfer["status"] == "cancelled"
 

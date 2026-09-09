@@ -603,8 +603,12 @@ class IRCBotAPI:
         """Normalize channel names by stripping, lowercasing, and prefixing '#'."""
         cleaned_channels: list[str] = []
         for channel in l:
+            if not channel:
+                continue
             normalized = channel.lower().strip()
-            if normalized and not normalized.startswith("#"):
+            if not normalized:
+                continue
+            if not normalized.startswith("#"):
                 normalized = f"#{normalized}"
             cleaned_channels.append(normalized)
         return cleaned_channels
@@ -682,7 +686,11 @@ class IRCBotAPI:
                 return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
             bot = await self.bot_manager.get_bot(data["server"])
-            channels = self._clean_channel_list(data.get("channels", [data.get("channel", [])]))
+            channels = data.get("channels")
+            if not channels:
+                channel = data.get("channel")
+                channels = [channel] if channel else []
+            channels = self._clean_channel_list(channels)
 
             # Check if we need to rewrite to ssend
             if (

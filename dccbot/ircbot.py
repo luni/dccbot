@@ -489,7 +489,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        if event.source.nick != self.nick:
+        if event.source.nick.lower() != self.nick.lower():
             return
 
         channel_name = event.target.lower()
@@ -507,7 +507,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        if event.source.nick != self.nick:
+        if event.source.nick.lower() != self.nick.lower():
             return
 
         channel_name = event.target.lower()
@@ -526,6 +526,10 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
+        kicked_nick = event.arguments[0].lower() if event.arguments else ""
+        if kicked_nick != self.nick.lower():
+            return
+
         logger.info("Kicked from channel %s: %s", event.target, event.arguments)
         channel_name = event.target.lower()
         if channel_name in self.joined_channels:
@@ -555,7 +559,9 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        if event.source.nick not in self.resume_queue:
+        nick = event.source.nick.lower()
+
+        if nick not in self.resume_queue:
             logger.warning("DCC ACCEPT not in queue: %s", event)
             return
 
@@ -566,20 +572,20 @@ class IRCBot(AioSimpleIRCClient):
 
         peer_port, resume_position = parsed
 
-        for item in self.resume_queue[event.source.nick]:
+        for item in self.resume_queue[nick]:
             if peer_port != item[1] or resume_position != item[5]:
                 continue
 
-            self.resume_queue[event.source.nick].remove(item)
+            self.resume_queue[nick].remove(item)
             break
         else:
             logger.warning("DCC ACCEPT command for unknown file: %s", event)
             return
 
-        if not self.resume_queue[event.source.nick]:
-            del self.resume_queue[event.source.nick]
+        if not self.resume_queue[nick]:
+            del self.resume_queue[nick]
 
-        self.init_dcc_connection(event.source.nick, item[0], peer_port, item[2], item[3], item[4], resume_position, item[6], item[7])
+        self.init_dcc_connection(nick, item[0], peer_port, item[2], item[3], item[4], resume_position, item[6], item[7])
 
     def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool) -> None:
         """Handle DCC SEND command.
@@ -601,6 +607,7 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC SEND command (not enough arguments): %s", event.arguments)
             return
 
+        nick = event.source.nick.lower()
         filename, peer_address, peer_port, size = parsed.filename, parsed.peer_address, parsed.peer_port, parsed.size
 
         # Validate size and filename before proceeding with any DCC transfer
@@ -624,11 +631,11 @@ class IRCBot(AioSimpleIRCClient):
                 return
             if use_ssl:
                 logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
-            return self.init_passive_dcc_connection(event.source.nick, filename, size, listen_ip, port_range)
+            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range)
 
-        # check if transfer for same file already running
+        # check if transfer for same file already running from the same user/server
         for item in self.bot_manager.transfers.get(filename, []):
-            if item["size"] == size and item.get("connected", False):
+            if item["size"] == size and item.get("connected", False) and item.get("nick", "").lower() == nick and item.get("server", "").lower() == self.server:
                 logger.warning("Rejected %s: Download of file already in progress", filename)
                 return
 
@@ -653,14 +660,12 @@ class IRCBot(AioSimpleIRCClient):
                     local_size -= 4096
 
                 logger.info("Send DCC RESUME %s starting at %d bytes", filename, local_size)
-                self.connection.ctcp_reply(
-                    event.source.nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)])
-                )
+                self.connection.ctcp_reply(nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)]))
 
-                if event.source.nick not in self.resume_queue:
-                    self.resume_queue[event.source.nick] = []
+                if nick not in self.resume_queue:
+                    self.resume_queue[nick] = []
 
-                self.resume_queue[event.source.nick].append((
+                self.resume_queue[nick].append((
                     peer_address,
                     peer_port,
                     filename,
@@ -673,7 +678,7 @@ class IRCBot(AioSimpleIRCClient):
                 ))
                 return
 
-        self.init_dcc_connection(event.source.nick, peer_address, peer_port, filename, local_files[-1], size, local_size, use_ssl, completed)
+        self.init_dcc_connection(nick, peer_address, peer_port, filename, local_files[-1], size, local_size, use_ssl, completed)
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle CTCP messages.
@@ -753,6 +758,8 @@ class IRCBot(AioSimpleIRCClient):
             completed (bool): Whether the file transfer is already completed.
 
         """
+        nick = nick.lower()
+
         dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
         logger.info("[%s] %s %s from %s:%d, size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
 
@@ -833,6 +840,8 @@ class IRCBot(AioSimpleIRCClient):
             port_range (tuple[int, int] | None): Port range to try. If None, uses OS-assigned port.
 
         """
+        nick = nick.lower()
+
         logger.info("[%s] Setting up passive DCC for %s, size: %d bytes", nick, filename, size)
 
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
@@ -965,8 +974,9 @@ class IRCBot(AioSimpleIRCClient):
 
         """
         self.last_active = time.time()
-        sender = getattr(event.source, "nick", None)
+        sender = getattr(event.source, "nick", None) or ""
         message = event.arguments[0]
+        normalized_sender = sender.lower()
 
         logger.info("[%s] %s", sender, message)
 
@@ -981,7 +991,7 @@ class IRCBot(AioSimpleIRCClient):
                 for transfer in transfers:
                     ensure_transfer_defaults(filename, transfer)
                     if (
-                        transfer["nick"] == sender
+                        transfer["nick"] == normalized_sender
                         and transfer["server"] == self.server
                         and transfer.get("completed")
                         and transfer.get("completed", 0) >= now - 30
@@ -1001,7 +1011,9 @@ class IRCBot(AioSimpleIRCClient):
             if not filename in self.bot_manager.transfers:
                 self.bot_manager.transfers[filename] = []
 
-            self.bot_manager.transfers[filename].append(create_pending_transfer(filename=filename, nick=sender, server=self.server, md5=f.group(3), now=now))
+            self.bot_manager.transfers[filename].append(
+                create_pending_transfer(filename=filename, nick=normalized_sender, server=self.server, md5=f.group(3), now=now)
+            )
 
         f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
         if f:

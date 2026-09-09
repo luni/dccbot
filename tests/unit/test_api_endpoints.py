@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from dccbot.app import IRCBotAPI
 from dccbot.ircbot import IRCBot
 
 
@@ -369,6 +370,31 @@ async def test_msg_with_xdcc_rewrite_ssend_map(api_client):
     call_args = mock_bot.queue_command.call_args[0][0]
     assert call_args["user"] == "testbot"
     assert "xdcc ssend" in call_args["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_msg_without_channel(api_client):
+    """Test message request without channel sends with empty channels list."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot.server_config = {}
+    mock_bot_manager.get_bot.return_value = mock_bot
+    mock_bot_manager.config = {}
+
+    payload = {"server": "irc.example.com", "user": "testuser", "message": "Hello"}
+    resp = await client.post("/msg", json=payload)
+    assert resp.status == 200
+
+    call_args = mock_bot.queue_command.call_args[0][0]
+    assert call_args["command"] == "send"
+    assert call_args["user"] == "testuser"
+    assert call_args["channels"] == []
+
+
+def test_clean_channel_list_skips_empty_and_adds_prefix():
+    """Test _clean_channel_list filters empty values and prefixes '#'."""
+    assert IRCBotAPI._clean_channel_list(["test", "", "  ", "#Other"]) == ["#test", "#other"]
 
 
 @pytest.mark.asyncio
