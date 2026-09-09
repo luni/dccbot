@@ -390,7 +390,7 @@ class IRCBot(AioSimpleIRCClient):
 
         channels = self.server_config.get("channels", [])
         if channels:
-            await asyncio.gather(*(self.join_channel(channel) for channel in channels), return_exceptions=True)
+            await self._join_channels(channels)
 
         while True:
             data: dict[str, Any] = await self.command_queue.get()

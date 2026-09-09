@@ -257,6 +257,7 @@ async def test_process_command_queue_handles_join(bot):
     """Test process_command_queue processes a join command."""
     bot.authenticated = True
     bot.authenticated_event.set()
+    bot.server_config["channels"] = []
 
     with (
         patch.object(bot, "_handle_authentication"),
