@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -54,13 +55,17 @@ class IRCBotManager:
         self.transfers: dict[str, list[dict[str, Any]]] = {}
         self._dcc_cert_cache_dir: Path | None = None
         self._dcc_cert_paths: tuple[str, str] | None = None
+        self._dcc_cert_lock = threading.Lock()
 
     def get_or_create_dcc_cert(self) -> tuple[str, str]:
         """Return paths to the bot's DCC certificate and private key."""
         if self._dcc_cert_paths is not None:
             return self._dcc_cert_paths
-        self._dcc_cert_paths = get_or_create_dcc_cert(self.config, self._dcc_cert_cache_dir)
-        return self._dcc_cert_paths
+        with self._dcc_cert_lock:
+            if self._dcc_cert_paths is not None:
+                return self._dcc_cert_paths
+            self._dcc_cert_paths = get_or_create_dcc_cert(self.config, self._dcc_cert_cache_dir)
+            return self._dcc_cert_paths
 
     async def cancel_transfer(self, server: str, nick: str, filename: str) -> bool:
         """Cancel a running transfer by server, bot_name, and filename.

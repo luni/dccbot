@@ -163,9 +163,10 @@ def test_create_dcc_ssl_context_mismatched_key_raises(tmp_path: Path) -> None:
         create_dcc_ssl_context(server=False, cert_path=str(cert_path), key_path=str(other_key_path))
 
 
-def test_get_or_create_dcc_cert_default_cache_dir() -> None:
+def test_get_or_create_dcc_cert_default_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The default cache dir is under the user's home directory."""
+    monkeypatch.setattr("dccbot.ssl_util._default_cert_cache_dir", lambda: tmp_path)
     cert_file, key_file = get_or_create_dcc_cert({})
     assert cert_file.endswith("/dcc-cert.pem")
     assert key_file.endswith("/dcc-key.pem")
-    assert Path(cert_file).parent == Path.home() / ".local" / "share" / "dccbot"
+    assert Path(cert_file).parent == tmp_path
