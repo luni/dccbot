@@ -109,3 +109,63 @@ def test_create_dcc_ssl_context_client(tmp_path: Path) -> None:
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_NONE
     assert ctx.check_hostname is False
+
+
+def test_get_or_create_dcc_cert_falls_back_when_key_missing(tmp_path: Path) -> None:
+    """If only a certificate is configured (no key), a self-signed cert is generated."""
+    cert_path, _ = _generate_pair(tmp_path)
+    config = {"dcc_ssl_cert": str(cert_path)}
+
+    cert_file, key_file = get_or_create_dcc_cert(config, cache_dir=tmp_path)
+
+    # Generated certificate, not the user one.
+    assert cert_file == str(tmp_path / "dcc-cert.pem")
+    assert key_file == str(tmp_path / "dcc-key.pem")
+
+
+def test_get_or_create_dcc_cert_regenerates_when_cache_key_missing(tmp_path: Path) -> None:
+    """A cached cert with a missing key triggers regeneration of the pair."""
+    # Generate a cert/key pair in the cache dir, then delete only the key.
+    _ = get_or_create_dcc_cert({}, cache_dir=tmp_path)
+    (tmp_path / "dcc-key.pem").unlink()
+
+    cert_file, key_file = get_or_create_dcc_cert({}, cache_dir=tmp_path)
+    assert cert_file == str(tmp_path / "dcc-cert.pem")
+    assert key_file == str(tmp_path / "dcc-key.pem")
+    assert Path(cert_file).is_file()
+    assert Path(key_file).is_file()
+
+
+def test_create_dcc_ssl_context_single_file(tmp_path: Path) -> None:
+    """A single PEM file containing both cert and key is accepted."""
+    cert_path, key_path = _generate_pair(tmp_path)
+    combined = tmp_path / "combined.pem"
+    combined.write_bytes(cert_path.read_bytes() + key_path.read_bytes())
+
+    ctx = create_dcc_ssl_context(server=False, cert_path=str(combined), key_path=str(combined))
+    assert isinstance(ctx, ssl.SSLContext)
+
+
+def test_create_dcc_ssl_context_mismatched_key_raises(tmp_path: Path) -> None:
+    """A certificate paired with a mismatched private key raises an error."""
+    cert_path, _ = _generate_pair(tmp_path)
+    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    other_key_path = tmp_path / "other-key.pem"
+    other_key_path.write_bytes(
+        other_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    with pytest.raises(ssl.SSLError):
+        create_dcc_ssl_context(server=False, cert_path=str(cert_path), key_path=str(other_key_path))
+
+
+def test_get_or_create_dcc_cert_default_cache_dir() -> None:
+    """The default cache dir is under the user's home directory."""
+    cert_file, key_file = get_or_create_dcc_cert({})
+    assert cert_file.endswith("/dcc-cert.pem")
+    assert key_file.endswith("/dcc-key.pem")
+    assert Path(cert_file).parent == Path.home() / ".local" / "share" / "dccbot"

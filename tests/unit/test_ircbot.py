@@ -1386,3 +1386,113 @@ def test_on_dcc_accept_passive_ssend_resume(bot):
         offset=500,
         file_path="/tmp/downloads/test.txt",
     )
+
+
+def test_on_dcc_send_passive_ssend_partial_resume(bot_factory, mock_bot_manager, tmp_path):
+    """Test passive SSEND with a partial file sends RESUME and stores use_ssl."""
+    mock_bot_manager.config = {"passive_dcc": True, "incomplete_suffix": ".incomplete"}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, download_path=str(tmp_path))
+    bot.connection = MagicMock()
+    (tmp_path / "test.txt.incomplete").write_bytes(b"x" * 500)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 0 0 1000 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+
+    mock_init.assert_not_called()
+    assert ("sender", 42) in bot.passive_resume_queue
+    assert bot.passive_resume_queue[("sender", 42)]["use_ssl"] is True
+    reply = bot.connection.ctcp_reply.call_args[0][1]
+    assert "RESUME" in reply
+
+
+def test_on_dcc_send_passive_ssend_oversized_local_file(bot_factory, mock_bot_manager, tmp_path):
+    """Test passive SSEND is rejected when a local file exceeds the remote size."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, download_path=str(tmp_path))
+    bot.connection = MagicMock()
+    (tmp_path / "test.txt").write_bytes(b"x" * 2000)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 0 0 1000 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+
+    mock_init.assert_not_called()
+    assert bot.connection.ctcp_reply.called is False
+
+
+def test_on_dcc_send_passive_ssend_missing_token(bot_factory, mock_bot_manager):
+    """Test passive SSEND without a token is rejected."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+
+    mock_init.assert_not_called()
+
+
+def test_on_dcc_send_active_ssend_complete_local_file(bot, mock_bot_manager, tmp_path):
+    """Test active SSEND with a complete local file sends RESUME from size-4096."""
+    bot.config["allow_private_ips"] = True
+    bot.bot_manager.transfers = {}
+    bot.download_path = str(tmp_path)
+    bot.connection = MagicMock()
+    (tmp_path / "test.txt").write_bytes(b"x" * 1000)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 2130706433 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+
+    # It should not start a new transfer for an already-complete file.
+    mock_init.assert_not_called()
+    assert "sender" in bot.resume_queue
+    assert bot.resume_queue["sender"][0][6] is True  # use_ssl
+    assert bot.resume_queue["sender"][0][7] is True  # completed
+
+
+@pytest.mark.asyncio
+async def test_init_dcc_connection_ssend(bot, mock_bot_manager):
+    """Test active SSEND uses an SSL context and the transfer records ssl=True."""
+    bot.connection = MagicMock()
+    bot.bot_manager = mock_bot_manager
+    mock_ssl_ctx = MagicMock()
+
+    mock_dcc = MagicMock()
+    mock_dcc.connect = AsyncMock(return_value=MagicMock())
+
+    with patch.object(bot, "_get_dcc_ssl_context", return_value=mock_ssl_ctx):
+        with patch.object(bot, "dcc", return_value=mock_dcc) as mock_dcc_factory:
+            with patch.object(bot.loop, "create_task") as mock_create_task:
+                bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1024, 0, True, False)
+
+                mock_dcc_factory.assert_called_once_with("raw")
+                mock_create_task.assert_called_once()
+                coro = mock_create_task.call_args[0][0]
+                await coro
+
+    # The connect call should have been made with an AioFactory carrying the SSL context.
+    mock_dcc.connect.assert_called_once()
+    factory = mock_dcc.connect.call_args.kwargs["connect_factory"]
+    assert factory.connection_args["ssl"] is mock_ssl_ctx
+
+    transfer = list(bot.current_transfers.values())[0]
+    assert transfer["ssl"] is True
