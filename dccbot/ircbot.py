@@ -996,9 +996,9 @@ class IRCBot(AioSimpleIRCClient):
         if self._maybe_handle_nickserv_auth(sender, message):
             return
 
-        f = re.search(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9]{32})", message)
+        f = re.search(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9A-F]{32})", message, re.I)
         if f:
-            md5sum = f.group(1)
+            md5sum = f.group(1).lower()
             now = time.time()
             for filename, transfers in self.bot_manager.transfers.items():
                 for transfer in transfers:

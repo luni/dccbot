@@ -358,6 +358,31 @@ def test_on_privmsg_transfer_completed_normalizes_sparse_transfer(bot, mock_bot_
     assert transfer["filename"] == "movie.mkv"
 
 
+def test_on_privmsg_transfer_completed_accepts_uppercase_md5(bot, mock_bot_manager):
+    """MD5 completion notices should accept uppercase hex and store lowercase."""
+    bot.connection = MagicMock()
+    now = 1_700_000_000.0
+    mock_bot_manager.transfers = {
+        "movie.mkv": [
+            {
+                "server": "irc.example.com",
+                "nick": "sender",
+                "completed": now - 1,
+            }
+        ]
+    }
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["** Transfer Completed movie.mkv MD5sum: ABCDEF0123456789ABCDEF0123456789"]
+
+    with patch("time.time", return_value=now):
+        bot.on_privmsg(bot.connection, event)
+
+    transfer = mock_bot_manager.transfers["movie.mkv"][0]
+    assert transfer["md5"] == "abcdef0123456789abcdef0123456789"
+
+
 def test_on_privmsg_sending_pack_creates_normalized_pending_transfer(bot, mock_bot_manager):
     """Pack announcement should create a normalized pending transfer record."""
     bot.connection = MagicMock()
