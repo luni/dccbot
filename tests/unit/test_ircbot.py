@@ -1047,6 +1047,42 @@ def test_on_dcc_send_does_not_reject_transfer_from_other_server(bot, mock_bot_ma
     mock_init.assert_called_once()
 
 
+def test_on_dcc_send_passive_skips_existing_complete_file(bot_factory, mock_bot_manager, tmp_path):
+    """Test passive DCC ignores the request when the file is already complete."""
+    mock_bot_manager.config = {"passive_dcc": True, "incomplete_suffix": ".incomplete"}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, download_path=str(tmp_path))
+    bot.connection = MagicMock()
+    (tmp_path / "test.txt").write_bytes(b"x" * 1000)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    mock_init.assert_not_called()
+
+
+def test_on_dcc_send_passive_rejects_partial_existing_file(bot_factory, mock_bot_manager, tmp_path):
+    """Test passive DCC rejects the request when a partial file exists."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, download_path=str(tmp_path))
+    bot.connection = MagicMock()
+    (tmp_path / "test.txt").write_bytes(b"x" * 500)
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 0 0 1000']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    mock_init.assert_not_called()
+
+
 def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager):
     """Test on_dcc_send rejects passive DCC with invalid size (0 and oversized)."""
     mock_bot_manager.config = {"passive_dcc": True}

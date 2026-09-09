@@ -647,6 +647,17 @@ class IRCBot(AioSimpleIRCClient):
                 return
             if use_ssl:
                 logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
+
+            local_download_path = os.path.join(self.download_path, filename)
+            for path in [local_download_path, local_download_path + (get_incomplete_suffix(self.config) or "")]:
+                if os.path.exists(path):
+                    local_size = os.path.getsize(path)
+                    if local_size >= size:
+                        logger.info("%s: file already complete, ignoring passive DCC request", filename)
+                        return
+                    logger.warning("%s: partial file exists, passive DCC resume not supported", filename)
+                    return
+
             return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range)
 
         # check if transfer for same file already running from the same user/server
