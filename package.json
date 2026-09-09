@@ -7,7 +7,7 @@
     "test:watch": "jest --watch"
   },
   "devDependencies": {
-    "jest": "^29.7.0",
-    "jest-environment-jsdom": "^30.4.1"
+    "jest": "^30.5.1",
+    "jest-environment-jsdom": "^30.5.1"
   }
 }
