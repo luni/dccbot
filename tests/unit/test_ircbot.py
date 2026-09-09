@@ -1157,3 +1157,15 @@ def test_init_dcc_connection_preserves_pending_md5(bot, mock_bot_manager):
     assert pending["md5"] == "abc123"
     assert pending["id"]
     mock_loop.create_task.assert_called_once()
+
+
+def test_init_dcc_connection_creates_download_directory(bot, mock_bot_manager, tmp_path):
+    """Test active DCC init creates the download directory if missing."""
+    bot.connection = MagicMock()
+    bot.bot_manager = mock_bot_manager
+    bot.download_path = str(tmp_path / "missing")
+
+    with patch.object(bot, "loop"), patch.object(bot, "dcc", return_value=MagicMock()):
+        bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", str(tmp_path / "missing" / "test.txt"), 1024, 0, False, False)
+
+    assert (tmp_path / "missing").is_dir()

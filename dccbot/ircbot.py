@@ -797,6 +797,9 @@ class IRCBot(AioSimpleIRCClient):
         # Create a new DCC connection
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
 
+        # Ensure the download directory exists before the connection is scheduled
+        os.makedirs(os.path.dirname(download_path), exist_ok=True)
+
         connect_factory = None
         if use_ssl:
             # Create a new SSL context without hostname verification and disable certificate validation
@@ -910,8 +913,12 @@ class IRCBot(AioSimpleIRCClient):
             if incomplete_suffix:
                 local_download_path += incomplete_suffix
 
+            # Ensure the download directory exists before the peer connects
+            os.makedirs(os.path.dirname(local_download_path), exist_ok=True)
+
             if dcc.localaddress is None or dcc.localport is None:
-                raise RuntimeError("Passive DCC listen succeeded but localaddress/localport not set")
+                logger.error("Passive DCC listen succeeded but localaddress/localport not set")
+                return
 
             now = time.time()
             transfer_item = {
