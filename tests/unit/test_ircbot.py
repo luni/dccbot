@@ -1026,7 +1026,7 @@ def test_on_dcc_send_passive_enabled(bot_factory, mock_bot_manager):
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
-        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42, use_ssl=False)
 
 
 def test_on_dcc_send_passive_lower_cases_nick(bot_factory, mock_bot_manager):
@@ -1041,7 +1041,7 @@ def test_on_dcc_send_passive_lower_cases_nick(bot_factory, mock_bot_manager):
 
     with patch.object(bot, "init_passive_dcc_connection") as mock_init:
         bot.on_dcc_send(bot.connection, event, False)
-        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42, use_ssl=False)
 
 
 def test_on_dcc_send_passive_missing_token(bot_factory, mock_bot_manager):
@@ -1187,7 +1187,7 @@ async def test_init_passive_dcc_connection(bot):
             coro = mock_create_task.call_args[0][0]
             await coro
 
-    mock_listen.assert_called_once_with(addr="192.168.1.100", port=(10000, 20000))
+    mock_listen.assert_called_once_with(addr="192.168.1.100", port=(10000, 20000), ssl=None)
     bot.connection.ctcp_reply.assert_called_once()
     reply = bot.connection.ctcp_reply.call_args[0][1]
     assert reply.startswith("DCC SEND")
@@ -1282,7 +1282,107 @@ def test_on_dcc_accept_passive_resume(bot):
         "127.0.0.1",
         (15000, 16000),
         token=42,
+        use_ssl=False,
         offset=500,
         file_path="/tmp/downloads/test.txt",
     )
     assert ("sender", 42) not in bot.passive_resume_queue
+
+
+def test_on_dcc_send_passive_ssend(bot_factory, mock_bot_manager):
+    """Test on_dcc_send initiates a passive SDCC connection when SSEND is offered."""
+    mock_bot_manager.config = {"passive_dcc": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 0 0 1000 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+        mock_init.assert_called_once_with("sender", "test.txt", 1000, None, None, token=42, use_ssl=True)
+
+
+def test_on_dcc_send_active_ssend(bot, mock_bot_manager):
+    """Test on_dcc_send initiates an active SDCC connection for SSEND."""
+    bot.config["allow_private_ips"] = True
+    bot.bot_manager.transfers = {}
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SSEND "test.txt" 2130706433 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, True)
+
+    mock_init.assert_called_once_with("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1000, 0, True, False)
+
+
+@pytest.mark.asyncio
+async def test_init_passive_dcc_connection_ssend(bot):
+    """Test passive SDCC listener is set up and a SSEND reverse CTCP is sent."""
+    bot.connection = MagicMock()
+    bot.server_config["passive_dcc_timeout"] = 0
+    mock_ssl_ctx = MagicMock()
+    with patch.object(bot, "_get_dcc_ssl_context", return_value=mock_ssl_ctx):
+        mock_dcc = MagicMock()
+        mock_dcc.localaddress = "192.168.1.100"
+        mock_dcc.localport = 12345
+
+        mock_listen = AsyncMock(return_value=mock_dcc)
+        mock_dcc.listen = mock_listen
+
+        with patch.object(bot, "dcc", return_value=mock_dcc) as mock_dcc_factory:
+            with patch.object(bot.loop, "create_task") as mock_create_task:
+                bot.init_passive_dcc_connection("sender", "test.txt", 1000, "192.168.1.100", (10000, 20000), token=42, use_ssl=True)
+                mock_dcc_factory.assert_called_once_with("raw")
+                mock_create_task.assert_called_once()
+                coro = mock_create_task.call_args[0][0]
+                await coro
+
+    mock_listen.assert_called_once_with(addr="192.168.1.100", port=(10000, 20000), ssl=mock_ssl_ctx)
+    bot.connection.ctcp_reply.assert_called_once()
+    reply = bot.connection.ctcp_reply.call_args[0][1]
+    assert reply.startswith("DCC SSEND")
+    assert "42" in reply
+
+    transfer = list(bot.current_transfers.values())[0]
+    assert transfer["ssl"] is True
+
+
+def test_on_dcc_accept_passive_ssend_resume(bot):
+    """Test on_dcc_accept forwards use_ssl for a passive SSEND resume."""
+    bot.connection = MagicMock()
+    bot.server_config["passive_dcc_timeout"] = 0
+    bot.passive_resume_queue[("sender", 42)] = {
+        "filename": "test.txt",
+        "size": 1000,
+        "offset": 500,
+        "file_path": "/tmp/downloads/test.txt",
+        "listen_ip": "127.0.0.1",
+        "port_range": (15000, 16000),
+        "use_ssl": True,
+        "requested_time": time.time(),
+    }
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'ACCEPT "test.txt" 0 500 42']
+
+    with patch.object(bot, "init_passive_dcc_connection") as mock_init:
+        bot.on_dcc_accept(bot.connection, event)
+
+    mock_init.assert_called_once_with(
+        "sender",
+        "test.txt",
+        1000,
+        "127.0.0.1",
+        (15000, 16000),
+        token=42,
+        use_ssl=True,
+        offset=500,
+        file_path="/tmp/downloads/test.txt",
+    )

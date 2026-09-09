@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import socket
+import ssl
 from asyncio.transports import Transport
 
 import irc.client
@@ -135,6 +136,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         addr: str | tuple[str, int] | None = None,
         port: int | tuple[int, int] | list[int] | None = None,
         ipv6: bool = False,
+        ssl: ssl.SSLContext | None = None,
     ) -> "AioDCCConnection":
         """Wait for a connection/reconnection from a DCC peer.
 
@@ -152,6 +154,7 @@ class AioDCCConnection(irc.client.DCCConnection):
                   to try a range, or a list of ports to try in order.
                   Overrides the port in `addr` if both are provided.
             ipv6: Use IPv6 if True.
+            ssl: SSL context to wrap the listening socket with (for SDCC).
 
         """
         self.passive = True
@@ -195,7 +198,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         last_error = None
         for try_port in ports:
             try:
-                self.server = await self.reactor.loop.create_server(factory, host, try_port, family=family)
+                self.server = await self.reactor.loop.create_server(factory, host, try_port, family=family, ssl=ssl)
                 break
             except OSError as ex:
                 last_error = ex

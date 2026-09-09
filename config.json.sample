@@ -30,6 +30,8 @@
     "random_nick": false
   },
   "ssend_map": {},
+  "dcc_ssl_cert": null,
+  "dcc_ssl_key": null,
   "default_download_path": "./downloads",
   "allowed_mimetypes": [
     "image/jpeg",

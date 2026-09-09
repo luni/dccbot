@@ -4,11 +4,13 @@ import hashlib
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
 from dccbot.ircbot import IRCBot
+from dccbot.ssl_util import get_or_create_dcc_cert
 from dccbot.transfers import ensure_transfer_defaults
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,15 @@ class IRCBotManager:
         self.transfer_list_timeout = self.config.get("transfer_list_timeout", 86400)  # 1 day
         self.md5_check_queue = asyncio.Queue()
         self.transfers: dict[str, list[dict[str, Any]]] = {}
+        self._dcc_cert_cache_dir: Path | None = None
+        self._dcc_cert_paths: tuple[str, str] | None = None
+
+    def get_or_create_dcc_cert(self) -> tuple[str, str]:
+        """Return paths to the bot's DCC certificate and private key."""
+        if self._dcc_cert_paths is not None:
+            return self._dcc_cert_paths
+        self._dcc_cert_paths = get_or_create_dcc_cert(self.config, self._dcc_cert_cache_dir)
+        return self._dcc_cert_paths
 
     async def cancel_transfer(self, server: str, nick: str, filename: str) -> bool:
         """Cancel a running transfer by server, bot_name, and filename.
@@ -164,6 +175,10 @@ class IRCBotManager:
             raise ValueError("'http.host' must be a string")
         if "port" in http_config and not isinstance(http_config["port"], int):
             raise ValueError("'http.port' must be an integer")
+
+        for key in ("dcc_ssl_cert", "dcc_ssl_key"):
+            if key in config and not isinstance(config[key], str):
+                raise ValueError(f"'{key}' must be a string")
 
     async def get_bot(self, server: str) -> IRCBot:
         """Get an IRCBot instance for a server.

@@ -65,13 +65,16 @@ keys:
     the bot sends the md5sum as message on start of transfer or after successful transfer
 * `incomplete_suffix`: a string that is appended to the filename while downloading.
     If file was transferred successfully this suffix is removed.
-* `ssend_map`: a dictionary of users which support ssend (secure send). xdcc send command is
-    replaced with ssend for these users.
+* `ssend_map`: a dictionary of users which support ssend (secure send). `xdcc send` command is
+    replaced with `xdcc ssend` for these users. This tells the XDCC bot to use TLS-wrapped DCC (SDCC).
+* `rewrite_to_ssend`: a list of channels where `xdcc send` is rewritten to `xdcc ssend`.
 * `allow_private_ips`: a boolean indicating whether to allow private ips in dcc send command
 * `passive_dcc`: A boolean indicating whether to accept passive DCC transfers (where the peer sends `port=0` and a token, and the bot listens for an incoming connection). This option can also be set per-server.
 * `passive_dcc_listen_ip`: The reachable IP address to bind and advertise the passive DCC listener on. If omitted, it defaults to the hostname's IP. `0.0.0.0` is treated as unset. This option can also be set per-server.
 * `passive_dcc_port_range`: A list of two integers `[min_port, max_port]` defining the port range to try binding the listener to. If omitted, the OS assigns a port. This option can also be set per-server.
 * `passive_dcc_timeout`: The number of seconds to wait for the peer to connect to the passive listener before aborting (default: 60). This option can also be set per-server.
+* `dcc_ssl_cert`: Optional path to a PEM certificate file for SDCC (SSEND). If provided, `dcc_ssl_key` must also be set.
+* `dcc_ssl_key`: Optional path to the PEM private key for `dcc_ssl_cert`. If either is omitted, a self-signed certificate is generated and cached in `~/.local/share/dccbot/`.
 * `http`: a dictionary with the following keys:
   * `socket`: the path to the socket to use for the http server (instead of host and port)
   * `port`: the port to bind the http server to, default: 8080

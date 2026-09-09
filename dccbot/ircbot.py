@@ -20,6 +20,7 @@ from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
 from dccbot.command_pipeline import handle_part_command, handle_send_command
 from dccbot.dcc_parsing import is_valid_filename, parse_dcc_accept, parse_dcc_send
+from dccbot.ssl_util import create_dcc_ssl_context
 from dccbot.transfer_handler import TransferHandler
 from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
 
@@ -607,6 +608,7 @@ class IRCBot(AioSimpleIRCClient):
                     resume["listen_ip"],
                     resume["port_range"],
                     token=parsed.token,
+                    use_ssl=resume.get("use_ssl", False),
                     offset=resume["offset"],
                     file_path=resume["file_path"],
                 )
@@ -687,9 +689,6 @@ class IRCBot(AioSimpleIRCClient):
             if not passive_enabled:
                 logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
                 return
-            if use_ssl:
-                logger.warning("Passive DCC with SSL is not supported; rejecting.")
-                return
             if token is None:
                 logger.warning("Rejected %s: passive DCC offer is missing the required token", filename)
                 return
@@ -722,11 +721,12 @@ class IRCBot(AioSimpleIRCClient):
                     "file_path": best_path,
                     "listen_ip": listen_ip,
                     "port_range": port_range,
+                    "use_ssl": use_ssl,
                     "requested_time": time.time(),
                 }
                 return
 
-            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range, token=token)
+            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range, token=token, use_ssl=use_ssl)
 
         # check if transfer for same file already running from the same user/server
         for item in self.bot_manager.transfers.get(filename, []):
@@ -870,12 +870,10 @@ class IRCBot(AioSimpleIRCClient):
 
         connect_factory = None
         if use_ssl:
-            # Create a new SSL context without hostname verification and disable certificate validation
-            # This is necessary because the server does not have a valid certificate
-            # SSL is only used for encryption, not for authentication of the sender
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            # Use a client TLS context. DCC/SDCC does not verify peer identity,
+            # so we disable certificate verification while optionally presenting
+            # our own certificate if one is configured or generated.
+            ssl_context = self._get_dcc_ssl_context(server=False)
             connect_factory = AioFactory(ssl=ssl_context)
         else:
             connect_factory = AioFactory()
@@ -942,6 +940,16 @@ class IRCBot(AioSimpleIRCClient):
         except (TypeError, ValueError):
             return 60
 
+    def _get_dcc_ssl_context(self, server: bool) -> ssl.SSLContext:
+        """Create an SSL context for an SDCC transfer.
+
+        Args:
+            server: ``True`` for a passive/listening endpoint, ``False`` for an active connector.
+
+        """
+        cert_path, key_path = self.bot_manager.get_or_create_dcc_cert()
+        return create_dcc_ssl_context(server, cert_path, key_path)
+
     def init_passive_dcc_connection(
         self,
         nick: str,
@@ -950,6 +958,7 @@ class IRCBot(AioSimpleIRCClient):
         listen_ip: str | None = None,
         port_range: tuple[int, int] | None = None,
         token: int | None = None,
+        use_ssl: bool = False,
         offset: int = 0,
         file_path: str | None = None,
     ) -> None:
@@ -966,6 +975,7 @@ class IRCBot(AioSimpleIRCClient):
             listen_ip (str | None): IP address to bind to. If None, uses the default.
             port_range (tuple[int, int] | None): Port range to try. If None, uses OS-assigned port.
             token (int | None): Passive negotiation token to echo in the reverse DCC SEND.
+            use_ssl (bool): Whether to wrap the listener and reverse reply in TLS (SDCC/SSEND).
             offset (int): Resume offset for the file.
             file_path (str | None): Optional explicit download path (used for resumes).
 
@@ -977,15 +987,16 @@ class IRCBot(AioSimpleIRCClient):
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
 
         async def _setup() -> None:
+            ssl_context = self._get_dcc_ssl_context(server=True) if use_ssl else None
             try:
                 if listen_ip and port_range:
-                    await dcc.listen(addr=listen_ip, port=port_range)
+                    await dcc.listen(addr=listen_ip, port=port_range, ssl=ssl_context)
                 elif listen_ip:
-                    await dcc.listen(addr=listen_ip)
+                    await dcc.listen(addr=listen_ip, ssl=ssl_context)
                 elif port_range:
-                    await dcc.listen(port=port_range)
+                    await dcc.listen(port=port_range, ssl=ssl_context)
                 else:
-                    await dcc.listen()
+                    await dcc.listen(ssl=ssl_context)
             except Exception as e:
                 logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
                 return
@@ -995,7 +1006,8 @@ class IRCBot(AioSimpleIRCClient):
                 return
 
             ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
-            reverse_message = " ".join(["DCC", "SEND", '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)])
+            verb = "SSEND" if use_ssl else "SEND"
+            reverse_message = " ".join(["DCC", verb, '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)])
             if token is not None:
                 reverse_message += " " + str(token)
             self.connection.ctcp_reply(nick, reverse_message)
@@ -1020,7 +1032,7 @@ class IRCBot(AioSimpleIRCClient):
                     filename=filename,
                     size=size,
                     offset=offset,
-                    use_ssl=False,
+                    use_ssl=use_ssl,
                     completed=False,
                     now=now,
                 ),

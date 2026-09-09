@@ -216,6 +216,31 @@ async def test_dcc_connection_listen(dcc_connection, mock_reactor):
 
 
 @pytest.mark.asyncio
+async def test_dcc_connection_listen_with_ssl(dcc_connection, mock_reactor):
+    """Test listen() passes an SSL context to create_server."""
+    import ssl as ssl_module
+
+    captured = {}
+
+    async def mock_create_server(factory, *args, **kwargs):
+        captured["ssl"] = kwargs.get("ssl")
+        mock_server = MagicMock()
+        mock_socket = MagicMock()
+        mock_socket.getsockname.return_value = ("127.0.0.1", 54321)
+        mock_server.sockets = [mock_socket]
+        return mock_server
+
+    mock_reactor.loop.create_server = mock_create_server
+    ssl_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+
+    result = await dcc_connection.listen(ssl=ssl_ctx)
+
+    assert result == dcc_connection
+    assert dcc_connection.passive is True
+    assert captured["ssl"] is ssl_ctx
+
+
+@pytest.mark.asyncio
 async def test_dcc_connection_listen_port_range(dcc_connection, mock_reactor):
     """Test listen() picks a port inside the requested range, retrying on failure."""
     call_log: list[tuple] = []
