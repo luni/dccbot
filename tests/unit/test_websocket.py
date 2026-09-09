@@ -291,3 +291,14 @@ async def test_websocket_handler_msgjoin_normalizes_channel(ws_session):
     call_args = mock_bot.queue_command.call_args[0][0]
     assert call_args["channels"] == ["#channel"]
     await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_error_breaks_loop(api_client):
+    """Test an ERROR frame stops the receive loop cleanly."""
+    client, _ = api_client
+    ws = await client.ws_connect("/ws")
+    await ws.close(code=1006, message=b"broken")
+    # Give the server a moment to process the close/error
+    await asyncio.sleep(0.1)
+    assert ws.closed

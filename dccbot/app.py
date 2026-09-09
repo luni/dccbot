@@ -567,6 +567,7 @@ class IRCBotAPI:
                     logging.debug("Received pong from client")
                 elif msg.type == web.WSMsgType.ERROR:
                     logging.error("WebSocket connection closed with exception: %s", ws.exception())
+                    break
         finally:
             # Remove the WebSocket connection when it's closed
             self.websockets.discard(ws)
