@@ -357,6 +357,20 @@ def test_on_privmsg_sending_pack_creates_normalized_pending_transfer(bot, mock_b
     assert transfer["md5"] == "82ce0f4fe6e5c862d54dae475b8a1b82"
 
 
+def test_on_privmsg_sending_pack_multi_digit(bot, mock_bot_manager):
+    """Pack announcement should match multi-digit pack numbers."""
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ['** Sending you pack #42 ("TEST.mkv") [1.0GB, MD5:82ce0f4fe6e5c862d54dae475b8a1b82] - (resume+ssl supported)']
+
+    bot.on_privmsg(bot.connection, event)
+
+    assert "TEST.mkv" in mock_bot_manager.transfers
+
+
 def test_on_privmsg_stores_nick_lowercase(bot, mock_bot_manager):
     """Pack announcement should store the sender nick in lowercase."""
     bot.connection = MagicMock()
