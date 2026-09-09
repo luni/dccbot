@@ -696,6 +696,8 @@ class IRCBot(AioSimpleIRCClient):
 
             local_download_path = os.path.join(self.download_path, filename)
             incomplete_suffix = get_incomplete_suffix(self.config) or ""
+            best_path: str | None = None
+            best_size = -1
             for path in [local_download_path, local_download_path + incomplete_suffix]:
                 if os.path.exists(path):
                     local_size = os.path.getsize(path)
@@ -705,20 +707,24 @@ class IRCBot(AioSimpleIRCClient):
                     if local_size == size:
                         logger.info("%s: file already complete, ignoring passive DCC request", filename)
                         return
-                    if local_size > 0:
-                        # Partial file: negotiate passive RESUME using the same token.
-                        logger.info("%s: partial file (%d bytes), sending passive DCC RESUME", filename, local_size)
-                        self._send_passive_resume(nick, filename, local_size, token)
-                        self.passive_resume_queue[(nick, token)] = {
-                            "filename": filename,
-                            "size": size,
-                            "offset": local_size,
-                            "file_path": path,
-                            "listen_ip": listen_ip,
-                            "port_range": port_range,
-                            "requested_time": time.time(),
-                        }
-                        return
+                    if local_size > best_size:
+                        best_size = local_size
+                        best_path = path
+
+            if best_path and best_size > 0:
+                # Partial file: negotiate passive RESUME using the same token.
+                logger.info("%s: partial file (%d bytes), sending passive DCC RESUME", filename, best_size)
+                self._send_passive_resume(nick, filename, best_size, token)
+                self.passive_resume_queue[(nick, token)] = {
+                    "filename": filename,
+                    "size": size,
+                    "offset": best_size,
+                    "file_path": best_path,
+                    "listen_ip": listen_ip,
+                    "port_range": port_range,
+                    "requested_time": time.time(),
+                }
+                return
 
             return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range, token=token)
 
