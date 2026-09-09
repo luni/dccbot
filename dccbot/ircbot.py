@@ -388,8 +388,9 @@ class IRCBot(AioSimpleIRCClient):
         """
         await self._handle_authentication()
 
-        for channel in self.server_config.get("channels", []):
-            asyncio.create_task(self.join_channel(channel))
+        channels = self.server_config.get("channels", [])
+        if channels:
+            await asyncio.gather(*(self.join_channel(channel) for channel in channels), return_exceptions=True)
 
         while True:
             data: dict[str, Any] = await self.command_queue.get()
@@ -398,12 +399,15 @@ class IRCBot(AioSimpleIRCClient):
             if not data:
                 continue
 
-            if data["command"] == "send":
-                await self._handle_send_command(data)
-            elif data["command"] == "join":
-                await self._handle_join_command(data)
-            elif data["command"] == "part":
-                await self._handle_part_command(data)
+            try:
+                if data["command"] == "send":
+                    await self._handle_send_command(data)
+                elif data["command"] == "join":
+                    await self._handle_join_command(data)
+                elif data["command"] == "part":
+                    await self._handle_part_command(data)
+            except Exception:
+                logger.exception("Unhandled error processing command: %s", data)
 
     def on_welcome(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving the welcome message from the server.
