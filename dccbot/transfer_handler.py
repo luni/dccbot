@@ -32,7 +32,8 @@ class TransferHandler:
         if nick in self.bot.bot_channel_map:
             now = time.time()
             for channel in self.bot.bot_channel_map[nick]:
-                self.bot.joined_channels[channel] = now
+                if channel in self.bot.joined_channels:
+                    self.bot.joined_channels[channel] = now
 
     def _update_progress(self, transfer: dict) -> None:
         """Recalculate and log transfer progress/rate if thresholds are met."""

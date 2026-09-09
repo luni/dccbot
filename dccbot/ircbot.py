@@ -363,8 +363,10 @@ class IRCBot(AioSimpleIRCClient):
             self.bot_channel_map[user] |= set(channels)
 
         if user in self.bot_channel_map:
+            now = time.time()
             for channel in self.bot_channel_map[user]:
-                self.joined_channels[channel] = time.time()
+                if channel in self.joined_channels:
+                    self.joined_channels[channel] = now
 
     async def _handle_join_command(self, data: dict[str, Any]) -> None:
         """Join the channels specified in the command."""

@@ -77,6 +77,7 @@ def test_on_dccmsg_updates_channel_activity_and_progress_fields():
     transfer["last_progress_update"] = time.time() - 10
     transfer["percent"] = 0
     bot = _make_bot_with_transfer(dcc, transfer)
+    bot.joined_channels = {"#room": 1.0}
     bot.bot_channel_map = {"sender": {"#room"}}
     handler = TransferHandler(bot)
     event = MagicMock()
@@ -85,7 +86,7 @@ def test_on_dccmsg_updates_channel_activity_and_progress_fields():
     with patch("builtins.open", mock_open()):
         handler.on_dccmsg(dcc, event)
 
-    assert "#room" in bot.joined_channels
+    assert bot.joined_channels["#room"] > 1.0
     assert transfer["percent"] >= 20
     assert transfer["last_progress_bytes_received"] >= 20
 
@@ -261,13 +262,30 @@ def test_on_dcc_disconnect_updates_channel_activity(tmp_path):
     transfer["bytes_received"] = 4
     transfer["file_path"] = str(file_path)
     bot = _make_bot_with_transfer(dcc, transfer)
+    bot.joined_channels = {"#room": 1.0}
     bot.bot_channel_map = {"sender": {"#room"}}
     handler = TransferHandler(bot)
     event = MagicMock()
     event.arguments = []
 
+    before = bot.joined_channels["#room"]
     handler.on_dcc_disconnect(dcc, event)
-    assert "#room" in bot.joined_channels
+    assert bot.joined_channels["#room"] > before
+
+
+def test_touch_channel_activity_does_not_create_phantom_channels():
+    """Activity updates should not add channels the bot has actually left."""
+    dcc = MagicMock()
+    bot = MagicMock()
+    bot.joined_channels = {"#other": 1.0}
+    bot.bot_channel_map = {"sender": {"#room", "#other"}}
+    transfer = {"nick": "Sender"}
+    handler = TransferHandler(bot)
+
+    before = bot.joined_channels["#other"]
+    handler._touch_channel_activity(transfer)
+    assert bot.joined_channels["#other"] > before
+    assert "#room" not in bot.joined_channels
 
 
 def test_on_dcc_disconnect_rename_success(tmp_path):

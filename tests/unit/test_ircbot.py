@@ -697,19 +697,30 @@ async def test_handle_part_command(bot):
 
 
 def test_update_channel_mapping(bot):
-    """Test _update_channel_mapping."""
+    """Test _update_channel_mapping only touches channels the bot has joined."""
+    bot.joined_channels = {"#test1": 1.0, "#test2": 1.0}
     bot._update_channel_mapping("testuser", ["#test1", "#test2"])
     assert "testuser" in bot.bot_channel_map
     assert bot.bot_channel_map["testuser"] == {"#test1", "#test2"}
-    assert "#test1" in bot.joined_channels
-    assert "#test2" in bot.joined_channels
+    assert bot.joined_channels["#test1"] > 1.0
+    assert bot.joined_channels["#test2"] > 1.0
+
+
+def test_update_channel_mapping_does_not_create_phantom_channels(bot):
+    """Test _update_channel_mapping does not add unjoined channels."""
+    bot.joined_channels = {"#test1": 1.0}
+    bot._update_channel_mapping("testuser", ["#test1", "#test2"])
+    assert bot.bot_channel_map["testuser"] == {"#test1", "#test2"}
+    assert "#test2" not in bot.joined_channels
 
 
 def test_update_channel_mapping_existing_user(bot):
     """Test _update_channel_mapping with existing user."""
+    bot.joined_channels = {"#test1": 1.0, "#test2": 1.0}
     bot.bot_channel_map["testuser"] = {"#test1"}
     bot._update_channel_mapping("testuser", ["#test2"])
     assert bot.bot_channel_map["testuser"] == {"#test1", "#test2"}
+    assert bot.joined_channels["#test2"] > 1.0
 
 
 def test_on_ctcp_non_dcc(bot):
