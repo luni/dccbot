@@ -1021,6 +1021,32 @@ def test_on_dcc_send_passive_enabled_invalid_filename(bot_factory, mock_bot_mana
         mock_init.assert_not_called()
 
 
+def test_on_dcc_send_does_not_reject_transfer_from_other_server(bot, mock_bot_manager):
+    """Test on_dcc_send allows same nick/file on a different server."""
+    bot.config["allow_private_ips"] = True
+    bot.bot_manager.transfers = {
+        "test.txt": [
+            {
+                "size": 1000,
+                "connected": True,
+                "nick": "sender",
+                "server": "other.server",
+            }
+        ]
+    }
+    bot.connection = MagicMock()
+    bot.mime_checker = MagicMock()
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "test.txt" 2130706433 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as mock_init:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    mock_init.assert_called_once()
+
+
 def test_on_dcc_send_passive_enabled_invalid_size(bot_factory, mock_bot_manager):
     """Test on_dcc_send rejects passive DCC with invalid size (0 and oversized)."""
     mock_bot_manager.config = {"passive_dcc": True}
