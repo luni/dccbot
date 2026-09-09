@@ -73,16 +73,13 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
     if peer_port < 0 or peer_port > 65535 or size < 1:
         return None
 
-    if ":" in raw_address:
-        try:
+    try:
+        if "." in raw_address or ":" in raw_address:
             ipaddress.ip_address(raw_address)
             peer_address = raw_address
-        except ValueError:
-            return None
-    else:
-        try:
+        else:
             peer_address = irc.client.ip_numstr_to_quad(raw_address)
-        except ValueError:
-            return None
+    except ValueError:
+        return None
 
     return DccSendPayload(filename=filename, peer_address=peer_address, peer_port=peer_port, size=size)

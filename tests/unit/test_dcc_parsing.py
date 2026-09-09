@@ -33,6 +33,13 @@ def test_parse_dcc_send_valid_ipv6():
     assert parsed.peer_address == "2001:db8::1"
 
 
+def test_parse_dcc_send_valid_dotted_ipv4():
+    """Test parsing DCC SEND payload with dotted IPv4 address."""
+    parsed = parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 1024')
+    assert parsed is not None
+    assert parsed.peer_address == "127.0.0.1"
+
+
 def test_parse_dcc_send_rejects_invalid():
     """Test parser rejects malformed DCC SEND payload."""
     assert parse_dcc_send('SEND "file.mkv" x.x.x.x 5000 1024') is None

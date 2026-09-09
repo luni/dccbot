@@ -635,6 +635,11 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
             return
 
+        # Reject private IP addresses unless explicitly allowed
+        if peer_port > 0 and not self.config.get("allow_private_ips", False) and ipaddress.ip_address(peer_address).is_private:
+            logger.warning("Rejected %s: Private IP address (%s) not allowed", filename, peer_address)
+            return
+
         if peer_port == 0:
             passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
             if not passive_enabled:
