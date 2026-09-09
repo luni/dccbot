@@ -356,6 +356,24 @@ async def test_cancel_transfer_matches_mixed_case_nick(manager):
 
 
 @pytest.mark.asyncio
+async def test_cancel_transfer_started_status(manager):
+    """Test cancel_transfer works for transfers that have not received data yet."""
+    mock_bot = MagicMock()
+    mock_dcc = MagicMock()
+    transfer = {
+        "filename": "test.txt",
+        "status": "started",
+        "nick": "sender",
+    }
+    mock_bot.current_transfers = {mock_dcc: transfer}
+    manager.bots = {"irc.example.com": mock_bot}
+
+    result = await manager.cancel_transfer("irc.example.com", "sender", "test.txt")
+    assert result is True
+    assert transfer["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_cancel_transfer_not_found(manager):
     """Test transfer cancellation when transfer not found."""
     mock_bot = MagicMock()

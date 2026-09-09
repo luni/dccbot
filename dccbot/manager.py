@@ -66,7 +66,7 @@ class IRCBotManager:
 
         # Find the transfer in bot.current_transfers
         for dcc, transfer in bot.current_transfers.items():
-            if transfer.get("filename") == filename and transfer.get("status") == "in_progress" and transfer.get("nick", "").lower() == nick:
+            if transfer.get("filename") == filename and transfer.get("status") in ("started", "in_progress") and transfer.get("nick", "").lower() == nick:
                 # Disconnect the DCC connection
                 try:
                     dcc.disconnect("Cancelled by user")
