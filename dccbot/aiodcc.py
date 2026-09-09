@@ -155,6 +155,7 @@ class AioDCCConnection(irc.client.DCCConnection):
 
         """
         self.passive = True
+        self.connected = False
         self.handlers = {}
         self.buffer = self.buffer_class()
 

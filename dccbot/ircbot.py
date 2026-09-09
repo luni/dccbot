@@ -688,7 +688,8 @@ class IRCBot(AioSimpleIRCClient):
                 logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
                 return
             if use_ssl:
-                logger.warning("Passive DCC with SSL is not supported; proceeding without SSL.")
+                logger.warning("Passive DCC with SSL is not supported; rejecting.")
+                return
             if token is None:
                 logger.warning("Rejected %s: passive DCC offer is missing the required token", filename)
                 return
@@ -1045,6 +1046,9 @@ class IRCBot(AioSimpleIRCClient):
             return
         transfer["status"] = "failed"
         transfer["error"] = f"Passive DCC timeout: no peer connected after {timeout}s"
+        # Remove from current_transfers first so the disconnect event handler
+        # does not try to finalize the transfer and overwrite our timeout state.
+        self.current_transfers.pop(dcc, None)
         try:
             dcc.disconnect()
         except Exception as e:
