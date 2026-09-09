@@ -53,9 +53,9 @@ WS_COMMAND_HELP = {
 class CancelTransferRequestSchema(Schema):
     """Schema for the /cancel endpoint."""
 
-    server = fields.Str(required=True, metadata={"description": "IRC server address"})
-    nick = fields.Str(required=True, metadata={"description": "Sender nickname (the user sending the file)"})
-    filename = fields.Str(required=True, metadata={"description": "Filename of the transfer to cancel"})
+    server = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "IRC server address"})
+    nick = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Sender nickname (the user sending the file)"})
+    filename = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Filename of the transfer to cancel"})
 
 
 class JoinRequestSchema(Schema):
@@ -63,18 +63,20 @@ class JoinRequestSchema(Schema):
 
     server = fields.Str(
         required=True,
+        validate=validate.Length(min=1),
         metadata={
             "description": "IRC server address",
         },
     )
     channel = fields.Str(
         required=False,
+        validate=validate.Length(min=1),
         metadata={
             "description": "Channel to join",
         },
     )
     channels = fields.List(
-        fields.Str(),
+        fields.Str(validate=validate.Length(min=1)),
         required=False,
         metadata={
             "description": "List of channels to join",
@@ -87,18 +89,20 @@ class PartRequestSchema(Schema):
 
     server = fields.Str(
         required=True,
+        validate=validate.Length(min=1),
         metadata={
             "description": "IRC server address",
         },
     )
     channel = fields.Str(
         required=False,
+        validate=validate.Length(min=1),
         metadata={
             "description": "Channel to part",
         },
     )
     channels = fields.List(
-        fields.Str(),
+        fields.Str(validate=validate.Length(min=1)),
         required=False,
         metadata={
             "description": "List of channels to join",
@@ -106,6 +110,7 @@ class PartRequestSchema(Schema):
     )
     reason = fields.Str(
         required=False,
+        validate=validate.Length(min=1),
         metadata={
             "description": "Reason for parting the channel",
         },
@@ -117,30 +122,34 @@ class MsgRequestSchema(Schema):
 
     server = fields.Str(
         required=True,
+        validate=validate.Length(min=1),
         metadata={
             "description": "IRC server address",
         },
     )
     user = fields.Str(
         required=True,
+        validate=validate.Length(min=1),
         metadata={
             "description": "User to send the message to",
         },
     )
     message = fields.Str(
         required=True,
+        validate=validate.Length(min=1),
         metadata={
             "description": "Message to send",
         },
     )
     channel = fields.Str(
         required=False,
+        validate=validate.Length(min=1),
         metadata={
             "description": "Channel to send the message to",
         },
     )
     channels = fields.List(
-        fields.Str(),
+        fields.Str(validate=validate.Length(min=1)),
         required=False,
         metadata={
             "description": "List of channels to send the message to",
