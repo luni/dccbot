@@ -14,6 +14,8 @@ def test_normalize_status_derived_branches():
     """Derived status should map from error/completed/progress/default."""
     assert normalize_status({"error": "boom"}) == "error"
     assert normalize_status({"completed": 123}) == "completed"
+    assert normalize_status({"completed": True}) == "started"
+    assert normalize_status({"completed": True, "connected": True}) == "in_progress"
     assert normalize_status({"connected": True}) == "in_progress"
     assert normalize_status({"bytes_received": 1}) == "in_progress"
     assert normalize_status({}) == "started"

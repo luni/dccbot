@@ -23,7 +23,8 @@ def normalize_status(transfer: dict[str, Any]) -> str:
 
     if transfer.get("error"):
         return "error"
-    if transfer.get("completed"):
+    completed = transfer.get("completed")
+    if isinstance(completed, (int, float)) and not isinstance(completed, bool) and completed > 0:
         return "completed"
     if transfer.get("connected") or transfer.get("bytes_received", 0) > 0:
         return "in_progress"
