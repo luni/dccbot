@@ -374,6 +374,34 @@ async def test_cancel_transfer_started_status(manager):
 
 
 @pytest.mark.asyncio
+async def test_cancel_transfer_started_status_in_manager_transfers(manager):
+    """Test cancel updates a started record in manager.transfers."""
+    mock_bot = MagicMock()
+    mock_dcc = MagicMock()
+    transfer = {
+        "filename": "test.txt",
+        "status": "started",
+        "nick": "sender",
+    }
+    mock_bot.current_transfers = {mock_dcc: transfer}
+    manager.bots = {"irc.example.com": mock_bot}
+    manager.transfers = {
+        "test.txt": [
+            {
+                "server": "irc.example.com",
+                "status": "started",
+                "nick": "sender",
+            }
+        ]
+    }
+
+    result = await manager.cancel_transfer("irc.example.com", "sender", "test.txt")
+    assert result is True
+    assert manager.transfers["test.txt"][0]["status"] == "cancelled"
+    assert manager.transfers["test.txt"][0]["error"] == "Cancelled by user"
+
+
+@pytest.mark.asyncio
 async def test_cancel_transfer_not_found(manager):
     """Test transfer cancellation when transfer not found."""
     mock_bot = MagicMock()

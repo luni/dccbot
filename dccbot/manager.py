@@ -85,7 +85,7 @@ class IRCBotManager:
 
                 # Update in manager.transfers if present
                 for t in self.transfers.get(filename, []):
-                    if t.get("server", "").lower() == server and t.get("status") == "in_progress" and t.get("nick", "").lower() == nick:
+                    if t.get("server", "").lower() == server and t.get("nick", "").lower() == nick and t.get("status") in ("started", "in_progress"):
                         t["status"] = "cancelled"
                         t["error"] = "Cancelled by user"
                         t["connected"] = False
