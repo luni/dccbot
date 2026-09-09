@@ -1031,7 +1031,7 @@ class IRCBot(AioSimpleIRCClient):
                         break
 
         #  ** Sending you pack #1 ("TEST.mkv") [1.0GB, MD5:82ce0f4fe6e5c862d54dae475b8a1b82] - (resume+ssl supported)
-        f = re.search(r"""^\*\* Sending you pack \#(\d+) \("([^"]+)"\).+, MD5:([a-f0-9]{32})""", message, re.I)
+        f = re.search(r"""^\*\* Sending you pack \#(\d+) \("([^"]+)"\).+, MD5:([a-f0-9A-F]{32})""", message, re.I)
         if f:
             filename = f.group(2)
             now = time.time()
@@ -1040,7 +1040,7 @@ class IRCBot(AioSimpleIRCClient):
                 self.bot_manager.transfers[filename] = []
 
             self.bot_manager.transfers[filename].append(
-                create_pending_transfer(filename=filename, nick=normalized_sender, server=self.server, md5=f.group(3), now=now)
+                create_pending_transfer(filename=filename, nick=normalized_sender, server=self.server, md5=f.group(3).lower(), now=now)
             )
 
         f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
