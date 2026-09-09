@@ -820,7 +820,17 @@ class IRCBot(AioSimpleIRCClient):
         # check if we already have an entry by the CTCP message from XDCC bot
         for item in self.bot_manager.transfers.get(filename, []):
             if item.get("peer_address") is None and item["start_time"] >= now - 30 and item["nick"] == nick and item["server"] == self.server:
+                # Preserve the md5 and identity from the pack announcement if available
+                md5 = item.get("md5")
+                transfer_id = item.get("id")
+                start_time = item.get("start_time")
                 item.update(transfer_item)
+                if md5:
+                    item["md5"] = md5
+                if transfer_id:
+                    item["id"] = transfer_id
+                if start_time:
+                    item["start_time"] = start_time
                 transfer_item = item
                 break
         else:

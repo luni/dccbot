@@ -3,11 +3,13 @@
 import asyncio
 import os
 import tempfile
+import time
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
 from dccbot.ircbot import IRCBot
+from dccbot.transfers import create_pending_transfer
 
 
 @pytest.fixture
@@ -1062,3 +1064,18 @@ def test_on_dcc_connect(bot):
     event.source = "192.168.1.1"
     # Should not raise
     bot.on_dcc_connect(MagicMock(), event)
+
+
+def test_init_dcc_connection_preserves_pending_md5(bot, mock_bot_manager):
+    """Test active DCC init preserves MD5 from pack announcement."""
+    bot.connection = MagicMock()
+    bot.bot_manager = mock_bot_manager
+    pending = create_pending_transfer("test.txt", "sender", "irc.example.com", md5="abc123", now=time.time())
+    mock_bot_manager.transfers = {"test.txt": [pending]}
+
+    with patch.object(bot, "loop") as mock_loop, patch.object(bot, "dcc", return_value=MagicMock()):
+        bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
+
+    assert pending["md5"] == "abc123"
+    assert pending["id"]
+    mock_loop.create_task.assert_called_once()
