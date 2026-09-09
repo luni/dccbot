@@ -56,7 +56,10 @@ def parse_dcc_accept(payload: str) -> tuple[int, int] | None:
 
 def parse_dcc_send(payload: str) -> DccSendPayload | None:
     """Parse DCC SEND/SSEND payload into structured data."""
-    parts = shlex.split(payload)
+    try:
+        parts = shlex.split(payload)
+    except ValueError:
+        return None
     if len(parts) < 5:
         return None
 

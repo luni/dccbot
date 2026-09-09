@@ -38,6 +38,7 @@ def test_parse_dcc_send_rejects_invalid():
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 0') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 notanint') is None
     assert parse_dcc_send('SEND "file.mkv" 2001:db8:::1 5000 1024') is None
+    assert parse_dcc_send('SEND "unmatched 127.0.0.1 5000 1024') is None
 
 
 def test_is_valid_filename():
