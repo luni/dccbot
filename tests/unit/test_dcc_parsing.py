@@ -6,12 +6,14 @@ from dccbot.dcc_parsing import is_valid_filename, parse_dcc_accept, parse_dcc_se
 def test_parse_dcc_accept_valid():
     """Test parsing valid DCC ACCEPT payload."""
     assert parse_dcc_accept('ACCEPT "file.mkv" 5000 1234') == (5000, 1234)
+    assert parse_dcc_accept('ACCEPT "file.mkv" 80 0') == (80, 0)
 
 
 def test_parse_dcc_accept_invalid():
     """Test parsing invalid DCC ACCEPT payload."""
     assert parse_dcc_accept("ACCEPT invalid") is None
-    assert parse_dcc_accept('ACCEPT "file.mkv" 100 0') is None
+    assert parse_dcc_accept('ACCEPT "file.mkv" 0 1234') is None
+    assert parse_dcc_accept('ACCEPT "file.mkv" 70000 -1') is None
 
 
 def test_parse_dcc_send_valid_ipv4_num():

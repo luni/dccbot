@@ -49,7 +49,7 @@ def parse_dcc_accept(payload: str) -> tuple[int, int] | None:
 
     peer_port = int(match.group(1))
     resume_position = int(match.group(2))
-    if peer_port < 1024 or peer_port > 65535 or resume_position < 1:
+    if peer_port < 1 or peer_port > 65535 or resume_position < 0:
         return None
     return peer_port, resume_position
 
