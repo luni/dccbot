@@ -8,6 +8,7 @@ import re
 import ssl
 import string
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import irc.client
@@ -19,7 +20,7 @@ from irc.connection import AioFactory
 from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
 from dccbot.command_pipeline import handle_part_command, handle_send_command
-from dccbot.dcc_parsing import is_valid_filename, parse_dcc_accept, parse_dcc_send
+from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, parse_dcc_accept, parse_dcc_send
 from dccbot.ssl_util import create_dcc_ssl_context
 from dccbot.transfer_handler import TransferHandler
 from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
@@ -28,6 +29,31 @@ if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
 
 logger = logging.getLogger(__name__)
+
+MD5_COMPLETE_RE = re.compile(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9A-F]{32})", re.I)
+PACK_ANNOUNCE_RE = re.compile(r"^\*\* Sending you pack \#(\d+) \(\"([^\"]+)\"\).+, MD5:([a-f0-9A-F]{32})", re.I)
+SEND_DENIED_RE = re.compile(r"^XDCC SEND denied, (.+)", re.I)
+
+
+@dataclass
+class LocalFileState:
+    """State of a local file for a pending DCC transfer."""
+
+    too_large: bool = False
+    is_complete: bool = False
+    resume_path: str | None = None
+    resume_offset: int = 0
+    new_path: str = ""
+
+
+def _quote_filename(filename: str) -> str:
+    """Quote a filename for a DCC CTCP message."""
+    return '"' + filename.replace('"', "") + '"'
+
+
+def _format_dcc_message(verb: str, filename: str, *parts: object) -> str:
+    """Build a DCC CTCP message with a quoted filename."""
+    return " ".join(["DCC", verb, _quote_filename(filename), *(str(p) for p in parts)])
 
 
 class IRCBot(AioSimpleIRCClient):
@@ -299,24 +325,28 @@ class IRCBot(AioSimpleIRCClient):
             except asyncio.TimeoutError:
                 logger.error("Timed out waiting for NickServ authentication")
 
+    def _expand_channels(self, channels: list[str]) -> dict[str, str]:
+        """Expand a channel list with any configured also_join channels."""
+        expanded: dict[str, str] = {}
+        for channel in channels:
+            expanded[channel.lower()] = channel
+            if channel in self.server_config.get("also_join", {}):
+                for also_join_channel in self.server_config["also_join"][channel]:
+                    expanded[also_join_channel.lower()] = also_join_channel
+        return expanded
+
     async def _join_channels(self, channels: list[str]) -> None:
-        """Join specified channels and update waiting channels list.
+        """Join specified channels and wait for confirmation.
 
         Args:
             channels (list of str): The channels to join.
 
         """
-        waiting_channels: dict[str, str] = {}
-        for channel in channels:
+        waiting_channels = self._expand_channels(channels)
+        for channel in waiting_channels.values():
             await self.join_channel(channel)
-            waiting_channels[channel.lower()] = channel
-            if channel in self.server_config.get("also_join", {}):
-                for also_join_channel in self.server_config["also_join"][channel]:
-                    await self.join_channel(also_join_channel)
-                    waiting_channels[also_join_channel.lower()] = also_join_channel
 
-        retry = 0
-        while retry < 10 and waiting_channels:
+        for retry in range(10):
             for normalized in list(waiting_channels):
                 if normalized in self.joined_channels:
                     waiting_channels.pop(normalized, None)
@@ -324,8 +354,9 @@ class IRCBot(AioSimpleIRCClient):
                     waiting_channels.pop(normalized, None)
                     self.pending_join_failures.pop(normalized, None)
 
+            if not waiting_channels:
+                break
             await asyncio.sleep(1)
-            retry += 1
 
         if waiting_channels:
             details: list[str] = []
@@ -336,7 +367,7 @@ class IRCBot(AioSimpleIRCClient):
                 else:
                     details.append(original)
 
-            logger.warning("Failed to join channels %s after %s seconds", ", ".join(details), retry)
+            logger.warning("Failed to join channels %s after %s seconds", ", ".join(details), retry + 1)
 
     def _resolve_channel_from_event(
         self,
@@ -364,24 +395,24 @@ class IRCBot(AioSimpleIRCClient):
 
         logger.warning("Unable to join channel %s: %s", channel or "(unknown)", reason)
 
-    def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
-        """Update bot's channel mapping for a user.
+    def _touch_channels_for_nick(self, nick: str) -> None:
+        """Bump activity timestamps for channels associated with a nick.
 
-        Args:
-            user (str): The user to update the channel mapping for.
-            channels (list of str): The channels to add to the user's channel mapping.
-
+        Only updates channels the bot has actually joined so that parted
+        channels are not re-created.
         """
-        if user not in self.bot_channel_map:
-            self.bot_channel_map[user] = set(channels)
-        else:
-            self.bot_channel_map[user] |= set(channels)
+        normalized = nick.lower()
+        if normalized not in self.bot_channel_map:
+            return
+        now = time.time()
+        for channel in self.bot_channel_map[normalized]:
+            if channel in self.joined_channels:
+                self.joined_channels[channel] = now
 
-        if user in self.bot_channel_map:
-            now = time.time()
-            for channel in self.bot_channel_map[user]:
-                if channel in self.joined_channels:
-                    self.joined_channels[channel] = now
+    def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
+        """Update bot's channel mapping for a user and bump activity for the channels."""
+        self.bot_channel_map.setdefault(user, set()).update(channels)
+        self._touch_channels_for_nick(user)
 
     async def _handle_join_command(self, data: dict[str, Any]) -> None:
         """Join the channels specified in the command."""
@@ -417,12 +448,14 @@ class IRCBot(AioSimpleIRCClient):
                 continue
 
             try:
-                if data["command"] == "send":
-                    await self._handle_send_command(data)
-                elif data["command"] == "join":
-                    await self._handle_join_command(data)
-                elif data["command"] == "part":
-                    await self._handle_part_command(data)
+                handlers: dict[str, Any] = {
+                    "send": self._handle_send_command,
+                    "join": self._handle_join_command,
+                    "part": self._handle_part_command,
+                }
+                handler = handlers.get(data["command"])
+                if handler is not None:
+                    await handler(data)
             except Exception:
                 logger.exception("Unhandled error processing command: %s", data)
 
@@ -568,6 +601,48 @@ class IRCBot(AioSimpleIRCClient):
         """Backward-compatible delegator to DCC parsing filename validation."""
         return is_valid_filename(path, filename)
 
+    def _handle_passive_accept(self, nick: str, parsed: DccAcceptPayload) -> bool:
+        """Handle a passive resume ACCEPT. Returns True when fully handled."""
+        queue_key = (nick, parsed.token)
+        resume = self.passive_resume_queue.get(queue_key)
+        if resume is None:
+            logger.warning("DCC ACCEPT for unknown passive resume: token=%s", parsed.token)
+            return True
+        if parsed.port != 0 or parsed.position != resume["offset"] or parsed.position >= resume["size"]:
+            return False
+        # The sender echoed the offset we requested.
+        del self.passive_resume_queue[queue_key]
+        self.init_passive_dcc_connection(
+            nick,
+            resume["filename"],
+            resume["size"],
+            resume["listen_ip"],
+            resume["port_range"],
+            token=parsed.token,
+            use_ssl=resume.get("use_ssl", False),
+            offset=resume["offset"],
+            file_path=resume["file_path"],
+        )
+        return True
+
+    def _pop_resume_entry(
+        self, nick: str, parsed: DccAcceptPayload, event: irc.client_aio.Event
+    ) -> tuple[str, int, str, str, int, int, bool, bool, float] | None:
+        """Find and remove the resume entry matching an ACCEPT, or warn and return None."""
+        if nick not in self.resume_queue:
+            logger.warning("DCC ACCEPT not in queue: %s", event)
+            return None
+
+        for item in self.resume_queue[nick]:
+            if parsed.port == item[1] and parsed.position == item[5]:
+                self.resume_queue[nick].remove(item)
+                if not self.resume_queue[nick]:
+                    del self.resume_queue[nick]
+                return item
+
+        logger.warning("DCC ACCEPT command for unknown file: %s", event)
+        return None
+
     def on_dcc_accept(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle DCC ACCEPT command.
 
@@ -594,47 +669,52 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC ACCEPT command: %s", event)
             return
 
-        if parsed.token is not None:
-            # Passive resume ACCEPT: DCC ACCEPT "file" 0 position token
-            queue_key = (nick, parsed.token)
-            resume = self.passive_resume_queue.get(queue_key)
-            if resume and parsed.port == 0 and parsed.position == resume["offset"] and parsed.position < resume["size"]:
-                # The sender echoed the offset we requested.
-                del self.passive_resume_queue[queue_key]
-                self.init_passive_dcc_connection(
-                    nick,
-                    resume["filename"],
-                    resume["size"],
-                    resume["listen_ip"],
-                    resume["port_range"],
-                    token=parsed.token,
-                    use_ssl=resume.get("use_ssl", False),
-                    offset=resume["offset"],
-                    file_path=resume["file_path"],
-                )
-                return
-            if resume is None:
-                logger.warning("DCC ACCEPT for unknown passive resume: token=%s", parsed.token)
-                return
-
-        if nick not in self.resume_queue:
-            logger.warning("DCC ACCEPT not in queue: %s", event)
+        if parsed.token is not None and self._handle_passive_accept(nick, parsed):
             return
 
-        for item in self.resume_queue[nick]:
-            if parsed.port != item[1] or parsed.position != item[5]:
-                continue
-
-            self.resume_queue[nick].remove(item)
-            break
-        else:
-            logger.warning("DCC ACCEPT command for unknown file: %s", event)
+        item = self._pop_resume_entry(nick, parsed, event)
+        if item is None:
             return
-
-        if not self.resume_queue[nick]:
-            del self.resume_queue[nick]
 
         self.init_dcc_connection(nick, item[0], parsed.port, item[2], item[3], item[4], parsed.position, item[6], item[7])
+
+    def _local_file_state(self, filename: str, size: int, *, first_match: bool = False) -> LocalFileState:
+        """Inspect existing local copies of `filename` against the offered `size`.
+
+        Checks both the final file and the incomplete-suffixed file. When
+        `first_match` is set, the first existing file wins (active DCC
+        behaviour); otherwise the largest valid partial file wins (passive
+        DCC behaviour). A completed file or an oversized file stop the scan.
+
+        """
+        local_download_path = os.path.join(self.download_path, filename)
+        incomplete_suffix = get_incomplete_suffix(self.config)
+        candidates = [local_download_path]
+        new_path = local_download_path
+        if incomplete_suffix:
+            candidates.append(local_download_path + incomplete_suffix)
+            new_path = local_download_path + incomplete_suffix
+
+        state = LocalFileState(new_path=new_path)
+        for path in candidates:
+            if not os.path.exists(path):
+                continue
+            local_size = os.path.getsize(path)
+            if local_size > size:
+                logger.warning("Rejected %s: Local file larger than remote file (%d > %d)", filename, local_size, size)
+                state.too_large = True
+                return state
+            if local_size == size:
+                state.is_complete = True
+                state.resume_path = path
+                state.resume_offset = local_size
+                break
+            if state.resume_path is None or local_size > state.resume_offset:
+                state.resume_path = path
+                state.resume_offset = local_size
+            if first_match:
+                break
+        return state
 
     def on_dcc_send(self, connection: AioConnection, event: irc.client_aio.Event, use_ssl: bool) -> None:
         """Handle DCC SEND command.
@@ -657,21 +737,15 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         nick = event.source.nick.lower()
-        filename, peer_address, peer_port, size, token = (
-            parsed.filename,
-            parsed.peer_address,
-            parsed.peer_port,
-            parsed.size,
-            parsed.token,
-        )
+        filename = parsed.filename
 
         # Validate size and filename before proceeding with any DCC transfer
-        if size > self.max_file_size:
-            logger.warning("Rejected %s: File size exceeds limit (%d > %d)", filename, size, self.max_file_size)
+        if parsed.size > self.max_file_size:
+            logger.warning("Rejected %s: File size exceeds limit (%d > %d)", filename, parsed.size, self.max_file_size)
             return
 
-        if size < 1:
-            logger.warning("Rejected %s: File size is too small (%d)", filename, size)
+        if parsed.size < 1:
+            logger.warning("Rejected %s: File size is too small (%d)", filename, parsed.size)
             return
 
         # validate file name
@@ -680,101 +754,93 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         # Reject private IP addresses unless explicitly allowed
-        if peer_port > 0 and not self.config.get("allow_private_ips", False) and ipaddress.ip_address(peer_address).is_private:
-            logger.warning("Rejected %s: Private IP address (%s) not allowed", filename, peer_address)
+        if parsed.peer_port > 0 and not self.config.get("allow_private_ips", False) and ipaddress.ip_address(parsed.peer_address).is_private:
+            logger.warning("Rejected %s: Private IP address (%s) not allowed", filename, parsed.peer_address)
             return
 
-        if peer_port == 0:
-            passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
-            if not passive_enabled:
-                logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
-                return
-            if token is None:
-                logger.warning("Rejected %s: passive DCC offer is missing the required token", filename)
-                return
+        if parsed.peer_port == 0:
+            return self._handle_passive_dcc_send(nick, parsed, use_ssl)
+        return self._handle_active_dcc_send(nick, parsed, use_ssl)
 
-            local_download_path = os.path.join(self.download_path, filename)
-            incomplete_suffix = get_incomplete_suffix(self.config) or ""
-            best_path: str | None = None
-            best_size = -1
-            for path in [local_download_path, local_download_path + incomplete_suffix]:
-                if os.path.exists(path):
-                    local_size = os.path.getsize(path)
-                    if local_size > size:
-                        logger.warning("Rejected %s: Local file larger than remote file (%d > %d)", filename, local_size, size)
-                        return
-                    if local_size == size:
-                        logger.info("%s: file already complete, ignoring passive DCC request", filename)
-                        return
-                    if local_size > best_size:
-                        best_size = local_size
-                        best_path = path
+    def _handle_passive_dcc_send(self, nick: str, parsed: DccSendPayload, use_ssl: bool) -> None:
+        """Handle a passive (reverse) DCC SEND offer where the peer opens no port."""
+        filename = parsed.filename
+        passive_enabled, listen_ip, port_range = self._get_passive_dcc_config()
+        if not passive_enabled:
+            logger.warning("Passive DCC transfer rejected (passive_dcc not enabled).")
+            return
+        if parsed.token is None:
+            logger.warning("Rejected %s: passive DCC offer is missing the required token", filename)
+            return
 
-            if best_path and best_size > 0:
-                # Partial file: negotiate passive RESUME using the same token.
-                logger.info("%s: partial file (%d bytes), sending passive DCC RESUME", filename, best_size)
-                self._send_passive_resume(nick, filename, best_size, token)
-                self.passive_resume_queue[(nick, token)] = {
-                    "filename": filename,
-                    "size": size,
-                    "offset": best_size,
-                    "file_path": best_path,
-                    "listen_ip": listen_ip,
-                    "port_range": port_range,
-                    "use_ssl": use_ssl,
-                    "requested_time": time.time(),
-                }
-                return
+        state = self._local_file_state(filename, parsed.size)
+        if state.too_large:
+            return
+        if state.is_complete:
+            logger.info("%s: file already complete, ignoring passive DCC request", filename)
+            return
 
-            return self.init_passive_dcc_connection(nick, filename, size, listen_ip, port_range, token=token, use_ssl=use_ssl)
+        if state.resume_path and state.resume_offset > 0:
+            # Partial file: negotiate passive RESUME using the same token.
+            logger.info("%s: partial file (%d bytes), sending passive DCC RESUME", filename, state.resume_offset)
+            self._send_passive_resume(nick, filename, state.resume_offset, parsed.token)
+            self.passive_resume_queue[(nick, parsed.token)] = {
+                "filename": filename,
+                "size": parsed.size,
+                "offset": state.resume_offset,
+                "file_path": state.resume_path,
+                "listen_ip": listen_ip,
+                "port_range": port_range,
+                "use_ssl": use_ssl,
+                "requested_time": time.time(),
+            }
+            return
+
+        return self.init_passive_dcc_connection(nick, filename, parsed.size, listen_ip, port_range, token=parsed.token, use_ssl=use_ssl)
+
+    def _handle_active_dcc_send(self, nick: str, parsed: DccSendPayload, use_ssl: bool) -> None:
+        """Handle an active DCC SEND offer where the peer listens on a port."""
+        filename = parsed.filename
+        peer_port = parsed.peer_port
 
         # check if transfer for same file already running from the same user/server
         for item in self.bot_manager.transfers.get(filename, []):
-            if item["size"] == size and item.get("connected", False) and item.get("nick", "").lower() == nick and item.get("server", "").lower() == self.server:
+            if (
+                item["size"] == parsed.size
+                and item.get("connected", False)
+                and item.get("nick", "").lower() == nick
+                and item.get("server", "").lower() == self.server
+            ):
                 logger.warning("Rejected %s: Download of file already in progress", filename)
                 return
 
-        local_download_path = os.path.join(self.download_path, filename)
-        local_files = [local_download_path]
-        incomplete_suffix = get_incomplete_suffix(self.config)
-        if incomplete_suffix:
-            local_files.append(local_download_path + incomplete_suffix)
-            local_download_path += incomplete_suffix
+        state = self._local_file_state(filename, parsed.size, first_match=True)
+        if state.too_large:
+            return
 
-        local_size = 0
-        completed = False
-        for download_path in local_files:
-            if os.path.exists(download_path):
-                local_size = os.path.getsize(download_path)
-                if local_size > size:
-                    logger.warning("Rejected %s: Local file larger then remote file (%d > %d)", filename, local_size, size)
-                    return
+        if state.resume_path is not None:
+            local_size = state.resume_offset
+            completed = state.is_complete
+            if state.is_complete:
+                logger.info("%s: File already completed, send resume command for last 4096 to complete transfer request.", filename)
+                local_size = max(0, local_size - 4096)
 
-                if local_size == size:
-                    completed = True
-                    logger.info("%s: File already completed, send resume command for last 4096 to complete transfer request.", filename)
-                    local_size = max(0, local_size - 4096)
+            logger.info("Send DCC RESUME %s starting at %d bytes", filename, local_size)
+            self.connection.ctcp_reply(nick, _format_dcc_message("RESUME", filename, peer_port, local_size))
+            self.resume_queue.setdefault(nick, []).append((
+                parsed.peer_address,
+                peer_port,
+                filename,
+                state.resume_path,
+                parsed.size,
+                local_size,
+                use_ssl,
+                completed,
+                time.time(),
+            ))
+            return
 
-                logger.info("Send DCC RESUME %s starting at %d bytes", filename, local_size)
-                self.connection.ctcp_reply(nick, " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', str(peer_port), str(local_size)]))
-
-                if nick not in self.resume_queue:
-                    self.resume_queue[nick] = []
-
-                self.resume_queue[nick].append((
-                    peer_address,
-                    peer_port,
-                    filename,
-                    download_path,
-                    size,
-                    local_size,
-                    use_ssl,
-                    completed,
-                    time.time(),
-                ))
-                return
-
-        self.init_dcc_connection(nick, peer_address, peer_port, filename, local_files[-1], size, local_size, use_ssl, completed)
+        self.init_dcc_connection(nick, parsed.peer_address, peer_port, filename, state.new_path, parsed.size, 0, use_ssl, False)
 
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle CTCP messages.
@@ -809,9 +875,7 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         # update timeout
-        if event.source.nick.lower() in self.bot_channel_map:
-            for channel in self.bot_channel_map[event.source.nick.lower()]:
-                self.joined_channels[channel] = time.time()
+        self._touch_channels_for_nick(event.source.nick)
 
         if event.arguments[1].startswith("ACCEPT "):
             return self.on_dcc_accept(connection, event)
@@ -857,10 +921,7 @@ class IRCBot(AioSimpleIRCClient):
         nick = nick.lower()
 
         dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
-        logger.info("[%s] %s %s from %s:%d, size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
-
-        # Convert the port to an integer
-        logger.info("[%s] Connecting to %s:%s", nick, peer_address, peer_port)
+        logger.info("[%s] %s %s (connecting to %s:%d), size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
 
         # Create a new DCC connection
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
@@ -880,45 +941,23 @@ class IRCBot(AioSimpleIRCClient):
 
         now = time.time()
 
-        transfer_item = {
-            **create_transfer(
-                nick=nick,
-                server=self.server,
-                peer_address=peer_address,
-                peer_port=peer_port,
-                file_path=download_path,
-                filename=filename,
-                size=size,
-                offset=offset or 0,
-                use_ssl=bool(use_ssl),
-                completed=bool(completed),
-                now=now,
-            ),
-        }
+        transfer_item = create_transfer(
+            nick=nick,
+            server=self.server,
+            peer_address=peer_address,
+            peer_port=peer_port,
+            file_path=download_path,
+            filename=filename,
+            size=size,
+            offset=offset or 0,
+            use_ssl=bool(use_ssl),
+            completed=bool(completed),
+            now=now,
+        )
 
         # Store the information about the file transfer
         # check if we already have an entry by the CTCP message from XDCC bot
-        for item in self.bot_manager.transfers.get(filename, []):
-            if item.get("peer_address") is None and item["start_time"] >= now - 30 and item["nick"] == nick and item["server"] == self.server:
-                # Preserve the md5 and identity from the pack announcement if available
-                md5 = item.get("md5")
-                transfer_id = item.get("id")
-                start_time = item.get("start_time")
-                item.update(transfer_item)
-                if md5:
-                    item["md5"] = md5
-                if transfer_id:
-                    item["id"] = transfer_id
-                if start_time:
-                    item["start_time"] = start_time
-                transfer_item = item
-                break
-        else:
-            # nothing found, add new entry
-            if not self.bot_manager.transfers.get(filename):
-                self.bot_manager.transfers[filename] = []
-
-            self.bot_manager.transfers[filename].append(transfer_item)
+        transfer_item = self._register_transfer(filename, transfer_item, now)
 
         self.current_transfers[dcc] = transfer_item
 
@@ -927,10 +966,7 @@ class IRCBot(AioSimpleIRCClient):
 
     def _send_passive_resume(self, nick: str, filename: str, offset: int, token: int) -> None:
         """Send a passive DCC RESUME request including the negotiation token."""
-        self.connection.ctcp_reply(
-            nick,
-            " ".join(["DCC", "RESUME", '"' + filename.replace('"', "") + '"', "0", str(offset), str(token)]),
-        )
+        self.connection.ctcp_reply(nick, _format_dcc_message("RESUME", filename, 0, offset, token))
 
     def _get_passive_dcc_timeout(self) -> int:
         """Return the timeout in seconds to wait for a passive DCC peer to connect."""
@@ -949,6 +985,38 @@ class IRCBot(AioSimpleIRCClient):
         """
         cert_path, key_path = self.bot_manager.get_or_create_dcc_cert()
         return create_dcc_ssl_context(server, cert_path, key_path)
+
+    def _register_transfer(self, filename: str, transfer_item: dict[str, Any], now: float) -> dict[str, Any]:
+        """Merge transfer_item with an existing pending transfer or append it.
+
+        If a pending transfer entry for the same nick/server and filename was
+        created within the last 30 seconds, it is merged with the new
+        transfer_item so that the pack announcement (md5, id, start_time) is
+        preserved.
+
+        """
+        for item in self.bot_manager.transfers.get(filename, []):
+            if (
+                item.get("peer_address") is None
+                and item["start_time"] >= now - 30
+                and item["nick"] == transfer_item["nick"]
+                and item["server"] == transfer_item["server"]
+            ):
+                md5 = item.get("md5")
+                transfer_id = item.get("id")
+                start_time = item.get("start_time")
+                item.update(transfer_item)
+                if md5:
+                    item["md5"] = md5
+                if transfer_id:
+                    item["id"] = transfer_id
+                if start_time:
+                    item["start_time"] = start_time
+                return item
+        if not self.bot_manager.transfers.get(filename):
+            self.bot_manager.transfers[filename] = []
+        self.bot_manager.transfers[filename].append(transfer_item)
+        return transfer_item
 
     def init_passive_dcc_connection(
         self,
@@ -1007,10 +1075,10 @@ class IRCBot(AioSimpleIRCClient):
 
             ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
             verb = "SSEND" if use_ssl else "SEND"
-            reverse_message = " ".join(["DCC", verb, '"' + filename.replace('"', "") + '"', str(ip_numstr), str(dcc.localport), str(size)])
+            parts = [ip_numstr, str(dcc.localport), str(size)]
             if token is not None:
-                reverse_message += " " + str(token)
-            self.connection.ctcp_reply(nick, reverse_message)
+                parts.append(str(token))
+            self.connection.ctcp_reply(nick, _format_dcc_message(verb, filename, *parts))
             logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
 
             local_download_path = file_path or os.path.join(self.download_path, filename)
@@ -1022,32 +1090,22 @@ class IRCBot(AioSimpleIRCClient):
             os.makedirs(os.path.dirname(local_download_path), exist_ok=True)
 
             now = time.time()
-            transfer_item = {
-                **create_transfer(
-                    nick=nick,
-                    server=self.server,
-                    peer_address=dcc.localaddress,
-                    peer_port=dcc.localport,
-                    file_path=local_download_path,
-                    filename=filename,
-                    size=size,
-                    offset=offset,
-                    use_ssl=use_ssl,
-                    completed=False,
-                    now=now,
-                ),
-            }
+            transfer_item = create_transfer(
+                nick=nick,
+                server=self.server,
+                peer_address=dcc.localaddress,
+                peer_port=dcc.localport,
+                file_path=local_download_path,
+                filename=filename,
+                size=size,
+                offset=offset,
+                use_ssl=use_ssl,
+                completed=False,
+                now=now,
+            )
 
             # Merge with existing pending transfer if available
-            for item in self.bot_manager.transfers.get(filename, []):
-                if item.get("peer_address") is None and item["start_time"] >= now - 30 and item["nick"] == nick and item["server"] == self.server:
-                    item.update(transfer_item)
-                    transfer_item = item
-                    break
-            else:
-                if not self.bot_manager.transfers.get(filename):
-                    self.bot_manager.transfers[filename] = []
-                self.bot_manager.transfers[filename].append(transfer_item)
+            transfer_item = self._register_transfer(filename, transfer_item, now)
 
             self.current_transfers[dcc] = transfer_item
 
@@ -1128,6 +1186,49 @@ class IRCBot(AioSimpleIRCClient):
 
         return True
 
+    def _handle_md5_completion(self, sender: str, message: str) -> None:
+        """Store the md5sum reported by the sender for a recently completed transfer."""
+        f = MD5_COMPLETE_RE.search(message)
+        if not f:
+            return
+        md5sum = f.group(1).lower()
+        now = time.time()
+        for filename, transfers in self.bot_manager.transfers.items():
+            for transfer in transfers:
+                ensure_transfer_defaults(filename, transfer)
+                if (
+                    transfer["nick"] == sender
+                    and transfer["server"] == self.server
+                    and transfer.get("completed")
+                    and transfer.get("completed", 0) >= now - 30
+                    and not transfer.get("md5")
+                ):
+                    transfer["md5"] = md5sum
+                    logger.info("[%s] MD5 checksum: %s", filename, md5sum)
+                    self.bot_manager.md5_check_queue.put_nowait(transfer)
+                    break
+
+    def _handle_pack_announcement(self, sender: str, message: str) -> None:
+        """Store a pending transfer with the MD5 from a pack announcement."""
+        f = PACK_ANNOUNCE_RE.search(message)
+        if not f:
+            return
+        filename = f.group(2)
+        now = time.time()
+
+        if filename not in self.bot_manager.transfers:
+            self.bot_manager.transfers[filename] = []
+
+        self.bot_manager.transfers[filename].append(
+            create_pending_transfer(filename=filename, nick=sender, server=self.server, md5=f.group(3).lower(), now=now)
+        )
+
+    def _handle_send_denied(self, sender: str, message: str) -> None:
+        """Log an XDCC SEND denied notice."""
+        f = SEND_DENIED_RE.search(message)
+        if f:
+            logger.error("[%s] XDCC SEND denied: %s", sender, f.group(1))
+
     def on_privmsg(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle PRIVMSG messages.
 
@@ -1149,42 +1250,9 @@ class IRCBot(AioSimpleIRCClient):
         if self._maybe_handle_nickserv_auth(sender, message):
             return
 
-        f = re.search(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9A-F]{32})", message, re.I)
-        if f:
-            md5sum = f.group(1).lower()
-            now = time.time()
-            for filename, transfers in self.bot_manager.transfers.items():
-                for transfer in transfers:
-                    ensure_transfer_defaults(filename, transfer)
-                    if (
-                        transfer["nick"] == normalized_sender
-                        and transfer["server"] == self.server
-                        and transfer.get("completed")
-                        and transfer.get("completed", 0) >= now - 30
-                        and not transfer.get("md5")
-                    ):
-                        transfer["md5"] = md5sum
-                        logger.info("[%s] MD5 checksum: %s", filename, md5sum)
-                        self.bot_manager.md5_check_queue.put_nowait(transfer)
-                        break
-
-        #  ** Sending you pack #1 ("TEST.mkv") [1.0GB, MD5:82ce0f4fe6e5c862d54dae475b8a1b82] - (resume+ssl supported)
-        f = re.search(r"""^\*\* Sending you pack \#(\d+) \("([^"]+)"\).+, MD5:([a-f0-9A-F]{32})""", message, re.I)
-        if f:
-            filename = f.group(2)
-            now = time.time()
-
-            if filename not in self.bot_manager.transfers:
-                self.bot_manager.transfers[filename] = []
-
-            self.bot_manager.transfers[filename].append(
-                create_pending_transfer(filename=filename, nick=normalized_sender, server=self.server, md5=f.group(3).lower(), now=now)
-            )
-
-        f = re.search(r"""^XDCC SEND denied, (.+)""", message, re.I)
-        if f:
-            error = f.group(1)
-            logger.error("[%s] XDCC SEND denied: %s", sender, error)
+        self._handle_md5_completion(normalized_sender, message)
+        self._handle_pack_announcement(normalized_sender, message)
+        self._handle_send_denied(sender, message)
 
     async def cleanup(self, channel_idle_timeout: int, resume_timeout: int) -> None:
         # Find idle channels
