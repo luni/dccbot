@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -81,32 +82,39 @@ class IRCBotManager:
             return False
 
         # Find the transfer in bot.current_transfers
-        for dcc, transfer in bot.current_transfers.items():
-            if transfer.get("filename") == filename and transfer.get("status") in ("started", "in_progress") and transfer.get("nick", "").lower() == nick:
-                # Disconnect the DCC connection
-                try:
-                    dcc.disconnect("Cancelled by user")
-                except Exception:
-                    logger.error("Failed to disconnect DCC connection", exc_info=True)
+        entry = next(
+            (
+                (conn, transfer)
+                for conn, transfer in bot.current_transfers.items()
+                if transfer.get("filename") == filename and transfer.get("status") in ("started", "in_progress") and transfer.get("nick", "").lower() == nick
+            ),
+            None,
+        )
+        if entry is None:
+            return False
+        dcc, transfer = entry
 
-                transfer["status"] = "cancelled"
-                transfer["error"] = "Cancelled by user"
-                transfer["connected"] = False
+        # Disconnect the DCC connection
+        try:
+            dcc.disconnect("Cancelled by user")
+        except Exception:
+            logger.error("Failed to disconnect DCC connection", exc_info=True)
 
-                # Remove from current_transfers
-                try:
-                    del bot.current_transfers[dcc]
-                except KeyError:
-                    pass
+        self._mark_cancelled(transfer)
+        bot.current_transfers.pop(dcc, None)
 
-                # Update in manager.transfers if present
-                for t in self.transfers.get(filename, []):
-                    if t.get("server", "").lower() == server and t.get("nick", "").lower() == nick and t.get("status") in ("started", "in_progress"):
-                        t["status"] = "cancelled"
-                        t["error"] = "Cancelled by user"
-                        t["connected"] = False
-                return True
-        return False
+        # Update in manager.transfers if present
+        for t in self.transfers.get(filename, []):
+            if t.get("server", "").lower() == server and t.get("nick", "").lower() == nick and t.get("status") in ("started", "in_progress"):
+                self._mark_cancelled(t)
+        return True
+
+    @staticmethod
+    def _mark_cancelled(transfer: dict[str, Any]) -> None:
+        """Mark a transfer record as cancelled."""
+        transfer["status"] = "cancelled"
+        transfer["error"] = "Cancelled by user"
+        transfer["connected"] = False
 
     def load_config(self) -> dict:
         """Load the configuration from a JSON file.
@@ -143,6 +151,14 @@ class IRCBotManager:
     @staticmethod
     def _normalize_config_contract(config: dict[str, Any]) -> None:
         """Normalize legacy config keys and validate key types."""
+        IRCBotManager._normalize_servers(config)
+        IRCBotManager._normalize_download_path(config)
+        IRCBotManager._normalize_http_config(config)
+        IRCBotManager._normalize_cert_keys(config)
+
+    @staticmethod
+    def _normalize_servers(config: dict[str, Any]) -> None:
+        """Lowercase server-related keys and normalize each server config."""
         if "servers" in config and isinstance(config["servers"], dict):
             config["servers"] = {k.lower(): v for k, v in config["servers"].items()}
 
@@ -155,6 +171,9 @@ class IRCBotManager:
         if isinstance(config.get("default_server_config"), dict):
             IRCBotManager._normalize_server_config(config["default_server_config"])
 
+    @staticmethod
+    def _normalize_download_path(config: dict[str, Any]) -> None:
+        """Handle the deprecated download_path key and apply the default."""
         if "default_download_path" not in config and "download_path" in config:
             config["default_download_path"] = config["download_path"]
             logger.warning("Config key 'download_path' is deprecated; use 'default_download_path'.")
@@ -162,25 +181,28 @@ class IRCBotManager:
         if "default_download_path" not in config:
             config["default_download_path"] = "./downloads"
 
+    @staticmethod
+    def _normalize_http_config(config: dict[str, Any]) -> None:
+        """Normalize legacy http keys and validate http key types."""
         http_config = config.get("http")
         if http_config is None:
             return
         if not isinstance(http_config, dict):
             raise ValueError("'http' must be a dictionary if provided")
 
-        if "host" not in http_config and "bind_addr" in http_config:
-            http_config["host"] = http_config["bind_addr"]
-            logger.warning("Config key 'http.bind_addr' is deprecated; use 'http.host'.")
-
-        if "port" not in http_config and "bind_port" in http_config:
-            http_config["port"] = http_config["bind_port"]
-            logger.warning("Config key 'http.bind_port' is deprecated; use 'http.port'.")
+        for legacy, current in (("bind_addr", "host"), ("bind_port", "port")):
+            if current not in http_config and legacy in http_config:
+                http_config[current] = http_config[legacy]
+                logger.warning("Config key 'http.%s' is deprecated; use 'http.%s'.", legacy, current)
 
         if "host" in http_config and not isinstance(http_config["host"], str):
             raise ValueError("'http.host' must be a string")
         if "port" in http_config and not isinstance(http_config["port"], int):
             raise ValueError("'http.port' must be an integer")
 
+    @staticmethod
+    def _normalize_cert_keys(config: dict[str, Any]) -> None:
+        """Validate the DCC certificate config keys."""
         for key in ("dcc_ssl_cert", "dcc_ssl_key"):
             if key in config and not isinstance(config[key], str):
                 raise ValueError(f"'{key}' must be a string")
@@ -236,10 +258,8 @@ class IRCBotManager:
 
         expired_transfer_names = []
         for filename, transfers in self.transfers.items():
-            for transfer in list(transfers):
-                if transfer.get("start_time", 0) + self.transfer_list_timeout < now:
-                    transfers.remove(transfer)
-
+            # Keep transfers that are still within the timeout window.
+            transfers[:] = [transfer for transfer in transfers if transfer.get("start_time", 0) + self.transfer_list_timeout >= now]
             if not transfers:
                 expired_transfer_names.append(filename)
 
@@ -292,9 +312,9 @@ class IRCBotManager:
                 await asyncio.sleep(1)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 # Log the exception and wait 10 seconds before trying again
-                logger.exception(e)
+                logger.exception("Error in cleanup loop, retrying in 10s")
                 await asyncio.sleep(10)
 
     @staticmethod
@@ -311,8 +331,8 @@ class IRCBotManager:
         logger.info("Calculating MD5 for %s", filename)
         hasher = hashlib.md5()  # nosec
         with open(filename, "rb") as f:
-            while data := f.read(8192):
-                hasher.update(data)
+            for chunk in iter(functools.partial(f.read, 1 << 20), b""):
+                hasher.update(chunk)
 
         logger.info("MD5 for %s is %s", filename, hasher.hexdigest())
         return hasher.hexdigest()
@@ -335,10 +355,13 @@ class IRCBotManager:
         while True:
             try:
                 transfer_job = await md5_check_queue.get()
-                logging.debug("Checking MD5 for %s", transfer_job["filename"])
+                logger.debug("Checking MD5 for %s", transfer_job["filename"])
                 md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
                 for transfer in self.transfers.get(transfer_job["filename"], []):
+                    # Skip records that clearly belong to another job.
+                    if transfer.get("id") is not None and transfer["id"] != transfer_job["id"]:
+                        continue
                     ensure_transfer_defaults(transfer_job["filename"], transfer)
                     if transfer["id"] == transfer_job["id"]:
                         transfer["file_md5"] = md5_hash
@@ -346,8 +369,8 @@ class IRCBotManager:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.exception(e)
+            except Exception:
+                logger.exception("Failed to process MD5 check job")
                 md5_check_queue.task_done()
 
 
