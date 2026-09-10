@@ -401,13 +401,7 @@ class IRCBot(AioSimpleIRCClient):
         Only updates channels the bot has actually joined so that parted
         channels are not re-created.
         """
-        normalized = nick.lower()
-        if normalized not in self.bot_channel_map:
-            return
-        now = time.time()
-        for channel in self.bot_channel_map[normalized]:
-            if channel in self.joined_channels:
-                self.joined_channels[channel] = now
+        self.transfer_handler._touch_nick(nick)
 
     def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
         """Update bot's channel mapping for a user and bump activity for the channels."""

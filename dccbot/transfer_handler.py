@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from dccbot.aiodcc import AioDCCConnection
     from dccbot.ircbot import IRCBot
-from dccbot.transfers import get_incomplete_suffix
+from dccbot.transfers import get_incomplete_suffix, transfer_speeds
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +26,23 @@ class TransferHandler:
         """Initialize transfer handler for a specific IRC bot instance."""
         self.bot = bot
 
+    def _touch_nick(self, nick: str) -> None:
+        """Bump activity timestamps for channels associated with a nick.
+
+        Only updates channels the bot has actually joined so that parted
+        channels are not re-created.
+        """
+        normalized = nick.lower()
+        if normalized not in self.bot.bot_channel_map:
+            return
+        now = time.time()
+        for channel in self.bot.bot_channel_map[normalized]:
+            if channel in self.bot.joined_channels:
+                self.bot.joined_channels[channel] = now
+
     def _touch_channel_activity(self, transfer: dict) -> None:
         """Bump the activity timestamp for channels associated with this nick."""
-        nick = transfer["nick"].lower()
-        if nick in self.bot.bot_channel_map:
-            now = time.time()
-            for channel in self.bot.bot_channel_map[nick]:
-                if channel in self.bot.joined_channels:
-                    self.bot.joined_channels[channel] = now
+        self._touch_nick(transfer["nick"])
 
     def _update_progress(self, transfer: dict) -> None:
         """Recalculate and log transfer progress/rate if thresholds are met."""
@@ -43,11 +52,7 @@ class TransferHandler:
             return
 
         transfer["percent"] = percent
-        elapsed = now - transfer["start_time"]
-        transfer_rate_avg = (transfer["bytes_received"] / elapsed) / 1024 if elapsed > 0 else 0
-        elapsed = now - transfer["last_progress_update"]
-        transferred = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
-        transfer_rate = (transferred / elapsed) / 1024 if elapsed > 0 else 0
+        transfer_rate, transfer_rate_avg = transfer_speeds(transfer, now)
 
         logger.info(
             "[%s] Downloading %s %d%% @ %.2f KB/s / %.2f KB/s",
@@ -60,6 +65,21 @@ class TransferHandler:
         transfer["last_progress_update"] = now
         transfer["last_progress_bytes_received"] = transfer["bytes_received"]
 
+    def _abort_transfer(self, dcc: AioDCCConnection, transfer: dict, error: str, status: str = "error") -> None:
+        """Mark the transfer failed, disconnect the DCC peer and drop it."""
+        transfer["status"] = status
+        transfer["error"] = error
+        transfer["connected"] = False
+        dcc.disconnect()
+        self.bot.current_transfers.pop(dcc, None)
+
+    def _mark_failure(self, transfer: dict, status: str, error: str) -> None:
+        """Record a failure for a transfer unless it is already an error."""
+        if transfer.get("status") == "error":
+            return
+        transfer["status"] = status
+        transfer["error"] = error
+
     def _check_mime_or_disconnect(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> bool:
         """Validate the first chunk's MIME type or close the connection."""
         if transfer["bytes_received"] != 0 or transfer.get("offset") or not self.bot.allowed_mimetypes:
@@ -70,11 +90,7 @@ class TransferHandler:
             return True
 
         logger.warning("[%s] Reject %s: Invalid MIME type (%s)", transfer["nick"], transfer["filename"], mime_type)
-        transfer["status"] = "error"
-        transfer["error"] = f"Invalid MIME type ({mime_type})"
-        transfer["connected"] = False
-        dcc.disconnect()
-        self.bot.current_transfers.pop(dcc, None)
+        self._abort_transfer(dcc, transfer, f"Invalid MIME type ({mime_type})")
         return False
 
     def _write_chunk_or_disconnect(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> bool:
@@ -83,12 +99,9 @@ class TransferHandler:
             with open(transfer["file_path"], "ab") as f:
                 f.write(data)
         except Exception as e:
-            logger.error("Error writing to file %s: %s", transfer["file_path"], e)
-            transfer["status"] = "error"
-            transfer["error"] = f"Error writing to file {transfer['file_path']}: {e}"
-            transfer["connected"] = False
-            dcc.disconnect()
-            self.bot.current_transfers.pop(dcc, None)
+            error = f"Error writing to file {transfer['file_path']}: {e}"
+            logger.error(error)
+            self._abort_transfer(dcc, transfer, error)
             return False
         return True
 
@@ -144,16 +157,13 @@ class TransferHandler:
     def _report_size_mismatch(self, transfer: dict, file_size: int) -> None:
         """Record a size mismatch failure for a transfer."""
         logger.error("[%s] Download %s failed: size mismatch %d != %d", transfer["nick"], transfer["filename"], file_size, transfer["size"])
-        if transfer["status"] != "error":
-            transfer["status"] = "failed"
-            transfer["error"] = f"size mismatch {file_size} != {transfer['size']}"
+        self._mark_failure(transfer, "failed", f"size mismatch {file_size} != {transfer['size']}")
 
     def _report_missing_file(self, transfer: dict, file_path: str) -> None:
         """Record a missing output file failure."""
-        logger.error("[%s] Download failed: %s does not exist", transfer["nick"], file_path)
-        if transfer["status"] != "error":
-            transfer["status"] = "error"
-            transfer["error"] = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
+        error = f"[{transfer['nick']}] Download failed: {file_path} does not exist"
+        logger.error(error)
+        self._mark_failure(transfer, "error", error)
 
     def _finalize_transfer(self, dcc: AioDCCConnection, transfer: dict) -> None:
         """Check the output file and finalize the transfer state."""
