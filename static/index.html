@@ -419,57 +419,48 @@
     let connectionState = "connecting";
     let isConnecting = false;
 
-    function loadCommandHistory() {
+    function loadJsonStorage(key, fallback) {
       try {
-        const raw = window.localStorage.getItem(COMMAND_HISTORY_KEY);
+        const raw = window.localStorage.getItem(key);
         if (!raw) {
-          return [];
+          return fallback;
         }
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-          return [];
-        }
-        return parsed.filter((entry) => typeof entry === "string").slice(-MAX_COMMAND_HISTORY);
+        return parsed ?? fallback;
       } catch (_err) {
-        return [];
+        return fallback;
       }
     }
 
-    function saveCommandHistory() {
+    function saveJsonStorage(key, value) {
       try {
-        window.localStorage.setItem(
-          COMMAND_HISTORY_KEY,
-          JSON.stringify(commandHistory.slice(-MAX_COMMAND_HISTORY)),
-        );
+        window.localStorage.setItem(key, JSON.stringify(value));
       } catch (_err) {
         // localStorage can fail in private mode or restrictive browser policies.
       }
     }
 
-    function loadPanelState() {
-      try {
-        const raw = window.localStorage.getItem(PANEL_STATE_KEY);
-        if (!raw) {
-          return {};
-        }
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== "object") {
-          return {};
-        }
-        return parsed;
-      } catch (_err) {
-        return {};
+    function loadCommandHistory() {
+      const parsed = loadJsonStorage(COMMAND_HISTORY_KEY, []);
+      if (!Array.isArray(parsed)) {
+        return [];
       }
+      return parsed.filter((entry) => typeof entry === "string").slice(-MAX_COMMAND_HISTORY);
+    }
+
+    function saveCommandHistory() {
+      saveJsonStorage(COMMAND_HISTORY_KEY, commandHistory.slice(-MAX_COMMAND_HISTORY));
+    }
+
+    function loadPanelState() {
+      const parsed = loadJsonStorage(PANEL_STATE_KEY, {});
+      return parsed && typeof parsed === "object" ? parsed : {};
     }
 
     function savePanelState(key, collapsed) {
-      try {
-        const existing = loadPanelState();
-        existing[key] = Boolean(collapsed);
-        window.localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(existing));
-      } catch (_err) {
-        // Ignore storage failures.
-      }
+      const existing = loadPanelState();
+      existing[key] = Boolean(collapsed);
+      saveJsonStorage(PANEL_STATE_KEY, existing);
     }
 
     function cancelReconnectTimer() {

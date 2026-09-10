@@ -263,20 +263,31 @@
         setDownloadButtonBusy(btn, false);
     }
 
+    function apiRequest(method, path, payload, callbacks) {
+        const request = {
+            method: method,
+            url: buildApiUrl(path),
+            onload: callbacks.onload,
+            onerror: callbacks.onerror,
+            ontimeout: callbacks.ontimeout
+        };
+        if (payload !== undefined) {
+            request.headers = {
+                "Content-Type": "application/json"
+            };
+            request.data = JSON.stringify(payload);
+        }
+        GM_xmlhttpRequest(request);
+    }
+
     function send_msg(server, channel, user, message, done) {
         const summary = formatMsgSummary(server, channel, user, message);
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: buildApiUrl('/msg'),
-            headers: {
-                "Content-Type": "application/json"
-            },
-            data: JSON.stringify({
-                server: server,
-                channel: channel,
-                user: user,
-                message: message
-            }),
+        apiRequest("POST", "/msg", {
+            server: server,
+            channel: channel,
+            user: user,
+            message: message
+        }, {
             onload: function (response) {
                 const text = trimResponseText(response.responseText, 220);
                 const ok = response.status >= 200 && response.status < 300;
@@ -621,9 +632,7 @@
     }
 
     function pollTransferInfo() {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: buildApiUrl('/info'),
+        apiRequest("GET", "/info", undefined, {
             onload: function (response) {
                 if (!response || response.status < 200 || response.status >= 300) {
                     if (transferStatusLine) transferStatusLine.textContent = 'offline • HTTP ' + (response ? response.status : '?');
@@ -707,17 +716,11 @@
     }
 
     function cancelTransfer(server, nick, filename, done) {
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: buildApiUrl('/cancel'),
-            headers: {
-                "Content-Type": "application/json"
-            },
-            data: JSON.stringify({
-                server: server,
-                nick: nick,
-                filename: filename
-            }),
+        apiRequest("POST", "/cancel", {
+            server: server,
+            nick: nick,
+            filename: filename
+        }, {
             onload: function (response) {
                 let message = '';
                 try {
