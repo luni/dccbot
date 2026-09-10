@@ -31,6 +31,17 @@ class DccAcceptPayload:
     token: int | None = None
 
 
+def _parse_int(value: str, min_value: int = 0, max_value: int | None = None) -> int | None:
+    """Parse an integer, returning None if out of range or not numeric."""
+    try:
+        result = int(value)
+    except ValueError:
+        return None
+    if result < min_value or (max_value is not None and result > max_value):
+        return None
+    return result
+
+
 def is_valid_filename(path: str, filename: str) -> bool:
     """Check if filename is valid and resolves within the given base path."""
     if not filename:
@@ -60,21 +71,15 @@ def parse_dcc_accept(payload: str) -> DccAcceptPayload | None:
     if len(parts) < 4:
         return None
 
-    try:
-        port = int(parts[2])
-        position = int(parts[3])
-    except ValueError:
-        return None
-    if port < 0 or port > 65535 or position < 0:
+    port = _parse_int(parts[2], 0, 65535)
+    position = _parse_int(parts[3], 0)
+    if port is None or position is None:
         return None
 
     token: int | None = None
     if len(parts) == 5:
-        try:
-            token = int(parts[4])
-        except ValueError:
-            return None
-        if token < 0:
+        token = _parse_int(parts[4], 0)
+        if token is None:
             return None
     elif len(parts) > 5:
         return None
@@ -92,22 +97,15 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
         return None
 
     filename, raw_address, raw_port, raw_size = parts[1:5]
-    try:
-        size = int(raw_size)
-        peer_port = int(raw_port)
-    except ValueError:
-        return None
-
-    if peer_port < 0 or peer_port > 65535 or size < 1:
+    peer_port = _parse_int(raw_port, 0, 65535)
+    size = _parse_int(raw_size, 1)
+    if peer_port is None or size is None:
         return None
 
     token: int | None = None
     if len(parts) == 6:
-        try:
-            token = int(parts[5])
-        except ValueError:
-            return None
-        if token < 0:
+        token = _parse_int(parts[5], 0)
+        if token is None:
             return None
 
     try:

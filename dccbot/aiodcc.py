@@ -91,7 +91,7 @@ class AioDCCConnection(irc.client.DCCConnection):
     peerport: int
 
     async def connect(  # type: ignore
-        self, address: str, port: int, connect_factory: irc.connection.AioFactory = irc.connection.AioFactory(), transfer_item: dict | None = None
+        self, address: str, port: int, connect_factory: irc.connection.AioFactory | None = None, transfer_item: dict | None = None
     ) -> "AioDCCConnection":
         """Connect/reconnect to a DCC peer.
 
@@ -110,8 +110,9 @@ class AioDCCConnection(irc.client.DCCConnection):
         self.peerport = port
         self.handlers = {}
         self.buffer = self.buffer_class()
+        self._disconnected = False
 
-        self.connect_factory = connect_factory
+        self.connect_factory = connect_factory or irc.connection.AioFactory()
         protocol_instance = self.protocol_class(self, self.reactor.loop)
         try:
             connection = self.connect_factory(protocol_instance, (self.peeraddress, self.peerport))
@@ -159,6 +160,7 @@ class AioDCCConnection(irc.client.DCCConnection):
         """
         self.passive = True
         self.connected = False
+        self._disconnected = False
         self.handlers = {}
         self.buffer = self.buffer_class()
 
@@ -226,10 +228,10 @@ class AioDCCConnection(irc.client.DCCConnection):
             message: Quit message.
 
         """
-        try:
-            del self.connected
-        except AttributeError:
+        if getattr(self, "_disconnected", False):
             return
+        self._disconnected = True
+        self.connected = False
 
         try:
             if hasattr(self, "server") and self.server:
