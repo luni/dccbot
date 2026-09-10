@@ -1,6 +1,6 @@
 [project]
 name = "dccbot"
-version = "0.2.0"
+version = "0.3.0"
 description = "An IRC XDCC download bot written in python with aiohttp and ircpy"
 readme = "README.md"
 license = {text = "MIT License"}
