@@ -346,6 +346,7 @@ class IRCBot(AioSimpleIRCClient):
         for channel in waiting_channels.values():
             await self.join_channel(channel)
 
+        retry = 0
         for retry in range(10):
             for normalized in list(waiting_channels):
                 if normalized in self.joined_channels:
@@ -597,7 +598,10 @@ class IRCBot(AioSimpleIRCClient):
 
     def _handle_passive_accept(self, nick: str, parsed: DccAcceptPayload) -> bool:
         """Handle a passive resume ACCEPT. Returns True when fully handled."""
-        queue_key = (nick, parsed.token)
+        token = parsed.token
+        if token is None:
+            return True
+        queue_key = (nick, token)
         resume = self.passive_resume_queue.get(queue_key)
         if resume is None:
             logger.warning("DCC ACCEPT for unknown passive resume: token=%s", parsed.token)
