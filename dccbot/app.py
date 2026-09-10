@@ -6,13 +6,14 @@ import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
-from dccbot.transfers import ensure_transfer_defaults
+from dccbot.transfers import ensure_transfer_defaults, transfer_speeds
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -263,7 +264,7 @@ class WebSocketLogHandler(logging.Handler):
         }
         for ws in list(self.websockets):
             if ws.closed:
-                self.websockets.remove(ws)
+                self.websockets.discard(ws)
                 continue
 
             payload = json.dumps(log_entry)
@@ -341,12 +342,12 @@ class IRCBotAPI:
         except asyncio.CancelledError:
             pass
 
-    async def _broadcast_transfers_to_clients(self) -> None:
+    async def _broadcast_json(self, payload: dict[str, Any]) -> None:
+        """Send a JSON payload to all open WebSocket clients."""
         if not self.websockets:
             return
 
-        transfers = self._build_transfer_snapshot()
-        message = json.dumps({"type": "transfers", "transfers": transfers})
+        message = json.dumps(payload)
         for ws in list(self.websockets):
             if ws.closed:
                 self.websockets.discard(ws)
@@ -355,6 +356,11 @@ class IRCBotAPI:
                 await ws.send_str(message)
             except ConnectionResetError:
                 self.websockets.discard(ws)
+
+    async def _broadcast_transfers_to_clients(self) -> None:
+        """Broadcast the current transfer snapshot to all WebSocket clients."""
+        transfers = self._build_transfer_snapshot()
+        await self._broadcast_json({"type": "transfers", "transfers": transfers})
 
     def _build_transfer_snapshot(self) -> list[dict[str, object]]:
         """Collect current transfer information."""
@@ -367,13 +373,8 @@ class IRCBotAPI:
         for filename, transfers in transfers_data.items():
             for transfer in transfers:
                 ensure_transfer_defaults(filename, transfer, now=now)
-                transferred_bytes = transfer["bytes_received"]
-                transfer_time = now - transfer["start_time"] if transfer["start_time"] else 0
-                speed_avg = transferred_bytes / transfer_time / 1024 if transfer_time > 0 else 0
+                speed, speed_avg = transfer_speeds(transfer, now)
 
-                recent_bytes = transfer["bytes_received"] - transfer["last_progress_bytes_received"]
-                recent_duration = now - transfer["last_progress_update"]
-                speed = (recent_bytes / recent_duration) / 1024 if recent_duration > 0 else 0
                 peer_address = transfer.get("peer_address")
                 peer_port = transfer.get("peer_port")
                 host = ""
@@ -423,14 +424,12 @@ class IRCBotAPI:
         """Build websocket help output for all commands or a specific one."""
         if command is None:
             lines = ["Available websocket commands:"]
-            for name in ("help", "join", "part", "msg", "msgjoin", "info"):
-                usage = WS_COMMAND_HELP[name]["usage"]
-                lines.append(f"- {usage}")
+            for command_help in WS_COMMAND_HELP.values():
+                lines.append(f"- {command_help['usage']}")
             lines.append("Use /help <command> for details.")
             return "\n".join(lines)
 
-        if command is not None:
-            command = command.lower()
+        command = command.lower()
         command_help = WS_COMMAND_HELP.get(command)
         if not command_help:
             return f"Unknown command: {command}"
@@ -441,6 +440,78 @@ class IRCBotAPI:
             f"Description: {command_help['description']}",
             f"Example: {command_help['example']}",
         ])
+
+    async def _queue_channel_command(
+        self,
+        server: str,
+        command: str,
+        channels: list[str],
+        reason: str | None = None,
+        include_reason: bool = False,
+    ) -> None:
+        """Queue a join or part command on the bot for the given server."""
+        bot = await self.bot_manager.get_bot(server)
+        payload: dict[str, Any] = {"command": command, "channels": channels}
+        if include_reason or reason is not None:
+            payload["reason"] = reason
+        await bot.queue_command(payload)
+
+    async def _queue_send_command(
+        self,
+        server: str,
+        user: str,
+        message: str,
+        channels: list[str] | None = None,
+    ) -> None:
+        """Queue a send command on the bot for the given server."""
+        bot = await self.bot_manager.get_bot(server)
+        payload: dict[str, Any] = {"command": "send", "user": user, "message": message}
+        if channels is not None:
+            payload["channels"] = channels
+        await bot.queue_command(payload)
+
+    async def _ws_help(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /help websocket command."""
+        command_name = args[0].lower() if args else None
+        msg = self._build_ws_help_message(command_name)
+        await ws.send_json({"status": "ok", "message": msg})
+
+    async def _ws_part(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /part websocket command."""
+        if len(args) < 2:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        await self._queue_channel_command(server, "part", self._clean_channel_list(args))
+
+    async def _ws_join(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /join websocket command."""
+        if len(args) < 2:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        await self._queue_channel_command(server, "join", self._clean_channel_list(args))
+
+    async def _ws_msg(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /msg websocket command."""
+        if len(args) < 3:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        target = args.pop(0).lower().strip()
+        await self._queue_send_command(server, target, " ".join(args))
+
+    async def _ws_msgjoin(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /msgjoin websocket command."""
+        if len(args) < 4:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        channels = self._clean_channel_list([args.pop(0)])
+        if not channels:
+            raise RuntimeError("Invalid channel")
+        target = args.pop(0).lower().strip()
+        await self._queue_send_command(server, target, " ".join(args), channels=[channels[0]])
+
+    async def _ws_info(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /info websocket command."""
+        await self._send_transfer_snapshot(ws)
 
     async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
@@ -455,64 +526,25 @@ class IRCBotAPI:
         try:
             if command is not None:
                 command = command.lower()
-            logging.info("Received command from client: %s %s", command, args)
-            if command == "help":
-                command_name = args[0].lower() if args else None
-                msg = self._build_ws_help_message(command_name)
-                await ws.send_json({"status": "ok", "message": msg})
-            elif command == "part":
-                if len(args) < 2:
-                    raise RuntimeError("Not enough arguments")
-                server = args.pop(0)
-                bot = await self.bot_manager.get_bot(server)
-                await bot.queue_command({
-                    "command": "part",
-                    "channels": self._clean_channel_list(args),
-                })
-            elif command == "join":
-                if len(args) < 2:
-                    raise RuntimeError("Not enough arguments")
-                server = args.pop(0)
-                bot = await self.bot_manager.get_bot(server)
-                await bot.queue_command({
-                    "command": "join",
-                    "channels": self._clean_channel_list(args),
-                })
-            elif command == "msg":
-                if len(args) < 3:
-                    raise RuntimeError("Not enough arguments")
-                server = args.pop(0)
-                bot = await self.bot_manager.get_bot(server)
-                target = args.pop(0).lower().strip()
-                await bot.queue_command({
-                    "command": "send",
-                    "user": target,
-                    "message": " ".join(args),
-                })
-            elif command == "msgjoin":
-                if len(args) < 4:
-                    raise RuntimeError("Not enough arguments")
-                server = args.pop(0)
-                bot = await self.bot_manager.get_bot(server)
-                channels = self._clean_channel_list([args.pop(0)])
-                if not channels:
-                    raise RuntimeError("Invalid channel")
-                target = args.pop(0).lower().strip()
-                await bot.queue_command({
-                    "command": "send",
-                    "user": target,
-                    "channels": [channels[0]],
-                    "message": " ".join(args),
-                })
-            elif command == "info":
-                await self._send_transfer_snapshot(ws)
-            else:
+            logger.info("Received command from client: %s %s", command, args)
+
+            handlers = {
+                "help": self._ws_help,
+                "part": self._ws_part,
+                "join": self._ws_join,
+                "msg": self._ws_msg,
+                "msgjoin": self._ws_msgjoin,
+                "info": self._ws_info,
+            }
+            handler = handlers.get(command or "")
+            if handler is None:
                 raise RuntimeError(f"Unknown command: {command}")
+            await handler(args, ws)
         except RuntimeError as e:
             logger.error(str(e), exc_info=True)
             await ws.send_json({"status": "error", "message": str(e)})
-        except Exception as e:
-            logger.exception(e)
+        except Exception:
+            logger.exception("Error handling WebSocket command")
             await ws.send_json({"status": "error", "message": "Internal server error"})
 
     # WebSocket handler
@@ -528,31 +560,14 @@ class IRCBotAPI:
             web.WebSocketResponse: The WebSocket response object.
 
         """
-        ws = web.WebSocketResponse()
+        # heartbeat=10 sends a WebSocket ping every 10 seconds
+        ws = web.WebSocketResponse(heartbeat=10)
         await ws.prepare(request)
 
         # Add the new WebSocket connection to the set
         self.websockets.add(ws)
 
-        ping_task = None
         try:
-            # Send periodic ping frames to keep the connection alive
-            async def send_ping() -> None:
-                while True:
-                    try:
-                        await asyncio.sleep(10)  # Send a ping every 10 seconds
-                        if ws.closed:
-                            break
-                        await ws.ping()
-                    except ConnectionResetError:
-                        break
-                    except Exception:
-                        logger.exception("WebSocket ping failed")
-                        break
-
-            # Start the ping task
-            ping_task = asyncio.create_task(send_ping())
-
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
                     data = msg.data.strip()
@@ -571,18 +586,11 @@ class IRCBotAPI:
         finally:
             # Remove the WebSocket connection when it's closed
             self.websockets.discard(ws)
-            if ping_task:
-                ping_task.cancel()  # Stop the ping task
-                try:
-                    await ping_task
-                except asyncio.CancelledError:
-                    pass
 
         return ws
 
-    async def _return_static_html(self, request: web.Request) -> web.Response:
-        """Serve HTML files located under the static directory."""
-        filename = request.rel_url.path.split("/")[-1]
+    def _read_html_file(self, filename: str) -> web.Response:
+        """Serve an HTML file from the static directory, or raise 404."""
         fullpath = (self.static_dir / filename).resolve()
         if not str(fullpath).startswith(str(self.static_dir.resolve())) or not fullpath.exists():
             raise web.HTTPNotFound()
@@ -590,11 +598,15 @@ class IRCBotAPI:
         with open(fullpath, encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
+    async def _return_static_html(self, request: web.Request) -> web.Response:
+        """Serve HTML files located under the static directory."""
+        filename = request.rel_url.path.split("/")[-1]
+        return self._read_html_file(filename)
+
     async def _return_index_html(self, request: web.Request) -> web.Response:
         """Serve the merged UI index page."""
         del request
-        with open(self.static_dir / "index.html", encoding="utf-8") as f:
-            return web.Response(text=f.read(), content_type="text/html")
+        return self._read_html_file("index.html")
 
     def setup_routes(self) -> None:
         """Set up routes for the aiohttp application."""
@@ -652,11 +664,14 @@ class IRCBotAPI:
             if not data.get("channel") and not data.get("channels"):
                 return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
-            bot = await self.bot_manager.get_bot(data["server"])
-            await bot.queue_command({"command": "join", "channels": self._clean_channel_list(data.get("channels", [data.get("channel", "")]))})
+            await self._queue_channel_command(
+                data["server"],
+                "join",
+                self._clean_channel_list(data.get("channels", [data.get("channel", "")])),
+            )
             return web.json_response({"status": "ok"})
         except Exception as e:
-            logger.exception(e)
+            logger.exception("Error in join request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     @docs(
@@ -677,15 +692,16 @@ class IRCBotAPI:
             if not data.get("channel") and not data.get("channels"):
                 return web.json_response({"json": {"channel": ["Missing data for required field."]}}, status=422)
 
-            bot = await self.bot_manager.get_bot(data["server"])
-            await bot.queue_command({
-                "command": "part",
-                "channels": self._clean_channel_list(data.get("channels", [data.get("channel", "")])),
-                "reason": data.get("reason"),
-            })
+            await self._queue_channel_command(
+                data["server"],
+                "part",
+                self._clean_channel_list(data.get("channels", [data.get("channel", "")])),
+                reason=data.get("reason"),
+                include_reason=True,
+            )
             return web.json_response({"status": "ok"})
         except Exception as e:
-            logger.exception(e)
+            logger.exception("Error in part request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     @docs(
@@ -706,7 +722,6 @@ class IRCBotAPI:
             if not data.get("user") or not data.get("message"):
                 return web.json_response({"status": "error", "message": "Missing user or message"}, status=400)
 
-            bot = await self.bot_manager.get_bot(data["server"])
             channels = data.get("channels")
             if not channels:
                 channel = data.get("channel")
@@ -714,6 +729,7 @@ class IRCBotAPI:
             channels = self._clean_channel_list(channels)
 
             # Check if we need to rewrite to ssend
+            bot = await self.bot_manager.get_bot(data["server"])
             if (
                 data["message"]
                 and (
@@ -724,15 +740,15 @@ class IRCBotAPI:
             ):
                 data["message"] = re.sub(r"^xdcc (send|batch) ", r"xdcc s\1 ", data["message"], re.I)
 
-            await bot.queue_command({
-                "command": "send",
-                "channels": channels,
-                "user": data["user"].lower().strip(),
-                "message": data["message"].strip(),
-            })
+            await self._queue_send_command(
+                data["server"],
+                data["user"].lower().strip(),
+                data["message"].strip(),
+                channels=channels,
+            )
             return web.json_response({"status": "ok"})
         except Exception as e:
-            logger.exception(e)
+            logger.exception("Error in msg request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     @docs(
@@ -753,7 +769,7 @@ class IRCBotAPI:
             await request.app.shutdown()
             return web.json_response({"status": "ok"})
         except Exception as e:
-            logger.exception(e)
+            logger.exception("Error in shutdown request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     @docs(
@@ -772,8 +788,7 @@ class IRCBotAPI:
             response = self._build_info_payload()
             return web.json_response(response)
         except Exception as e:
-            logger.exception(e)
-            logger.error("Error in handle_info: %s", str(e))
+            logger.exception("Error in info request")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     @docs(
@@ -799,7 +814,7 @@ class IRCBotAPI:
                 return web.json_response({"status": "ok", "message": "Transfer cancelled."})
             return web.json_response({"status": "error", "message": "Transfer not found or not running."}, status=400)
         except Exception as e:
-            logger.exception(e)
+            logger.exception("Error in cancel request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
 
