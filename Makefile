@@ -1,6 +1,6 @@
 # Makefile
 
-.PHONY: all format check validate test test-cov test-integration test-all irc-up irc-down test-integration-local vulture complexity xenon bandit pyright fix reformat-ruff fix-ruff
+.PHONY: all format check validate test test-cov test-integration test-all irc-up irc-down test-integration-local vulture complexity xenon bandit pyright fix reformat-ruff fix-ruff mutation
 
 # Default target: runs format and check
 all: validate test
@@ -36,13 +36,16 @@ test-all: test-cov
 
 # Integration test helpers
 irc-up:
-	docker compose up -d ircd xdccbot
+	docker compose up -d ircd xdccbot toxiproxy
 	@echo "Waiting for IRC server to be ready..."
 	@bash -c 'for i in $$(seq 1 60); do nc -z localhost 6667 2>/dev/null && exit 0; sleep 1; done; exit 1' || echo "Timeout waiting for IRC server"
 	@echo "IRC server is ready!"
 	@echo "Waiting for XDCC bot to be ready..."
 	@bash -c 'for i in $$(seq 1 90); do [ "$$(docker inspect -f "{{.State.Health.Status}}" dccbot-test-xdcc 2>/dev/null)" = "healthy" ] && exit 0; sleep 2; done; exit 1' || echo "Timeout waiting for XDCC bot health check"
 	@echo "XDCC bot is ready!"
+	@echo "Waiting for toxiproxy to be ready..."
+	@bash -c 'for i in $$(seq 1 60); do nc -z localhost 8474 2>/dev/null && exit 0; sleep 1; done; echo "Timeout waiting for toxiproxy" >&2; exit 1'
+	@echo "toxiproxy is ready!"
 
 irc-down:
 	docker compose down
@@ -51,8 +54,13 @@ test-integration-local: irc-up
 	uv run pytest tests/integration -v -m integration --timeout=120
 	$(MAKE) irc-down
 
+# Mutation testing (mutates dccbot/, runs the unit suite per mutant)
+mutation:
+	uv run mutmut run
+	uv run mutmut results
+
 vulture:
-	uv run vulture . --exclude .venv,migrations,tests --make-whitelist
+	uv run vulture . --exclude .venv,migrations,tests,mutants --make-whitelist
 
 complexity:
 	uv run radon cc . -a -nc

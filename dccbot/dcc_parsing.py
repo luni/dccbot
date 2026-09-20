@@ -6,6 +6,7 @@ import ipaddress
 import os
 import re
 import shlex
+import struct
 from dataclasses import dataclass
 
 import irc.client
@@ -44,7 +45,7 @@ def _parse_int(value: str, min_value: int = 0, max_value: int | None = None) -> 
 
 def is_valid_filename(path: str, filename: str) -> bool:
     """Check if filename is valid and resolves within the given base path."""
-    if not filename:
+    if not filename or filename in (".", "..") or "\x00" in filename:
         return False
 
     file_path = os.path.join(path, filename)
@@ -114,7 +115,7 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
             peer_address = raw_address
         else:
             peer_address = irc.client.ip_numstr_to_quad(raw_address)
-    except ValueError:
+    except (ValueError, struct.error):
         return None
 
     return DccSendPayload(filename=filename, peer_address=peer_address, peer_port=peer_port, size=size, token=token)

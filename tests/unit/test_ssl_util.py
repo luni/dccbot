@@ -13,7 +13,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from dccbot.ssl_util import create_dcc_ssl_context, get_or_create_dcc_cert
+from dccbot.ssl_util import _default_cert_cache_dir, _generate_self_signed_cert, create_dcc_ssl_context, get_or_create_dcc_cert
 
 
 def _generate_pair(tmp_path: Path, common_name: str = "test") -> tuple[Path, Path]:
@@ -123,6 +123,23 @@ def test_get_or_create_dcc_cert_falls_back_when_key_missing(tmp_path: Path) -> N
     assert key_file == str(tmp_path / "dcc-key.pem")
 
 
+def test_get_or_create_dcc_cert_falls_back_when_configured_key_file_missing(tmp_path: Path) -> None:
+    """Both paths configured but the key file missing must not return dead paths."""
+    cert_path, _ = _generate_pair(tmp_path)
+    config = {
+        "dcc_ssl_cert": str(cert_path),
+        "dcc_ssl_key": str(tmp_path / "missing-key.pem"),
+    }
+
+    cert_file, key_file = get_or_create_dcc_cert(config, cache_dir=tmp_path)
+
+    # Falls back to a generated pair in the cache dir.
+    assert cert_file == str(tmp_path / "dcc-cert.pem")
+    assert key_file == str(tmp_path / "dcc-key.pem")
+    assert Path(cert_file).is_file()
+    assert Path(key_file).is_file()
+
+
 def test_get_or_create_dcc_cert_regenerates_when_cache_key_missing(tmp_path: Path) -> None:
     """A cached cert with a missing key triggers regeneration of the pair."""
     # Generate a cert/key pair in the cache dir, then delete only the key.
@@ -170,3 +187,49 @@ def test_get_or_create_dcc_cert_default_cache_dir(monkeypatch: pytest.MonkeyPatc
     assert cert_file.endswith("/dcc-cert.pem")
     assert key_file.endswith("/dcc-key.pem")
     assert Path(cert_file).parent == tmp_path
+
+
+def test_default_cert_cache_dir_is_under_home() -> None:
+    """The default cache dir is ~/.local/share/dccbot."""
+    assert _default_cert_cache_dir() == Path.home() / ".local" / "share" / "dccbot"
+
+
+def test_create_dcc_ssl_context_uses_server_protocol(tmp_path: Path) -> None:
+    """A server context is built with PROTOCOL_TLS_SERVER."""
+    cert_path, key_path = _generate_pair(tmp_path)
+    ctx = create_dcc_ssl_context(server=True, cert_path=str(cert_path), key_path=str(key_path))
+    assert ctx.protocol == ssl.PROTOCOL_TLS_SERVER
+
+
+def test_create_dcc_ssl_context_uses_client_protocol(tmp_path: Path) -> None:
+    """A client context is built with PROTOCOL_TLS_CLIENT."""
+    cert_path, key_path = _generate_pair(tmp_path)
+    ctx = create_dcc_ssl_context(server=False, cert_path=str(cert_path), key_path=str(key_path))
+    assert ctx.protocol == ssl.PROTOCOL_TLS_CLIENT
+
+
+def test_generate_self_signed_cert_properties(tmp_path: Path) -> None:
+    """The generated cert has a 2048-bit key, dccbot SAN, and 365-day validity."""
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    _generate_self_signed_cert(cert_path, key_path)
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    assert san.value.get_values_for_type(x509.DNSName) == ["dccbot"]
+    assert san.critical is False
+    validity = cert.not_valid_after_utc - cert.not_valid_before_utc
+    assert validity.days == 365
+
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    assert isinstance(key, rsa.RSAPrivateKey)
+    assert key.key_size == 2048
+
+
+def test_generate_self_signed_cert_creates_nested_dirs(tmp_path: Path) -> None:
+    """Missing intermediate directories are created for cert and key."""
+    cert_path = tmp_path / "deep" / "certs" / "cert.pem"
+    key_path = tmp_path / "other" / "keys" / "key.pem"
+    _generate_self_signed_cert(cert_path, key_path)
+    assert cert_path.is_file()
+    assert key_path.is_file()

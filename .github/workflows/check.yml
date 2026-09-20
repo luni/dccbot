@@ -91,9 +91,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Start InspIRCd and XDCC bot
+      - name: Start InspIRCd, XDCC bot and toxiproxy
         run: |
-          docker compose up -d ircd xdccbot
+          docker compose up -d ircd xdccbot toxiproxy
           # Wait for IRC server to be ready
           echo "Waiting for IRC server to start..."
           timeout 60 bash -c 'until nc -z localhost 6667; do sleep 1; done'
@@ -102,6 +102,10 @@ jobs:
           echo "Waiting for XDCC bot to be ready..."
           timeout 180 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" dccbot-test-xdcc 2>/dev/null)" = "healthy" ]; do sleep 2; done'
           echo "XDCC bot is ready!"
+          # Wait for toxiproxy admin API
+          echo "Waiting for toxiproxy to be ready..."
+          timeout 60 bash -c 'until nc -z localhost 8474; do sleep 1; done'
+          echo "toxiproxy is ready!"
 
       - name: Cache dependencies
         uses: actions/cache@v6

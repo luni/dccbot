@@ -1,10 +1,21 @@
-"""Shared fixtures for integration tests."""
+"""Shared fixtures for integration tests.
+
+Provides the toxiproxy fixtures used by the live fault-injection tests.
+toxiproxy is started by ``make irc-up`` (and CI) on admin port 8474;
+two proxies are pre-configured:
+
+- ``irc-proxy``: 127.0.0.1:16667 -> 127.0.0.1:6667 (InspIRCd)
+- ``dcc-proxy``: 127.0.0.1:20001 -> 127.0.0.1:20099 (test peer server)
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import urllib.error
+import urllib.request
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -16,6 +27,79 @@ from dccbot.manager import IRCBotManager
 # Local InspIRCd server for testing
 TEST_IRC_SERVER = "localhost"
 TEST_PORT = 6667
+
+TOXIPROXY_API = "http://localhost:8474"
+
+PROXIES = {
+    "irc-proxy": ("127.0.0.1:16667", "127.0.0.1:6667"),
+    "dcc-proxy": ("127.0.0.1:20001", "127.0.0.1:20099"),
+}
+
+ToxicAdder = Callable[..., None]
+
+
+def toxi_request(method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, str]:
+    """Call the toxiproxy HTTP API and return (status, body)."""
+    req = urllib.request.Request(
+        f"{TOXIPROXY_API}{path}",
+        method=method,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+    except OSError as e:
+        return -1, str(e)
+
+
+def _toxiproxy_available() -> bool:
+    try:
+        with urllib.request.urlopen(f"{TOXIPROXY_API}/version", timeout=2) as resp:
+            return resp.status == 200
+    except OSError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def toxiproxy() -> Generator[str]:
+    """Provide the toxiproxy admin URL with proxies configured.
+
+    Skips when toxiproxy isn't running so integration tests can still
+    run against a bare ircd without the fault-injection sidecar.
+    """
+    if not _toxiproxy_available():
+        pytest.skip("toxiproxy not running on :8474 (started by make irc-up)")
+    for name, (listen, upstream) in PROXIES.items():
+        toxi_request("DELETE", f"/proxies/{name}")
+        status, body = toxi_request("POST", "/proxies", {"name": name, "listen": listen, "upstream": upstream})
+        assert status == 201, body
+    yield TOXIPROXY_API
+    toxi_request("POST", "/reset")
+
+
+@pytest.fixture()
+def add_toxic(toxiproxy: str) -> Generator[ToxicAdder]:
+    """Add a toxic to a proxy; all toxics are removed after the test."""
+
+    def _add(proxy: str, name: str, toxic_type: str, attributes: dict[str, Any], stream: str = "downstream") -> None:
+        status, body = toxi_request(
+            "POST",
+            f"/proxies/{proxy}/toxics",
+            {
+                "name": name,
+                "type": toxic_type,
+                "stream": stream,
+                "toxicity": 1.0,
+                "attributes": attributes,
+            },
+        )
+        assert status == 200, body
+
+    yield _add
+    toxi_request("POST", "/reset")
 
 
 @pytest.fixture

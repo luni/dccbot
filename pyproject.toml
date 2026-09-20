@@ -31,6 +31,8 @@ dev = [
     "pyright>=1.1.408",
     "bandit>=1.9.2",
     "pre-commit>=4.5.0",
+    "mutmut>=3.8",
+    "hypothesis>=6.168.0",
 ]
 
 [tool.ruff]
@@ -70,14 +72,20 @@ markers = [
     "integration: marks tests as integration tests that connect to real IRC servers",
 ]
 
+[tool.mutmut]
+source_paths = ["dccbot/"]
+also_copy = ["static"]
+pytest_add_cli_args_test_selection = ["tests/unit"]
+pytest_add_cli_args = ["-x", "-q", "--timeout=60"]
+
 [tool.pyright]
-exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv", "**/.venv"]
+exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv", "**/.venv", "**/mutants"]
 
 [tool.bandit]
-exclude_dirs = [".venv", "tests"]
+exclude_dirs = [".venv", "tests", "mutants"]
 
 [tool.vulture]
-exclude = ["dist", "build", "venv", ".venv", "tests"]
+exclude = ["dist", "build", "venv", ".venv", "tests", "mutants"]
 ignore_decorators = ["@app.route", "@require_*"]
 ignore_names = ["visit_*", "do_*"]
 # make_whitelist = true

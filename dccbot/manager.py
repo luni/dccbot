@@ -86,7 +86,10 @@ class IRCBotManager:
             (
                 (conn, transfer)
                 for conn, transfer in bot.current_transfers.items()
-                if transfer.get("filename") == filename and transfer.get("status") in ("started", "in_progress") and transfer.get("nick", "").lower() == nick
+                if isinstance(transfer, dict)
+                and transfer.get("filename") == filename
+                and transfer.get("status") in ("started", "in_progress")
+                and str(transfer.get("nick") or "").lower() == nick
             ),
             None,
         )
@@ -94,18 +97,24 @@ class IRCBotManager:
             return False
         dcc, transfer = entry
 
-        # Disconnect the DCC connection
+        # Mark cancelled before disconnecting so the dcc_disconnect event
+        # finalizes the transfer as cancelled instead of failed/completed.
+        self._mark_cancelled(transfer)
         try:
             dcc.disconnect("Cancelled by user")
         except Exception:
             logger.error("Failed to disconnect DCC connection", exc_info=True)
 
-        self._mark_cancelled(transfer)
         bot.current_transfers.pop(dcc, None)
 
         # Update in manager.transfers if present
-        for t in self.transfers.get(filename, []):
-            if t.get("server", "").lower() == server and t.get("nick", "").lower() == nick and t.get("status") in ("started", "in_progress"):
+        records = self.transfers.get(filename, [])
+        if not isinstance(records, list):
+            return True
+        for t in records:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("server") or "").lower() == server and str(t.get("nick") or "").lower() == nick and t.get("status") in ("started", "in_progress"):
                 self._mark_cancelled(t)
         return True
 
@@ -141,12 +150,23 @@ class IRCBotManager:
         """Normalize case-insensitive values inside a single server config block."""
         if not isinstance(server_config, dict):
             return
-        if "rewrite_to_ssend" in server_config and isinstance(server_config["rewrite_to_ssend"], list):
-            server_config["rewrite_to_ssend"] = [c.lower() for c in server_config["rewrite_to_ssend"]]
-        if "channels" in server_config and isinstance(server_config["channels"], list):
-            server_config["channels"] = [c.lower() for c in server_config["channels"]]
-        if "also_join" in server_config and isinstance(server_config["also_join"], dict):
-            server_config["also_join"] = {k.lower(): [c.lower() for c in v] for k, v in server_config["also_join"].items()}
+        for key in ("rewrite_to_ssend", "channels"):
+            value = server_config.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+                raise ValueError(f"'{key}' must be a list of strings")
+            server_config[key] = [c.lower() for c in value]
+        if "also_join" in server_config:
+            also_join = server_config["also_join"]
+            if not isinstance(also_join, dict):
+                raise ValueError("'also_join' must be a dictionary")
+            normalized: dict[str, list[str]] = {}
+            for k, v in also_join.items():
+                if not isinstance(k, str) or not isinstance(v, list) or not all(isinstance(c, str) for c in v):
+                    raise ValueError("'also_join' must map strings to lists of strings")
+                normalized[k.lower()] = [c.lower() for c in v]
+            server_config["also_join"] = normalized
 
     @staticmethod
     def _normalize_config_contract(config: dict[str, Any]) -> None:
@@ -155,6 +175,18 @@ class IRCBotManager:
         IRCBotManager._normalize_download_path(config)
         IRCBotManager._normalize_http_config(config)
         IRCBotManager._normalize_cert_keys(config)
+        IRCBotManager._validate_transfer_keys(config)
+
+    @staticmethod
+    def _validate_transfer_keys(config: dict[str, Any]) -> None:
+        """Validate types for transfer-related config keys."""
+        for key in ("server_idle_timeout", "channel_idle_timeout", "resume_timeout", "transfer_list_timeout"):
+            if key in config and not isinstance(config[key], (int, float)):
+                raise ValueError(f"'{key}' must be a number")
+        if "max_file_size" in config and not isinstance(config["max_file_size"], int):
+            raise ValueError("'max_file_size' must be an integer")
+        if "allowed_mimetypes" in config and config["allowed_mimetypes"] is not None and not isinstance(config["allowed_mimetypes"], list):
+            raise ValueError("'allowed_mimetypes' must be a list")
 
     @staticmethod
     def _normalize_servers(config: dict[str, Any]) -> None:
@@ -258,8 +290,19 @@ class IRCBotManager:
 
         expired_transfer_names = []
         for filename, transfers in self.transfers.items():
+            if not isinstance(transfers, list):
+                expired_transfer_names.append(filename)
+                continue
             # Keep transfers that are still within the timeout window.
-            transfers[:] = [transfer for transfer in transfers if transfer.get("start_time", 0) + self.transfer_list_timeout >= now]
+            # A non-numeric start_time is treated as expired rather than
+            # raising TypeError on every cleanup pass.
+            transfers[:] = [
+                transfer
+                for transfer in transfers
+                if isinstance(transfer, dict)
+                and isinstance(transfer.get("start_time"), (int, float))
+                and transfer["start_time"] + self.transfer_list_timeout >= now
+            ]
             if not transfers:
                 expired_transfer_names.append(filename)
 
@@ -277,21 +320,30 @@ class IRCBotManager:
         now = time.time()
 
         idle_servers = []
-        for server, bot in self.bots.items():
+        for server, bot in list(self.bots.items()):
             if (
                 not bot.joined_channels
                 and not bot.current_transfers
                 and bot.command_queue.empty()
                 and self.server_idle_timeout > 0
+                and isinstance(bot.last_active, (int, float))
                 and bot.last_active + self.server_idle_timeout < now
             ):
                 idle_servers.append(server)
             else:
-                await bot.cleanup(self.server_idle_timeout, self.resume_timeout)
+                try:
+                    await bot.cleanup(self.server_idle_timeout, self.resume_timeout)
+                except Exception:
+                    logger.exception("Error during cleanup for server %s", server)
 
         for server in idle_servers:
-            await self.bots[server].disconnect("Idle timeout")
-            del self.bots[server]
+            bot = self.bots.pop(server, None)
+            if bot is None:
+                continue
+            try:
+                await bot.disconnect("Idle timeout")
+            except Exception:
+                logger.exception("Failed to disconnect idle bot %s", server)
 
     async def cleanup(self) -> None:
         """Clean up idle bots and channels.
@@ -355,23 +407,25 @@ class IRCBotManager:
         while True:
             try:
                 transfer_job = await md5_check_queue.get()
-                logger.debug("Checking MD5 for %s", transfer_job["filename"])
-                md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
+                try:
+                    logger.debug("Checking MD5 for %s", transfer_job["filename"])
+                    md5_hash = await loop.run_in_executor(None, IRCBotManager.get_md5, transfer_job["file_path"])
 
-                for transfer in self.transfers.get(transfer_job["filename"], []):
-                    # Skip records that clearly belong to another job.
-                    if transfer.get("id") is not None and transfer["id"] != transfer_job["id"]:
-                        continue
-                    ensure_transfer_defaults(transfer_job["filename"], transfer)
-                    if transfer["id"] == transfer_job["id"]:
-                        transfer["file_md5"] = md5_hash
-                md5_check_queue.task_done()
-
+                    for transfer in self.transfers.get(transfer_job["filename"], []):
+                        # Skip records that clearly belong to another job.
+                        if transfer.get("id") is not None and transfer["id"] != transfer_job["id"]:
+                            continue
+                        ensure_transfer_defaults(transfer_job["filename"], transfer)
+                        if transfer["id"] == transfer_job["id"]:
+                            transfer["file_md5"] = md5_hash
+                finally:
+                    # task_done pairs with the successful get() above; calling it
+                    # in the outer except could raise ValueError when get() itself failed.
+                    md5_check_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("Failed to process MD5 check job")
-                md5_check_queue.task_done()
 
 
 async def start_background_tasks(app: web.Application) -> None:

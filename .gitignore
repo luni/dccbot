@@ -177,5 +177,8 @@ cython_debug/
 .windsurf/rules/use-uv.md
 
 node_modules/
+# mutmut mutation testing artifacts
+mutants/
 
 # playwright-mcp browser test artifacts
+.playwright-mcp/

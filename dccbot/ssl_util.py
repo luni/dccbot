@@ -82,6 +82,8 @@ def get_or_create_dcc_cert(config: dict[str, Any], cache_dir: Path | None = None
         if cert_path.is_file() and key_path.is_file():
             return str(cert_path), str(key_path)
         logger.warning("Configured dcc_ssl_cert/dcc_ssl_key not found, generating self-signed certificate")
+    elif cert_file or key_file:
+        logger.warning("Only one of dcc_ssl_cert/dcc_ssl_key is configured; both are required. Generating self-signed certificate")
 
     cache = cache_dir or _default_cert_cache_dir()
     cert_path = cache / DEFAULT_CERT_FILE

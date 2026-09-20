@@ -197,7 +197,7 @@ class IRCBot(AioSimpleIRCClient):
             listen_ip = None
 
         port_range = self.server_config.get("passive_dcc_port_range", self.config.get("passive_dcc_port_range"))
-        if port_range and len(port_range) == 2:
+        if isinstance(port_range, (list, tuple)) and len(port_range) == 2:
             try:
                 low = int(port_range[0])
                 high = int(port_range[1])
@@ -210,6 +210,8 @@ class IRCBot(AioSimpleIRCClient):
                 logger.warning("Invalid passive_dcc_port_range %s", port_range)
                 port_range = None
         else:
+            if port_range is not None:
+                logger.warning("Invalid passive_dcc_port_range %s, expected a [low, high] list", port_range)
             port_range = None
         return bool(enabled), listen_ip, port_range
 
@@ -328,11 +330,12 @@ class IRCBot(AioSimpleIRCClient):
     def _expand_channels(self, channels: list[str]) -> dict[str, str]:
         """Expand a channel list with any configured also_join channels."""
         expanded: dict[str, str] = {}
+        also_join = self.server_config.get("also_join", {})
         for channel in channels:
             expanded[channel.lower()] = channel
-            if channel in self.server_config.get("also_join", {}):
-                for also_join_channel in self.server_config["also_join"][channel]:
-                    expanded[also_join_channel.lower()] = also_join_channel
+            # also_join keys are lowercased by config normalization
+            for also_join_channel in also_join.get(channel.lower(), []):
+                expanded[also_join_channel.lower()] = also_join_channel
         return expanded
 
     async def _join_channels(self, channels: list[str]) -> None:
@@ -695,9 +698,11 @@ class IRCBot(AioSimpleIRCClient):
 
         state = LocalFileState(new_path=new_path)
         for path in candidates:
-            if not os.path.exists(path):
+            try:
+                local_size = os.path.getsize(path)
+            except OSError:
+                # File vanished (or is unreadable) between scans; skip it.
                 continue
-            local_size = os.path.getsize(path)
             if local_size > size:
                 logger.warning("Rejected %s: Local file larger than remote file (%d > %d)", filename, local_size, size)
                 state.too_large = True
@@ -802,12 +807,16 @@ class IRCBot(AioSimpleIRCClient):
         peer_port = parsed.peer_port
 
         # check if transfer for same file already running from the same user/server
-        for item in self.bot_manager.transfers.get(filename, []):
+        existing = self.bot_manager.transfers.get(filename, [])
+        if not isinstance(existing, list):
+            existing = []
+        for item in existing:
             if (
-                item["size"] == parsed.size
+                isinstance(item, dict)
+                and item.get("size") == parsed.size
                 and item.get("connected", False)
-                and item.get("nick", "").lower() == nick
-                and item.get("server", "").lower() == self.server
+                and str(item.get("nick") or "").lower() == nick
+                and str(item.get("server") or "").lower() == self.server
             ):
                 logger.warning("Rejected %s: Download of file already in progress", filename)
                 return
@@ -921,21 +930,32 @@ class IRCBot(AioSimpleIRCClient):
         dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
         logger.info("[%s] %s %s (connecting to %s:%d), size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
 
+        # Ensure the download directory exists before the connection is scheduled
+        download_dir = os.path.dirname(download_path)
+        try:
+            if download_dir:
+                os.makedirs(download_dir, exist_ok=True)
+        except OSError as e:
+            logger.error("[%s] Cannot create download directory for %s: %s", nick, filename, e)
+            return
+
         # Create a new DCC connection
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
 
-        # Ensure the download directory exists before the connection is scheduled
-        os.makedirs(os.path.dirname(download_path), exist_ok=True)
-
-        connect_factory = None
-        if use_ssl:
-            # Use a client TLS context. DCC/SDCC does not verify peer identity,
-            # so we disable certificate verification while optionally presenting
-            # our own certificate if one is configured or generated.
-            ssl_context = self._get_dcc_ssl_context(server=False)
-            connect_factory = AioFactory(ssl=ssl_context)
-        else:
-            connect_factory = AioFactory()
+        try:
+            if use_ssl:
+                # Use a client TLS context. DCC/SDCC does not verify peer identity,
+                # so we disable certificate verification while optionally presenting
+                # our own certificate if one is configured or generated.
+                ssl_context = self._get_dcc_ssl_context(server=False)
+                connect_factory = AioFactory(ssl=ssl_context)
+            else:
+                connect_factory = AioFactory()
+        except Exception as e:
+            # The dcc is already registered with the reactor; drop it.
+            logger.error("[%s] Cannot create SSL context for %s: %s", nick, filename, e)
+            dcc.disconnect()
+            return
 
         now = time.time()
 
@@ -993,12 +1013,19 @@ class IRCBot(AioSimpleIRCClient):
         preserved.
 
         """
-        for item in self.bot_manager.transfers.get(filename, []):
+        records = self.bot_manager.transfers.get(filename)
+        if not isinstance(records, list):
+            records = self.bot_manager.transfers[filename] = []
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            start_time = item.get("start_time")
             if (
                 item.get("peer_address") is None
-                and item["start_time"] >= now - 30
-                and item["nick"] == transfer_item["nick"]
-                and item["server"] == transfer_item["server"]
+                and isinstance(start_time, (int, float))
+                and start_time >= now - 30
+                and item.get("nick") == transfer_item["nick"]
+                and item.get("server") == transfer_item["server"]
             ):
                 md5 = item.get("md5")
                 transfer_id = item.get("id")
@@ -1011,9 +1038,7 @@ class IRCBot(AioSimpleIRCClient):
                 if start_time:
                     item["start_time"] = start_time
                 return item
-        if not self.bot_manager.transfers.get(filename):
-            self.bot_manager.transfers[filename] = []
-        self.bot_manager.transfers[filename].append(transfer_item)
+        records.append(transfer_item)
         return transfer_item
 
     def init_passive_dcc_connection(
@@ -1053,8 +1078,24 @@ class IRCBot(AioSimpleIRCClient):
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
 
         async def _setup() -> None:
-            ssl_context = self._get_dcc_ssl_context(server=True) if use_ssl else None
+            local_download_path = file_path or os.path.join(self.download_path, filename)
+            incomplete_suffix = get_incomplete_suffix(self.config)
+            if not file_path and incomplete_suffix:
+                local_download_path += incomplete_suffix
+
+            # Ensure the download directory exists before the listener is
+            # bound and advertised to the peer so failures cannot leak it.
+            download_dir = os.path.dirname(local_download_path)
             try:
+                if download_dir:
+                    os.makedirs(download_dir, exist_ok=True)
+            except OSError as e:
+                logger.error("[%s] Cannot create download directory for %s: %s", nick, filename, e)
+                dcc.disconnect()
+                return
+
+            try:
+                ssl_context = self._get_dcc_ssl_context(server=True) if use_ssl else None
                 if listen_ip and port_range:
                     await dcc.listen(addr=listen_ip, port=port_range, ssl=ssl_context)
                 elif listen_ip:
@@ -1065,27 +1106,26 @@ class IRCBot(AioSimpleIRCClient):
                     await dcc.listen(ssl=ssl_context)
             except Exception as e:
                 logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
+                dcc.disconnect()
                 return
 
             if dcc.localaddress is None or dcc.localport is None:
                 logger.error("Passive DCC listen succeeded but localaddress/localport not set")
+                dcc.disconnect()
                 return
 
-            ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
-            verb = "SSEND" if use_ssl else "SEND"
-            parts = [ip_numstr, str(dcc.localport), str(size)]
-            if token is not None:
-                parts.append(str(token))
-            self.connection.ctcp_reply(nick, _format_dcc_message(verb, filename, *parts))
+            try:
+                ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
+                verb = "SSEND" if use_ssl else "SEND"
+                parts = [ip_numstr, str(dcc.localport), str(size)]
+                if token is not None:
+                    parts.append(str(token))
+                self.connection.ctcp_reply(nick, _format_dcc_message(verb, filename, *parts))
+            except Exception as e:
+                logger.error("[%s] Failed to advertise passive DCC listener for %s: %s", nick, filename, e)
+                dcc.disconnect()
+                return
             logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
-
-            local_download_path = file_path or os.path.join(self.download_path, filename)
-            incomplete_suffix = get_incomplete_suffix(self.config)
-            if not file_path and incomplete_suffix:
-                local_download_path += incomplete_suffix
-
-            # Ensure the download directory exists before the peer connects
-            os.makedirs(os.path.dirname(local_download_path), exist_ok=True)
 
             now = time.time()
             transfer_item = create_transfer(
@@ -1192,13 +1232,18 @@ class IRCBot(AioSimpleIRCClient):
         md5sum = f.group(1).lower()
         now = time.time()
         for filename, transfers in self.bot_manager.transfers.items():
+            if not isinstance(transfers, list):
+                continue
             for transfer in transfers:
+                if not isinstance(transfer, dict):
+                    continue
                 ensure_transfer_defaults(filename, transfer)
+                completed = transfer.get("completed")
                 if (
                     transfer["nick"] == sender
                     and transfer["server"] == self.server
-                    and transfer.get("completed")
-                    and transfer.get("completed", 0) >= now - 30
+                    and isinstance(completed, (int, float))
+                    and completed >= now - 30
                     and not transfer.get("md5")
                 ):
                     transfer["md5"] = md5sum
@@ -1214,12 +1259,21 @@ class IRCBot(AioSimpleIRCClient):
         filename = f.group(2)
         now = time.time()
 
-        if filename not in self.bot_manager.transfers:
-            self.bot_manager.transfers[filename] = []
+        records = self.bot_manager.transfers.get(filename)
+        if not isinstance(records, list):
+            records = self.bot_manager.transfers[filename] = []
 
-        self.bot_manager.transfers[filename].append(
-            create_pending_transfer(filename=filename, nick=sender, server=self.server, md5=f.group(3).lower(), now=now)
-        )
+        # Re-announcements update the existing pending record instead of
+        # appending duplicates that would accumulate until list cleanup.
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            if item.get("peer_address") is None and item.get("nick") == sender and item.get("server") == self.server:
+                item["md5"] = f.group(3).lower()
+                item["start_time"] = now
+                return
+
+        records.append(create_pending_transfer(filename=filename, nick=sender, server=self.server, md5=f.group(3).lower(), now=now))
 
     def _handle_send_denied(self, sender: str, message: str) -> None:
         """Log an XDCC SEND denied notice."""
@@ -1240,6 +1294,8 @@ class IRCBot(AioSimpleIRCClient):
         """
         self.last_active = time.time()
         sender = getattr(event.source, "nick", None) or ""
+        if not event.arguments:
+            return
         message = event.arguments[0]
         normalized_sender = sender.lower()
 
@@ -1269,7 +1325,8 @@ class IRCBot(AioSimpleIRCClient):
         if channel_idle_timeout:
             idle_channels = []
             for channel, last_active in self.joined_channels.items():
-                if now - last_active > channel_idle_timeout:
+                # A non-numeric timestamp is corrupt; treat the channel as idle.
+                if not isinstance(last_active, (int, float)) or now - last_active > channel_idle_timeout:
                     idle_channels.append(channel)
 
             # Part idle channels
@@ -1279,11 +1336,12 @@ class IRCBot(AioSimpleIRCClient):
         for _, resume_queue in self.resume_queue.items():
             for resume_item in list(resume_queue):
                 requested_time = resume_item[-1]
-                if now - requested_time > resume_timeout:
+                if not isinstance(requested_time, (int, float)) or now - requested_time > resume_timeout:
                     resume_queue.remove(resume_item)
 
         # Passive resume queue should stay around at least as long as the listener timeout.
         passive_timeout = max(resume_timeout, self._get_passive_dcc_timeout())
         for key, resume in list(self.passive_resume_queue.items()):
-            if now - resume["requested_time"] > passive_timeout:
+            requested_time = resume.get("requested_time")
+            if not isinstance(requested_time, (int, float)) or now - requested_time > passive_timeout:
                 del self.passive_resume_queue[key]

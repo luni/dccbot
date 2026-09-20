@@ -122,7 +122,9 @@ class AioDCCConnection(irc.client.DCCConnection):
             if transfer_item:
                 transfer_item["error"] = str(e)
                 transfer_item["status"] = "error"
-            self.connected = False
+            # Fire dcc_disconnect so the transfer is finalized and this
+            # connection is removed from the reactor's connection list.
+            self.disconnect()
             return self
 
         self.transport = transport
@@ -233,19 +235,25 @@ class AioDCCConnection(irc.client.DCCConnection):
         self._disconnected = True
         self.connected = False
 
-        try:
-            if hasattr(self, "server") and self.server:
-                self.server.close()
-        except AttributeError:
-            pass
+        server = getattr(self, "server", None)
+        if server is not None:
+            try:
+                server.close()
+            except Exception as e:
+                log.debug("Error closing DCC listener: %s", e)
+
+        transport = getattr(self, "transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception as e:
+                log.debug("Error closing DCC transport: %s", e)
 
         try:
-            self.transport.close()
-        except AttributeError:
-            pass
-
-        self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
-        self.reactor._remove_connection(self)
+            self.reactor._handle_event(self, irc.client.Event("dcc_disconnect", self.peeraddress, "", [message]))
+        finally:
+            # A failing handler must not leave the connection registered.
+            self.reactor._remove_connection(self)
 
     def process_data(self, new_data: bytes) -> None:  # type: ignore
         """Handle incoming data from the `DCCProtocol` connection.
@@ -281,7 +289,13 @@ class AioDCCConnection(irc.client.DCCConnection):
                 arguments,
             )
             event = irc.client.Event(command, prefix, target, arguments)
-            self.reactor._handle_event(self, event)
+            try:
+                self.reactor._handle_event(self, event)
+            except Exception:
+                # A handler failure must not leave a zombie connection behind.
+                log.exception("Error handling DCC event")
+                self.disconnect()
+                return
 
     def privmsg(self, text: str) -> None:
         """Send text to DCC peer.

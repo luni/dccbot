@@ -46,6 +46,8 @@ class TransferHandler:
 
     def _update_progress(self, transfer: dict) -> None:
         """Recalculate and log transfer progress/rate if thresholds are met."""
+        if transfer["size"] <= 0:
+            return
         now = time.time()
         percent = int(100 * (transfer["bytes_received"] + transfer["offset"]) / transfer["size"])
         if transfer["percent"] + 10 > percent and now - transfer["last_progress_update"] < 5:
@@ -70,7 +72,10 @@ class TransferHandler:
         transfer["status"] = status
         transfer["error"] = error
         transfer["connected"] = False
-        dcc.disconnect()
+        try:
+            dcc.disconnect()
+        except Exception:
+            logger.exception("Failed to disconnect DCC connection")
         self.bot.current_transfers.pop(dcc, None)
 
     def _mark_failure(self, transfer: dict, status: str, error: str) -> None:
@@ -85,7 +90,12 @@ class TransferHandler:
         if transfer["bytes_received"] != 0 or transfer.get("offset") or not self.bot.allowed_mimetypes:
             return True
 
-        mime_type = self.bot.mime_checker.from_buffer(data)
+        try:
+            mime_type = self.bot.mime_checker.from_buffer(data)
+        except Exception as e:
+            logger.error("[%s] MIME check failed for %s: %s", transfer["nick"], transfer["filename"], e)
+            self._abort_transfer(dcc, transfer, f"MIME check failed: {e}")
+            return False
         if mime_type in self.bot.allowed_mimetypes:
             return True
 
@@ -124,6 +134,13 @@ class TransferHandler:
         transfer["connected"] = True
         transfer["status"] = "in_progress"
         data = event.arguments[0]
+
+        # A peer sending more than the declared size would grow the file
+        # unboundedly and overflow the 32-bit acknowledgement. Abort instead.
+        expected = transfer["size"] - transfer["offset"] - transfer["bytes_received"]
+        if len(data) > expected:
+            self._abort_transfer(dcc, transfer, f"Peer sent more data than declared ({transfer['size']} bytes)", "failed")
+            return
 
         if not transfer["completed"]:
             self._touch_channel_activity(transfer)
@@ -178,11 +195,15 @@ class TransferHandler:
         if not os.path.exists(file_path):
             self._report_missing_file(transfer, file_path)
         else:
-            file_size = os.path.getsize(file_path)
-            if file_size != transfer["size"]:
-                self._report_size_mismatch(transfer, file_size)
+            try:
+                file_size = os.path.getsize(file_path)
+            except OSError as e:
+                self._mark_failure(transfer, "error", f"Cannot stat {file_path}: {e}")
             else:
-                self._mark_complete(transfer, file_path, transfer_rate)
+                if file_size != transfer["size"]:
+                    self._report_size_mismatch(transfer, file_size)
+                else:
+                    self._mark_complete(transfer, file_path, transfer_rate)
 
         self.bot.current_transfers.pop(dcc, None)
 

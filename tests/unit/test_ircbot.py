@@ -658,6 +658,27 @@ async def test_handle_send_command(bot):
 
 
 @pytest.mark.asyncio
+async def test_handle_send_command_joins_and_maps_channels(bot):
+    """_handle_send_command should join the given channels and map the user."""
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#test": 1.0}
+    data = {
+        "user": "MyUser",
+        "message": "Hello",
+        "channels": ["#test"],
+    }
+
+    with (
+        patch.object(bot, "_join_channels", new_callable=AsyncMock) as mock_join,
+        patch.object(bot, "_update_channel_mapping") as mock_map,
+    ):
+        await bot._handle_send_command(data)
+
+    mock_join.assert_awaited_once_with(["#test"])
+    mock_map.assert_called_once_with("myuser", ["#test"])
+
+
+@pytest.mark.asyncio
 async def test_handle_send_command_no_user(bot):
     """Test _handle_send_command with no user."""
     bot.connection = MagicMock()

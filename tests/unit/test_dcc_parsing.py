@@ -8,6 +8,7 @@ def test_parse_dcc_accept_valid():
     assert parse_dcc_accept('ACCEPT "file.mkv" 5000 1234') == DccAcceptPayload(5000, 1234)
     assert parse_dcc_accept('ACCEPT "file.mkv" 80 0') == DccAcceptPayload(80, 0)
     assert parse_dcc_accept('ACCEPT "file.mkv" 0 1234 491827') == DccAcceptPayload(0, 1234, 491827)
+    assert parse_dcc_accept('ACCEPT "file.mkv" 80 0 0') == DccAcceptPayload(80, 0, 0)
 
 
 def test_parse_dcc_accept_invalid():
@@ -27,6 +28,7 @@ def test_parse_dcc_send_valid_with_token():
     """Test parsing DCC SEND payload with passive token."""
     parsed = parse_dcc_send('SEND "file.mkv" 2130706433 0 1024 491827')
     assert parsed == DccSendPayload("file.mkv", "127.0.0.1", 0, 1024, 491827)
+    assert parse_dcc_send('SEND "file.mkv" 2130706433 0 1024 0') == DccSendPayload("file.mkv", "127.0.0.1", 0, 1024, 0)
 
 
 def test_parse_dcc_send_valid_ipv6():

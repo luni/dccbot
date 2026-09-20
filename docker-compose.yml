@@ -81,3 +81,11 @@ services:
         echo 'iroffer started, tailing logs...' &&
         exec tail -F /config/iroffer.log
       "
+
+  # toxiproxy for network fault-injection tests. Host networking lets
+  # proxies bind localhost ports where pytest runs and reach both the
+  # published ircd port and host-side test peer servers.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    container_name: dccbot-toxiproxy
+    network_mode: host

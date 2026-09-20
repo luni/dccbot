@@ -163,6 +163,8 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 
 The repository includes a full local development and testing setup:
 
-* **Makefile targets**: `make test`, `make test-integration`, `make irc-up`, `make irc-down`, `make validate` (format + lint + complexity + security + type-check + vulture)
-* **Docker Compose**: `docker compose up -d ircd` starts a local InspIRCd test server for integration tests
+* **Makefile targets**: `make test`, `make test-integration`, `make irc-up`, `make irc-down`, `make mutation`, `make validate` (format + lint + complexity + security + type-check + vulture)
+* **Docker Compose**: `docker compose up -d ircd` starts a local InspIRCd test server for integration tests; `make irc-up` additionally starts the iroffer XDCC bot and a toxiproxy sidecar for network fault-injection tests
+* **Mutation testing**: `make mutation` runs mutmut against `dccbot/` (nightly in CI via `.github/workflows/mutation.yml`, results uploaded as an artifact)
+* **Fault injection / negative paths**: `tests/unit/test_fault_injection.py` and `tests/unit/test_negative_paths.py` cover injected filesystem/network/queue failures and malformed inputs; `tests/integration/test_fault_injection.py` injects real network faults (latency, resets, truncation, throttling) via toxiproxy
 * **Dependabot**: configured for pip (weekly) and GitHub Actions (monthly)

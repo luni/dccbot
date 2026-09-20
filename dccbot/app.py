@@ -268,16 +268,17 @@ class WebSocketLogHandler(logging.Handler):
                 continue
 
             payload = json.dumps(log_entry)
-            send_coro = ws.send_str(payload)
             try:
                 running_loop = asyncio.get_running_loop()
             except RuntimeError:
                 running_loop = None
 
             if running_loop and running_loop is self.event_loop:
-                asyncio.create_task(send_coro)
+                send_task = asyncio.create_task(ws.send_str(payload))
+                # Consume send failures so they are not logged as unretrieved.
+                send_task.add_done_callback(lambda t: t.cancelled() or t.exception())
             elif self.event_loop and self.event_loop.is_running():
-                asyncio.run_coroutine_threadsafe(send_coro, self.event_loop)
+                asyncio.run_coroutine_threadsafe(ws.send_str(payload), self.event_loop)
 
 
 class IRCBotAPI:
@@ -337,7 +338,10 @@ class IRCBotAPI:
         """Broadcast current transfer status to all websocket clients."""
         try:
             while True:
-                await self._broadcast_transfers_to_clients()
+                try:
+                    await self._broadcast_transfers_to_clients()
+                except Exception:
+                    logger.exception("Error broadcasting transfer snapshot")
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
@@ -354,7 +358,7 @@ class IRCBotAPI:
                 continue
             try:
                 await ws.send_str(message)
-            except ConnectionResetError:
+            except ConnectionError:
                 self.websockets.discard(ws)
 
     async def _broadcast_transfers_to_clients(self) -> None:
@@ -371,9 +375,15 @@ class IRCBotAPI:
             transfers_data = {}
 
         for filename, transfers in transfers_data.items():
+            if not isinstance(transfers, list):
+                continue
             for transfer in transfers:
-                ensure_transfer_defaults(filename, transfer, now=now)
-                speed, speed_avg = transfer_speeds(transfer, now)
+                try:
+                    ensure_transfer_defaults(filename, transfer, now=now)
+                    speed, speed_avg = transfer_speeds(transfer, now)
+                except Exception:
+                    logger.exception("Skipping malformed transfer record for %s", filename)
+                    continue
 
                 peer_address = transfer.get("peer_address")
                 peer_port = transfer.get("peer_port")
@@ -592,7 +602,7 @@ class IRCBotAPI:
     def _read_html_file(self, filename: str) -> web.Response:
         """Serve an HTML file from the static directory, or raise 404."""
         fullpath = (self.static_dir / filename).resolve()
-        if not str(fullpath).startswith(str(self.static_dir.resolve())) or not fullpath.exists():
+        if not fullpath.is_relative_to(self.static_dir.resolve()) or not fullpath.is_file():
             raise web.HTTPNotFound()
 
         with open(fullpath, encoding="utf-8") as f:
