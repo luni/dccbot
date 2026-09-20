@@ -54,6 +54,31 @@ describe("userscript on nibl.co.uk", () => {
     });
   });
 
+  test("clicking a notice dismisses it before the timeout", () => {
+    jest.useFakeTimers();
+    try {
+      loadScript();
+      const btn = Array.from(document.querySelectorAll("button")).find(
+        (b) => b.textContent.trim() === "Down"
+      );
+      btn.click();
+
+      // GM_xmlhttpRequest stub fires onerror -> error notice appears
+      const notice = document.querySelector(".dccbot-notice");
+      expect(notice).not.toBeNull();
+      expect(notice.textContent).toContain("[DCCBOT] Failed");
+
+      notice.click();
+      expect(document.querySelector(".dccbot-notice")).toBeNull();
+
+      // no stray timer should recreate or error after dismissal
+      jest.advanceTimersByTime(10000);
+      expect(document.querySelector(".dccbot-notice")).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test("batch download groups checked packs per bot", () => {
     loadScript();
     document.getElementById("copy-as-batch").click();

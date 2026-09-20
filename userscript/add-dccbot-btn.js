@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-09-20-1
+// @version      2026-09-20-3
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -15,6 +15,8 @@
 // @match        https://www.xdcc.info/*
 // @match        https://skullxdcc.com/*
 // @match        https://www.skullxdcc.com/*
+// @match        https://xdccsearch.com/*
+// @match        https://www.xdccsearch.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
 // @grant        GM_xmlhttpRequest
@@ -169,6 +171,7 @@
         if (!message) return;
         const container = getNoticeContainer();
         const note = document.createElement('div');
+        note.className = 'dccbot-notice';
         note.textContent = message;
         note.style.padding = '8px 10px';
         note.style.borderRadius = '6px';
@@ -177,6 +180,8 @@
         note.style.wordBreak = 'break-word';
         note.style.boxShadow = '0 4px 14px rgba(0,0,0,0.22)';
         note.style.color = '#fff';
+        note.style.cursor = 'pointer';
+        note.title = 'Click to dismiss';
         if (kind === 'error') {
             note.style.background = '#b81d13';
         } else if (kind === 'success') {
@@ -185,12 +190,18 @@
             note.style.background = '#2e3238';
         }
         container.appendChild(note);
-        setTimeout(function () {
+        let dismissed = false;
+        const dismiss = function () {
+            if (dismissed) return;
+            dismissed = true;
+            clearTimeout(timer);
             note.remove();
             if (container.childElementCount === 0) {
                 container.remove();
             }
-        }, timeoutMs || 5000);
+        };
+        const timer = setTimeout(dismiss, timeoutMs || 5000);
+        note.addEventListener('click', dismiss);
     }
 
     function formatMsgSummary(server, channel, user, message) {
@@ -1185,6 +1196,40 @@
         observeMutations(document.body, processSkullRows);
     }
 
+    function add_button_xdccsearch() {
+        function processSearchRows() {
+            document.querySelectorAll('table').forEach(function (table) {
+                const headRow = table.querySelector('thead tr');
+                if (headRow && !headRow.querySelector('th.dccbot-action')) {
+                    const th = document.createElement('th');
+                    th.className = 'dccbot-action';
+                    th.textContent = 'DL';
+                    headRow.appendChild(th);
+                }
+            });
+
+            processRowsWithButtons('table tbody tr', function (row) {
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 8) return null;
+                return {
+                    server: mapNetworkToServer(cells[0].textContent),
+                    channel: normalizeChannel(cells[1].textContent),
+                    bot: (cells[2].textContent || '').trim(),
+                    pack: extractPackNumber(cells[3].textContent)
+                };
+            }, function (row, btn) {
+                const btnCell = document.createElement('td');
+                btnCell.className = 'dccbot-action';
+                btnCell.appendChild(btn);
+                row.appendChild(btnCell);
+            });
+        }
+
+        processSearchRows();
+        // Observe <body>: results render inside a chat view that re-renders.
+        observeMutations(document.body, processSearchRows);
+    }
+
     const hostHandlers = {
         'www.xdcc.eu': add_button_xdcc_eu,
         'nibl.co.uk': add_button_nibl,
@@ -1196,7 +1241,9 @@
         'xdcc.info': add_button_xdcc_info,
         'www.xdcc.info': add_button_xdcc_info,
         'skullxdcc.com': add_button_skullxdcc,
-        'www.skullxdcc.com': add_button_skullxdcc
+        'www.skullxdcc.com': add_button_skullxdcc,
+        'xdccsearch.com': add_button_xdccsearch,
+        'www.xdccsearch.com': add_button_xdccsearch
     };
 
     const handler = hostHandlers[window.location.hostname];
