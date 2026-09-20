@@ -132,7 +132,7 @@ A Violentmonkey userscript is provided to add download buttons to popular XDCC s
 * xdcc.animk.info
 * xdcc-search.com
 * xdcc.info
-* sunxdcc.com
+* skullxdcc.com
 
 #### Installation
 

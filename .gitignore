@@ -177,3 +177,5 @@ cython_debug/
 .windsurf/rules/use-uv.md
 
 node_modules/
+
+# playwright-mcp browser test artifacts

@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-09-10
+// @version      2026-09-20
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -13,7 +13,8 @@
 // @match        https://xdcc-search.com/*
 // @match        https://xdcc.info/*
 // @match        https://www.xdcc.info/*
-// @match        https://sunxdcc.com/*
+// @match        https://skullxdcc.com/*
+// @match        https://www.skullxdcc.com/*
 // @downloadURL  https://raw.githubusercontent.com/luni/dccbot/refs/heads/main/userscript/add-dccbot-btn.js
 // @connect      *
 // @grant        GM_xmlhttpRequest
@@ -761,6 +762,15 @@
         return "irc." + cleaned + ".net";
     }
 
+    function processRowsWithButtons(rowSelector, extractMeta, mountBtn) {
+        document.querySelectorAll(rowSelector).forEach(function (row) {
+            if (row.querySelector('.dccbot-btn')) return;
+            const meta = extractMeta(row);
+            if (!meta || !meta.server || !meta.channel || !meta.bot || !meta.pack) return;
+            mountBtn(row, get_download_btn(meta.server, meta.channel, meta.bot, meta.pack));
+        });
+    }
+
     function add_button_xdcc_eu() {
         const mainContainer = document.getElementsByClassName('container')[0];
         const mainColumn = document.getElementsByClassName('twelve')[0];
@@ -835,7 +845,7 @@
         }
 
         for (const copy_btn of document.querySelectorAll("button.copy-data")) {
-            copy_btn.className = copy_btn.className.replace('copy-data ', '');
+            copy_btn.classList.remove('copy-data');
             copy_btn.innerHTML = 'Down';
             copy_btn.onclick = handleNiblButtonClick;
         }
@@ -899,9 +909,6 @@
         window.addEventListener('popstate', scheduleProcess);
 
         function processAnimkRows() {
-            const rows = document.querySelectorAll('#listtable tbody tr');
-            if (rows.length === 0) return;
-
             // Get server and channel from page text
             const bodyText = document.body.textContent;
             const serverMatch = bodyText.match(/irc\.([a-z.]+)/i);
@@ -909,19 +916,16 @@
             const server = serverMatch ? 'irc.' + serverMatch[1] : 'irc.xertion.org';
             const channel = channelMatch ? normalizeChannel(channelMatch[1]) : '#MK';
 
-            for (const row of rows) {
-                if (row.querySelector('.dccbot-btn')) continue; // Already processed
-
+            processRowsWithButtons('#listtable tbody tr', function (row) {
                 const cells = row.querySelectorAll('td');
-                if (cells.length < 4) continue;
-
-                const botname = cells[0].textContent.trim();
-                const packnum = cells[1].textContent.trim();
-
-                const btnCell = document.createElement('td');
-                btnCell.className = 'number';
-                const btn = get_download_btn(server, channel, botname, packnum);
-
+                if (cells.length < 4) return null;
+                return {
+                    server: server,
+                    channel: channel,
+                    bot: cells[0].textContent.trim(),
+                    pack: cells[1].textContent.trim()
+                };
+            }, function (row, btn) {
                 const stopRowPrompt = function (evt) {
                     evt.preventDefault();
                     if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
@@ -932,9 +936,11 @@
                     btn.addEventListener(evtName, stopRowPrompt, true);
                 });
 
+                const btnCell = document.createElement('td');
+                btnCell.className = 'number';
                 btnCell.appendChild(btn);
                 row.appendChild(btnCell);
-            }
+            });
         }
     }
 
@@ -1107,113 +1113,65 @@
 
     function add_button_xdcc_info() {
         function processInfoRows() {
-            const rows = document.querySelectorAll('table.pack-table tbody tr');
-            rows.forEach(function (row) {
-                if (row.querySelector('.dccbot-btn')) return;
-
+            processRowsWithButtons('table.pack-table tbody tr', function (row) {
                 const d = row.dataset;
-                const botname = (d.bot || '').trim();
-                const packnum = extractPackNumber(d.packNum);
-                const server = (d.networkAddress || '').trim();
-                const channel = normalizeChannel(d.channel || '');
-
-                if (!botname || !packnum || !server || !channel) return;
-
+                return {
+                    server: (d.networkAddress || '').trim(),
+                    channel: normalizeChannel(d.channel || ''),
+                    bot: (d.bot || '').trim(),
+                    pack: extractPackNumber(d.packNum)
+                };
+            }, function (row, btn) {
                 const actionsCell = row.querySelector('.td-actions');
-                if (!actionsCell) return;
-
-                const btn = get_download_btn(server, channel, botname, packnum);
-                actionsCell.appendChild(btn);
+                if (actionsCell) actionsCell.appendChild(btn);
             });
         }
 
         processInfoRows();
 
         const table = document.querySelector('table.pack-table');
-        if (table) {
-            observeMutations(table, processInfoRows);
-        }
+        observeMutations((table && table.parentElement) || document.body, processInfoRows);
     }
 
-    function add_button_sunxdcc() {
-        function processSunxdccRows() {
-            const resultsDiv = document.querySelector('.results');
-            if (!resultsDiv) return;
+    function add_button_skullxdcc() {
+        function processSkullRows() {
+            const headRow = document.querySelector('table thead tr');
+            if (headRow && !headRow.querySelector('th.dccbot-action')) {
+                const th = document.createElement('th');
+                th.className = 'dccbot-action';
+                th.textContent = 'DL';
+                headRow.appendChild(th);
+            }
 
-            const tables = Array.from(resultsDiv.querySelectorAll('.table'));
-            let currentServer = null;
-            let currentChannel = null;
-            let currentBot = null;
-            let currentHeaderTable = null;
+            processRowsWithButtons('table tbody tr', function (row) {
+                const networkCell = row.querySelector('td.network');
+                const channelCell = row.querySelector('td.channel');
+                const botCell = row.querySelector('td.bot');
+                const packCell = row.querySelector('td.pack');
+                if (!networkCell || !channelCell || !botCell || !packCell) return null;
 
-            tables.forEach(function (table) {
-                const netCell = table.querySelector('.cell.net');
-                if (netCell) {
-                    const m = netCell.textContent.match(/Network:\s*(.+)/i);
-                    if (m) currentServer = m[1].trim();
-                }
+                const channelLink = channelCell.querySelector('a[href^="irc://"]');
+                const meta = channelLink
+                    ? parseIrcTarget(channelLink.getAttribute('href') || '')
+                    : { server: null, channel: null };
 
-                const chanCell = table.querySelector('.cell.chan');
-                if (chanCell) {
-                    const a = chanCell.querySelector('a[href^="irc://"]');
-                    if (a) {
-                        const parsed = a.getAttribute('href').match(/^irc:\/\/([^/]+)\/(?:#)?(.+)$/i);
-                        if (parsed) {
-                            currentServer = parsed[1];
-                            currentChannel = normalizeChannel(parsed[2]);
-                        }
-                    }
-                }
-
-                const botCell = table.querySelector('.cell.bot');
-                if (botCell) {
-                    const m = botCell.textContent.match(/Bot:\s*(.+)/i);
-                    if (m) currentBot = m[1].trim();
-                }
-
-                const hasPackHeader = table.querySelector('.cell.packnum') && !table.querySelector('.cell.packnum.val');
-                if (hasPackHeader) {
-                    currentHeaderTable = table;
-                }
-
-                const packCell = table.querySelector('.cell.packnum.val');
-                if (packCell && currentServer && currentChannel && currentBot) {
-                    if (table.querySelector('.dccbot-btn')) return;
-
-                    const a = packCell.querySelector('a.msgPrompt');
-                    const packnum = a ? extractPackNumber(a.dataset.packnum) : '';
-                    if (!packnum) return;
-
-                    if (currentHeaderTable && !currentHeaderTable.querySelector('.cell.dccbot-action')) {
-                        const fnameHeader = currentHeaderTable.querySelector('.cell.fname');
-                        if (fnameHeader) {
-                            const actionHeader = document.createElement('div');
-                            actionHeader.className = 'cell dccbot-action';
-                            actionHeader.textContent = 'Down';
-                            fnameHeader.insertAdjacentElement('afterend', actionHeader);
-                        }
-                    }
-
-                    const fnameCell = table.querySelector('.cell.fname.val');
-                    if (fnameCell) {
-                        const btn = get_download_btn(currentServer, currentChannel, currentBot, packnum);
-                        const btnCell = document.createElement('div');
-                        btnCell.className = 'cell val dccbot-action';
-                        btnCell.appendChild(btn);
-                        fnameCell.insertAdjacentElement('afterend', btnCell);
-                    } else {
-                        const btn = get_download_btn(currentServer, currentChannel, currentBot, packnum);
-                        packCell.appendChild(btn);
-                    }
-                }
+                return {
+                    server: meta.server || (networkCell.getAttribute('title') || networkCell.textContent || '').trim(),
+                    channel: meta.channel || normalizeChannel(channelCell.textContent),
+                    bot: (botCell.textContent || '').trim(),
+                    pack: extractPackNumber(packCell.textContent)
+                };
+            }, function (row, btn) {
+                const btnCell = document.createElement('td');
+                btnCell.className = 'dccbot-action';
+                btnCell.appendChild(btn);
+                row.appendChild(btnCell);
             });
         }
 
-        processSunxdccRows();
-        const resultsDiv = document.querySelector('.results');
-        if (resultsDiv) {
-            observeMutations(resultsDiv, processSunxdccRows);
-        }
+        processSkullRows();
+        const wrapper = document.querySelector('.results-wrapper');
+        observeMutations(wrapper || document.body, processSkullRows);
     }
 
     const hostHandlers = {
@@ -1224,8 +1182,10 @@
         'www.xdcc.rocks': add_button_xdcc_rocks,
         'xdcc-search.com': add_button_xdcc_search,
         'www.xdcc-search.com': add_button_xdcc_search,
+        'xdcc.info': add_button_xdcc_info,
         'www.xdcc.info': add_button_xdcc_info,
-        'sunxdcc.com': add_button_sunxdcc
+        'skullxdcc.com': add_button_skullxdcc,
+        'www.skullxdcc.com': add_button_skullxdcc
     };
 
     const handler = hostHandlers[window.location.hostname];
