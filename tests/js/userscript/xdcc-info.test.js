@@ -79,6 +79,32 @@ describe("userscript on www.xdcc.info", () => {
     });
   });
 
+  test("re-injects buttons when the results container is replaced", async () => {
+    // The language filter re-renders the whole results container, detaching
+    // the node the observer was watching.
+    document.body.innerHTML = `
+      <div class="results"><table class="pack-table"><tbody>
+        ${ROW("BotA", "1", "irc.rizon.net", "#chan")}
+      </tbody></table></div>`;
+    loadScript();
+    expect(dccbotButtons()).toHaveLength(1);
+
+    document.querySelector(".results").outerHTML = `
+      <div class="results"><table class="pack-table"><tbody>
+        ${ROW("NewBot", "42", "irc.abjects.net", "#beast-xdcc")}
+      </tbody></table></div>`;
+    await new Promise((r) => setTimeout(r, 0));
+
+    const buttons = dccbotButtons();
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].dataset).toMatchObject({
+      server: "irc.abjects.net",
+      channel: "#beast-xdcc",
+      bot: "NewBot",
+      pack: "42",
+    });
+  });
+
   test("runs on the bare xdcc.info domain too", () => {
     // hostname is fixed by the environment URL; covered by the dispatch table
     // indirectly — see hostHandlers for 'xdcc.info'.

@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-09-20
+// @version      2026-09-20-1
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -139,7 +139,11 @@
 
     function observeMutations(target, onMutation, options) {
         if (!target) return null;
-        const observer = new MutationObserver(onMutation);
+        const observer = new MutationObserver(function () {
+            // Queued callbacks can fire during page unload/teardown.
+            if (typeof document === "undefined" || !document.body) return;
+            onMutation();
+        });
         observer.observe(target, options || { childList: true, subtree: true });
         return observer;
     }
@@ -891,7 +895,9 @@
                 return;
             }
 
-            observeMutations(tableBody, scheduleProcess);
+            // Observe <body>: the results table may be replaced on re-render,
+            // which would leave an observer on a detached node dead.
+            observeMutations(document.body, scheduleProcess);
             scheduleProcess();
         }
 
@@ -945,11 +951,11 @@
     }
 
     function add_button_xdcc_rocks() {
-        const resultsRoot = document.querySelector('.results');
-        if (!resultsRoot) return;
-
-        observeMutations(resultsRoot, function () {
-            if (resultsRoot.querySelector('tr.font2_bg0_bg1')) {
+        // Observe <body>: the results container may be replaced on re-render,
+        // which would leave an observer on a detached node dead.
+        observeMutations(document.body, function () {
+            const resultsRoot = document.querySelector('.results');
+            if (resultsRoot && resultsRoot.querySelector('tr.font2_bg0_bg1')) {
                 processRocksTable();
             }
         });
@@ -992,7 +998,8 @@
         }
 
         function processRocksTable() {
-            const table = resultsRoot.querySelector('table');
+            const resultsRoot = document.querySelector('.results');
+            const table = resultsRoot ? resultsRoot.querySelector('table') : null;
             if (!table) return;
 
             let currentServer = null;
@@ -1107,8 +1114,9 @@
 
         processCards();
 
-        const resultsContainer = document.querySelector(".results-container");
-        observeMutations(resultsContainer || document.body, processCards);
+        // Observe <body>: the results container may be replaced on re-render,
+        // which would leave an observer on a detached node dead.
+        observeMutations(document.body, processCards);
     }
 
     function add_button_xdcc_info() {
@@ -1129,8 +1137,10 @@
 
         processInfoRows();
 
-        const table = document.querySelector('table.pack-table');
-        observeMutations((table && table.parentElement) || document.body, processInfoRows);
+        // Observe <body>: the pack table is replaced when filters (e.g.
+        // language) re-render, which would leave an observer on a detached
+        // node dead.
+        observeMutations(document.body, processInfoRows);
     }
 
     function add_button_skullxdcc() {
@@ -1170,8 +1180,9 @@
         }
 
         processSkullRows();
-        const wrapper = document.querySelector('.results-wrapper');
-        observeMutations(wrapper || document.body, processSkullRows);
+        // Observe <body>: the results wrapper may be replaced on re-render,
+        // which would leave an observer on a detached node dead.
+        observeMutations(document.body, processSkullRows);
     }
 
     const hostHandlers = {
