@@ -1,4 +1,4 @@
-# Dockerfile for iroffer - official stable version from https://iroffer.net
+# Dockerfile for iroffer - source from https://github.com/dinoex/iroffer-dinoex
 FROM alpine:latest
 
 # Install dependencies
@@ -8,9 +8,9 @@ RUN apk add --no-cache \
     openssl-dev \
     tar
 
-# Build iroffer from official stable tarball
+# Build iroffer from GitHub tag tarball
 WORKDIR /tmp
-RUN curl -L -o iroffer.tar.gz "https://iroffer.net/iroffer-dinoex-3.34.tar.gz" && \
+RUN curl -L -o iroffer.tar.gz "https://github.com/dinoex/iroffer-dinoex/archive/refs/tags/mod3_34.tar.gz" && \
     tar xzf iroffer.tar.gz && \
     cd iroffer-dinoex-* && \
     ./Configure -curl -ssl && \
