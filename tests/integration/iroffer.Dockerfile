@@ -8,9 +8,9 @@ RUN apk add --no-cache \
     openssl-dev \
     tar
 
-# Build iroffer from GitHub tag tarball
+# Build iroffer from GitHub - current unstable (main @ c4dbbee)
 WORKDIR /tmp
-RUN curl -L -o iroffer.tar.gz "https://github.com/dinoex/iroffer-dinoex/archive/refs/tags/mod3_34.tar.gz" && \
+RUN curl -L -o iroffer.tar.gz "https://github.com/dinoex/iroffer-dinoex/archive/c4dbbeeeedcd53dadeb058255d0e85accdad7d82.tar.gz" && \
     tar xzf iroffer.tar.gz && \
     cd iroffer-dinoex-* && \
     ./Configure -curl -ssl && \
