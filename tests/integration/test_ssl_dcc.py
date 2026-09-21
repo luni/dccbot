@@ -11,6 +11,47 @@ from unittest.mock import MagicMock
 import pytest
 
 
+def _ready_listener(bot) -> Any | None:
+    """Return the passive DCC listener once it has a bound port."""
+    if not bot.current_transfers:
+        return None
+    dcc = next(iter(bot.current_transfers))
+    return dcc if getattr(dcc, "localport", None) else None
+
+
+async def _poll(predicate, attempts: int = 50) -> Any | None:
+    """Poll ``predicate`` until it returns a truthy value."""
+    for _ in range(attempts):
+        result = predicate()
+        if result:
+            return result
+        await asyncio.sleep(0.05)
+    return None
+
+
+async def _send_and_close(dcc, payload: bytes) -> None:
+    """Connect to the listener over TLS, send ``payload``, and close."""
+    # Connect as a TLS client. DCC/SDCC does not verify certificates.
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_ctx.check_hostname = False
+    client_ctx.verify_mode = ssl.CERT_NONE
+
+    reader, writer = await asyncio.open_connection(dcc.localaddress, dcc.localport, ssl=client_ctx)
+    writer.write(payload)
+    await writer.drain()
+    # DCC SEND sends a 4-byte cumulative ACK. Read it before closing to avoid
+    # a TLS close_notify race where the ACK arrives after shutdown starts.
+    try:
+        await asyncio.wait_for(reader.read(4), timeout=0.5)
+    except asyncio.TimeoutError:
+        pass
+    writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
+    except (asyncio.TimeoutError, ssl.SSLError):
+        pass
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_passive_ssend_download(irc_bot_factory, irc_bot_manager, tmp_path):
@@ -34,13 +75,7 @@ async def test_passive_ssend_download(irc_bot_factory, irc_bot_manager, tmp_path
     bot.on_dcc_send(bot.connection, event, True)
 
     # Wait for the TLS listener to be ready.
-    dcc = None
-    for _ in range(50):
-        if bot.current_transfers:
-            dcc = list(bot.current_transfers.keys())[0]
-            if getattr(dcc, "localport", None):
-                break
-        await asyncio.sleep(0.05)
+    dcc = await _poll(lambda: _ready_listener(bot))
 
     assert dcc is not None, "passive listener was not created"
     assert dcc.localport is not None
@@ -48,31 +83,10 @@ async def test_passive_ssend_download(irc_bot_factory, irc_bot_manager, tmp_path
 
     transfer = list(bot.current_transfers.values())[0]
 
-    # Connect as a TLS client. DCC/SDCC does not verify certificates.
-    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    client_ctx.check_hostname = False
-    client_ctx.verify_mode = ssl.CERT_NONE
-
-    reader, writer = await asyncio.open_connection(dcc.localaddress, dcc.localport, ssl=client_ctx)
-    writer.write(b"hello world")
-    await writer.drain()
-    # DCC SEND sends a 4-byte cumulative ACK. Read it before closing to avoid
-    # a TLS close_notify race where the ACK arrives after shutdown starts.
-    try:
-        await asyncio.wait_for(reader.read(4), timeout=0.5)
-    except asyncio.TimeoutError:
-        pass
-    writer.close()
-    try:
-        await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
-    except (asyncio.TimeoutError, ssl.SSLError):
-        pass
+    await _send_and_close(dcc, b"hello world")
 
     # Wait for the transfer to finalize.
-    for _ in range(50):
-        if transfer.get("status") in ("completed", "error"):
-            break
-        await asyncio.sleep(0.05)
+    await _poll(lambda: transfer.get("status") in ("completed", "error"))
 
     assert transfer["ssl"] is True
     assert transfer["filename"] == "hello.txt"
