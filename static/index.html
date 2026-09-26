@@ -97,6 +97,10 @@
       align-items: start;
     }
 
+    .layout .full-width {
+      grid-column: 1 / -1;
+    }
+
     .panel {
       background: var(--panel);
       border: 1px solid var(--panel-border);
@@ -138,13 +142,15 @@
       display: none;
     }
 
-    .transfer-list {
+    .transfer-list,
+    .queue-list {
       display: flex;
       flex-direction: column;
       gap: 10px;
     }
 
-    .transfer {
+    .transfer,
+    .queue-item {
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       padding: 12px;
@@ -154,14 +160,16 @@
       background: rgba(0, 0, 0, 0.2);
     }
 
-    .transfer-header {
+    .transfer-header,
+    .queue-header {
       display: flex;
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
     }
 
-    .transfer-title {
+    .transfer-title,
+    .queue-title {
       margin: 0;
       font-size: 16px;
       color: #fff;
@@ -206,7 +214,8 @@
       opacity: 0.65;
     }
 
-    .transfer-details {
+    .transfer-details,
+    .queue-details {
       display: flex;
       flex-wrap: wrap;
       gap: 8px 16px;
@@ -393,6 +402,17 @@
         <input type="text" id="command-input" placeholder="Enter a command (e.g., /help)">
       </div>
     </section>
+    <section class="panel full-width" id="queue-panel">
+      <div class="panel-head">
+        <h2>Send Queue</h2>
+        <button class="panel-toggle" id="toggle-queue" type="button" aria-controls="queue-content" aria-expanded="true">Collapse</button>
+      </div>
+      <div class="panel-content" id="queue-content">
+        <div class="queue-list" id="queue-list">
+          <p class="placeholder">No queued sends.</p>
+        </div>
+      </div>
+    </section>
   </div>
   <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
@@ -402,6 +422,7 @@
     const PANEL_STATE_KEY = "dccbot.panel_state";
     const MAX_COMMAND_HISTORY = 20;
     const transferList = document.getElementById("transfer-list");
+    const queueList = document.getElementById("queue-list");
     const logsElement = document.getElementById("logs");
     const commandInput = document.getElementById("command-input");
     const connectionStatus = document.getElementById("connection-status");
@@ -409,8 +430,10 @@
     const toastContainer = document.getElementById("toast-container");
     const transfersPanel = document.getElementById("transfers-panel");
     const logPanel = document.getElementById("log-panel");
+    const queuePanel = document.getElementById("queue-panel");
     const toggleTransfers = document.getElementById("toggle-transfers");
     const toggleLog = document.getElementById("toggle-log");
+    const toggleQueue = document.getElementById("toggle-queue");
     const commandHistory = loadCommandHistory();
     let historyIndex = commandHistory.length;
     let socket = null;
@@ -675,6 +698,70 @@
       logsElement.scrollTop = logsElement.scrollHeight;
     }
 
+    function sendCommand(command) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        appendCommandResponse({ status: "error", message: "WebSocket is not connected." });
+        return;
+      }
+      socket.send(command);
+    }
+
+    function formatQueuedAgo(queuedAt) {
+      if (!queuedAt) {
+        return "-";
+      }
+      const seconds = Math.max(0, Math.round(Date.now() / 1000 - Number(queuedAt)));
+      return `${seconds}s ago`;
+    }
+
+    function renderQueues(queues) {
+      queueList.replaceChildren();
+      const items = [];
+      (Array.isArray(queues) ? queues : []).forEach((queue) => {
+        (queue.items || []).forEach((item, idx) => {
+          items.push({ server: queue.server, nick: queue.target, index: idx + 1, ...item });
+        });
+      });
+
+      if (items.length === 0) {
+        addTextElement(queueList, "p", "placeholder", "No queued sends.");
+        return;
+      }
+
+      items.forEach((item) => {
+        const queueItem = document.createElement("article");
+        queueItem.className = "queue-item";
+
+        const headerDiv = document.createElement("div");
+        headerDiv.className = "queue-header";
+        queueItem.appendChild(headerDiv);
+
+        addTextElement(headerDiv, "h3", "queue-title", item.message || "(no message)");
+
+        const btn = document.createElement("button");
+        btn.className = "cancel-btn";
+        btn.type = "button";
+        btn.textContent = "Cancel";
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          sendCommand(`/cancelqueue ${item.server} ${item.nick} ${item.index}`);
+        });
+        headerDiv.appendChild(btn);
+
+        const detailsDiv = document.createElement("div");
+        detailsDiv.className = "queue-details";
+        const channels = Array.isArray(item.channels) && item.channels.length ? item.channels.join(", ") : "-";
+        addTextElement(detailsDiv, "div", "", `Server: ${item.server}`);
+        addTextElement(detailsDiv, "div", "", `Target: ${item.nick}`);
+        addTextElement(detailsDiv, "div", "", `Channels: ${channels}`);
+        addTextElement(detailsDiv, "div", "", `Queued: ${formatQueuedAgo(item.queued_at)}`);
+        queueItem.appendChild(detailsDiv);
+
+        queueList.appendChild(queueItem);
+      });
+    }
+
     function scheduleReconnect() {
       if (reconnectTimer !== null) {
         return;
@@ -696,6 +783,7 @@
       socket = createDccbotSocket({
         onLog: appendLogLine,
         onTransfers: ({ transfers }) => renderTransfers(transfers),
+        onQueues: ({ queues }) => renderQueues(queues),
         onCommandResponse: appendCommandResponse,
         onOpen: () => {
           cancelReconnectTimer();
@@ -746,11 +834,7 @@
         }
         saveCommandHistory();
         historyIndex = commandHistory.length;
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          appendCommandResponse({ status: "error", message: "WebSocket is not connected." });
-          return;
-        }
-        socket.send(command);
+        sendCommand(command);
         commandInput.value = "";
       }
     });
@@ -767,6 +851,13 @@
       const nextCollapsed = currentlyExpanded;
       setPanelCollapsed(logPanel, toggleLog, nextCollapsed);
       savePanelState("log", nextCollapsed);
+    });
+
+    toggleQueue.addEventListener("click", () => {
+      const currentlyExpanded = toggleQueue.getAttribute("aria-expanded") === "true";
+      const nextCollapsed = currentlyExpanded;
+      setPanelCollapsed(queuePanel, toggleQueue, nextCollapsed);
+      savePanelState("queue", nextCollapsed);
     });
 
     reconnectBtn.addEventListener("click", () => {
@@ -792,8 +883,12 @@
     const logCollapsed = Object.prototype.hasOwnProperty.call(panelState, "log")
       ? Boolean(panelState.log)
       : isMobile;
+    const queueCollapsed = Object.prototype.hasOwnProperty.call(panelState, "queue")
+      ? Boolean(panelState.queue)
+      : false;
     setPanelCollapsed(transfersPanel, toggleTransfers, transfersCollapsed);
     setPanelCollapsed(logPanel, toggleLog, logCollapsed);
+    setPanelCollapsed(queuePanel, toggleQueue, queueCollapsed);
 
     connectSocket();
   </script>

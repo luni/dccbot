@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 TRANSFER_STATUSES = {"started", "in_progress", "completed", "failed", "error", "cancelled"}
+TERMINAL_TRANSFER_STATUSES = {"completed", "failed", "error", "cancelled"}
 
 # Static defaults shared by all transfer records. Dynamic defaults (id,
 # timestamps, filename, status) are filled in by the helpers below.

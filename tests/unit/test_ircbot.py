@@ -1,6 +1,7 @@
 """Tests for IRCBot class."""
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import time
@@ -639,68 +640,6 @@ def test_on_bannedfromchan_tracks_banned_channels(bot):
 
     mock_store.assert_called_once_with(event, "Banned from channel")
     assert "#chan" in bot.banned_channels
-
-
-@pytest.mark.asyncio
-async def test_handle_send_command(bot):
-    """Test _handle_send_command."""
-    bot.connection = MagicMock()
-    data = {
-        "user": "MyUser",
-        "message": "Hello",
-        "channels": ["#test"],
-    }
-
-    with patch.object(bot, "_join_channels", new_callable=AsyncMock):
-        await bot._handle_send_command(data)
-        bot.connection.privmsg.assert_called_once_with("myuser", "Hello")
-        assert "myuser" in bot.bot_channel_map
-
-
-@pytest.mark.asyncio
-async def test_handle_send_command_joins_and_maps_channels(bot):
-    """_handle_send_command should join the given channels and map the user."""
-    bot.connection = MagicMock()
-    bot.joined_channels = {"#test": 1.0}
-    data = {
-        "user": "MyUser",
-        "message": "Hello",
-        "channels": ["#test"],
-    }
-
-    with (
-        patch.object(bot, "_join_channels", new_callable=AsyncMock) as mock_join,
-        patch.object(bot, "_update_channel_mapping") as mock_map,
-    ):
-        await bot._handle_send_command(data)
-
-    mock_join.assert_awaited_once_with(["#test"])
-    mock_map.assert_called_once_with("myuser", ["#test"])
-
-
-@pytest.mark.asyncio
-async def test_handle_send_command_no_user(bot):
-    """Test _handle_send_command with no user."""
-    bot.connection = MagicMock()
-    data = {
-        "message": "Hello",
-    }
-
-    await bot._handle_send_command(data)
-    bot.connection.privmsg.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_handle_send_command_privmsg_exception(bot):
-    """Test _handle_send_command handles privmsg failure."""
-    bot.connection = MagicMock()
-    bot.connection.privmsg.side_effect = RuntimeError("send failed")
-    data = {
-        "user": "MyUser",
-        "message": "Hello",
-    }
-    await bot._handle_send_command(data)
-    bot.connection.privmsg.assert_called_once_with("myuser", "Hello")
 
 
 @pytest.mark.asyncio
@@ -1517,3 +1456,427 @@ async def test_init_dcc_connection_ssend(bot, mock_bot_manager):
 
     transfer = list(bot.current_transfers.values())[0]
     assert transfer["ssl"] is True
+
+
+def test_get_send_queue_setting_uses_default(bot):
+    """Test _get_send_queue_setting falls back to the given default."""
+    assert bot._get_send_queue_setting("send_queue_delay", 5) == 5
+
+
+def test_get_send_queue_setting_global_override(bot_factory, mock_bot_manager):
+    """Test _get_send_queue_setting reads the global config value."""
+    mock_bot_manager.config = {"send_queue_delay": 10}
+    bot = bot_factory(manager=mock_bot_manager)
+    assert bot._get_send_queue_setting("send_queue_delay", 5) == 10
+
+
+def test_get_send_queue_setting_server_override(bot_factory, mock_bot_manager):
+    """Test _get_send_queue_setting prefers the per-server value over global."""
+    mock_bot_manager.config = {"send_queue_delay": 10}
+    bot = bot_factory(server_config={"send_queue_delay": 1}, manager=mock_bot_manager)
+    assert bot._get_send_queue_setting("send_queue_delay", 5) == 1
+
+
+def test_get_send_queue_setting_invalid_value(bot):
+    """Test _get_send_queue_setting falls back to the default on a bad value."""
+    bot.config["send_queue_delay"] = "not-a-number"
+    assert bot._get_send_queue_setting("send_queue_delay", 5) == 5
+
+
+@pytest.mark.asyncio
+async def test_queue_send_requires_user_and_message(bot):
+    """Test queue_send does nothing without a user and message."""
+    await bot.queue_send({"message": "hi"})
+    await bot.queue_send({"user": "MyBot"})
+    assert bot.send_queues == {}
+    assert bot.send_queue_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_queue_send_spawns_one_task_per_nick(bot):
+    """Test queue_send lazily spawns a single consumer task per nick."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc send #1"})
+        await bot.queue_send({"user": "mybot", "message": "xdcc send #2"})
+        # The consumer coroutine was handed to the mocked create_task instead
+        # of actually being scheduled; close it to avoid an "never awaited" warning.
+        mock_create_task.call_args[0][0].close()
+
+    mock_create_task.assert_called_once()
+    assert list(bot.send_queues.keys()) == ["mybot"]
+    assert bot.send_queues["mybot"].qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_does_not_drop_long_waiting_item(bot):
+    """Test _process_queued_send still sends an item that waited in the queue past send_queue_max_wait."""
+    bot.server_config["send_queue_max_wait"] = 1
+    data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time() - 10}
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock) as mock_send,
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock),
+    ):
+        await bot._process_queued_send("mybot", data)
+
+    mock_send.assert_awaited_once_with(bot, data)
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_sends_and_waits(bot):
+    """Test _process_queued_send sends the command and waits for it to settle."""
+    data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time()}
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock) as mock_send,
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock) as mock_wait,
+    ):
+        await bot._process_queued_send("mybot", data)
+
+    mock_send.assert_awaited_once_with(bot, data)
+    mock_wait.assert_awaited_once()
+    assert mock_wait.call_args[0][0] == "mybot"
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_bumps_last_active(bot):
+    """Test _process_queued_send refreshes last_active, since sends bypass process_command_queue."""
+    bot.last_active = 0
+    data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time()}
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock),
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock),
+    ):
+        await bot._process_queued_send("mybot", data)
+
+    assert bot.last_active >= data["queued_at"]
+
+
+def test_find_transfer_since_matches_nick_server_and_time(bot, mock_bot_manager):
+    """Test _find_transfer_since only matches records for the right nick/server/time."""
+    now = time.time()
+    mock_bot_manager.transfers = {
+        "old.mkv": [{"nick": "mybot", "server": bot.server, "start_time": now - 100}],
+        "other.mkv": [{"nick": "otherbot", "server": bot.server, "start_time": now}],
+        "match.mkv": [{"nick": "mybot", "server": bot.server, "start_time": now}],
+    }
+
+    found = bot._find_transfer_since("mybot", now - 1)
+    assert found is mock_bot_manager.transfers["match.mkv"][0]
+
+
+def test_find_transfer_since_active_only_skips_terminal(bot, mock_bot_manager):
+    """Test _find_transfer_since(active_only=True) skips transfers in a terminal status."""
+    now = time.time()
+    running = {"nick": "mybot", "server": bot.server, "start_time": now, "status": "in_progress"}
+    mock_bot_manager.transfers = {
+        "done.mkv": [{"nick": "mybot", "server": bot.server, "start_time": now, "status": "completed"}],
+        "running.mkv": [running],
+    }
+
+    assert bot._find_transfer_since("mybot", now - 1, active_only=True) is running
+    mock_bot_manager.transfers = {"done.mkv": mock_bot_manager.transfers["done.mkv"]}
+    assert bot._find_transfer_since("mybot", now - 1, active_only=True) is None
+
+
+def test_find_transfer_since_no_match(bot, mock_bot_manager):
+    """Test _find_transfer_since returns None when nothing matches."""
+    mock_bot_manager.transfers = {}
+    assert bot._find_transfer_since("mybot", time.time()) is None
+
+
+class FakeClock:
+    """Deterministic stand-in for time.time/asyncio.sleep: sleeping advances the clock.
+
+    `on_tick(now)` runs after every sleep, letting a test change transfer state over time.
+    """
+
+    def __init__(self, start: float, on_tick=None):
+        self.now = start
+        self.on_tick = on_tick
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        if self.on_tick:
+            self.on_tick(self.now)
+
+
+async def _run_wait_for_queued_transfer(bot, clock: FakeClock, sent_at: float) -> None:
+    """Run _wait_for_queued_transfer("mybot", sent_at) against a FakeClock."""
+    with (
+        patch("dccbot.ircbot.time.time", side_effect=clock.time),
+        patch("dccbot.ircbot.asyncio.sleep", new_callable=AsyncMock, side_effect=clock.sleep),
+    ):
+        await bot._wait_for_queued_transfer("mybot", sent_at)
+
+
+def _queued_transfer(bot, start_time: float, status: str = "in_progress", transfer_id: str = "t1") -> dict:
+    return {"id": transfer_id, "nick": "mybot", "server": bot.server, "start_time": start_time, "status": status, "bytes_received": 0}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_no_transfer_appears(bot, mock_bot_manager):
+    """With no transfer at all, the wait is send_queue_delay plus a send_queue_cooldown quiet period."""
+    mock_bot_manager.transfers = {}
+    bot.server_config.update({"send_queue_delay": 15, "send_queue_cooldown": 5})
+    clock = FakeClock(1000.0)
+
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    assert 1020.0 <= clock.now < 1021.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_no_delay_no_cooldown_returns_immediately(bot, mock_bot_manager):
+    """With no transfer and both timings at 0, nothing is awaited."""
+    mock_bot_manager.transfers = {}
+    bot.server_config.update({"send_queue_delay": 0, "send_queue_cooldown": 0})
+
+    with patch("dccbot.ircbot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await bot._wait_for_queued_transfer("mybot", time.time())
+
+    mock_sleep.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_enforces_minimum_delay(bot, mock_bot_manager):
+    """`send_queue_delay` is a minimum gap between sends, even if the transfer already finished."""
+    mock_bot_manager.transfers = {"movie.mkv": [_queued_transfer(bot, 1000.0, status="completed")]}
+    bot.server_config.update({"send_queue_delay": 10, "send_queue_cooldown": 0})
+    clock = FakeClock(1000.0)
+
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    assert clock.now == 1010.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_waits_for_terminal_status(bot, mock_bot_manager):
+    """The wait lasts until the transfer completes, then the cooldown quiet period."""
+    transfer = _queued_transfer(bot, 1000.0)
+    mock_bot_manager.transfers = {"movie.mkv": [transfer]}
+    bot.server_config.update({"send_queue_delay": 0, "send_queue_cooldown": 5})
+
+    def on_tick(now: float) -> None:
+        transfer["bytes_received"] += 1
+        if now >= 1030.0:
+            transfer["status"] = "completed"
+
+    clock = FakeClock(1000.0, on_tick)
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    assert 1035.0 <= clock.now < 1036.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_covers_gap_between_batch_files(bot, mock_bot_manager):
+    """An `xdcc batch` leaves a short gap between files (seen live: ~1s): a transfer starting during
+    the cooldown quiet period restarts it, so the queue waits for the whole batch."""
+    first = _queued_transfer(bot, 1000.0, transfer_id="ep1")
+    mock_bot_manager.transfers = {"ep1.mkv": [first]}
+    bot.server_config.update({"send_queue_delay": 0, "send_queue_cooldown": 5})
+    second = _queued_transfer(bot, 1021.0, transfer_id="ep2")
+
+    def on_tick(now: float) -> None:
+        for transfer in (first, second):
+            transfer["bytes_received"] += 1
+        if now >= 1020.0:
+            first["status"] = "completed"
+        if now >= 1021.0:
+            mock_bot_manager.transfers["ep2.mkv"] = [second]
+        if now >= 1040.0:
+            second["status"] = "completed"
+
+    clock = FakeClock(1000.0, on_tick)
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    # Not ~1025 (end of the first file + cooldown): waited for the second file too.
+    assert 1045.0 <= clock.now < 1046.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_long_progressing_batch_outlasts_max_wait(bot, mock_bot_manager):
+    """`send_queue_max_wait` bounds a stall, not the total: a transfer that keeps progressing
+    is waited for even well past send_queue_max_wait."""
+    transfer = _queued_transfer(bot, 1000.0)
+    mock_bot_manager.transfers = {"big.mkv": [transfer]}
+    bot.server_config.update({"send_queue_delay": 0, "send_queue_cooldown": 0, "send_queue_max_wait": 60})
+
+    def on_tick(now: float) -> None:
+        transfer["bytes_received"] += 1
+        if now >= 1200.0:
+            transfer["status"] = "completed"
+
+    clock = FakeClock(1000.0, on_tick)
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    assert 1200.0 <= clock.now < 1201.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_queued_transfer_bounded_by_max_wait_without_progress(bot, mock_bot_manager):
+    """A transfer stuck in a non-terminal status with no progress (e.g. a stray pack announcement
+    with no follow-up DCC SEND) must not stall the queue - `send_queue_max_wait` bounds it."""
+    transfer = _queued_transfer(bot, 1000.0, status="started")
+    mock_bot_manager.transfers = {"movie.mkv": [transfer]}
+    bot.server_config.update({"send_queue_delay": 0, "send_queue_cooldown": 2, "send_queue_max_wait": 60})
+    clock = FakeClock(1000.0)
+
+    await _run_wait_for_queued_transfer(bot, clock, 1000.0)
+
+    # Gave up after 60s without progress, then the cooldown.
+    assert 1062.0 <= clock.now < 1063.0
+    assert transfer["status"] == "started"
+
+
+@pytest.mark.asyncio
+async def test_process_send_queue_processes_items_in_order(bot, mock_bot_manager):
+    """Test _process_send_queue drains queued sends one at a time, in order."""
+    mock_bot_manager.transfers = {}
+    bot.server_config["send_queue_delay"] = 0
+    bot.server_config["send_queue_cooldown"] = 0
+    sent: list[str] = []
+
+    async def fake_handle_send_command(_bot, data):
+        sent.append(data["message"])
+
+    with patch("dccbot.ircbot.handle_send_command", side_effect=fake_handle_send_command):
+        await bot.queue_send({"user": "mybot", "message": "xdcc send #1"})
+        await bot.queue_send({"user": "mybot", "message": "xdcc send #2"})
+        task = bot.send_queue_tasks["mybot"]
+        await asyncio.wait_for(bot.send_queues["mybot"].join(), timeout=2)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert sent == ["xdcc send #1", "xdcc send #2"]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_tracks_pending_items(bot):
+    """Test queue_send records each item in send_queue_items for later listing."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc send #1", "channels": ["#chan"]})
+        await bot.queue_send({"user": "mybot", "message": "xdcc send #2"})
+        mock_create_task.call_args[0][0].close()
+
+    assert [item["message"] for item in bot.send_queue_items["mybot"]] == ["xdcc send #1", "xdcc send #2"]
+
+
+def test_queue_snapshot_reports_pending_items(bot):
+    """Test queue_snapshot exposes message/channels/queued_at for each pending item."""
+    bot.send_queue_items = {"mybot": [{"message": "xdcc send #1", "channels": ["#chan"], "queued_at": 123.0, "user": "mybot"}]}
+    assert bot.queue_snapshot() == {"mybot": [{"message": "xdcc send #1", "channels": ["#chan"], "queued_at": 123.0}]}
+
+
+def test_queue_snapshot_empty(bot):
+    """Test queue_snapshot returns an empty dict when nothing is queued."""
+    assert bot.queue_snapshot() == {}
+
+
+def test_cancel_queued_send_no_items(bot):
+    """Test cancel_queued_send returns an empty list when the nick has nothing queued."""
+    assert bot.cancel_queued_send("mybot") == []
+
+
+def test_cancel_queued_send_all(bot):
+    """Test cancel_queued_send with no selector cancels and clears every pending item."""
+    item1 = {"message": "xdcc send #1"}
+    item2 = {"message": "xdcc send #2"}
+    bot.send_queue_items = {"mybot": [item1, item2]}
+
+    cancelled = bot.cancel_queued_send("mybot")
+
+    assert cancelled == [item1, item2]
+    assert item1["cancelled"] is True
+    assert item2["cancelled"] is True
+    assert "mybot" not in bot.send_queue_items
+
+
+def test_cancel_queued_send_by_index(bot):
+    """Test cancel_queued_send narrows to a single item by 1-based position."""
+    item1 = {"message": "xdcc send #1"}
+    item2 = {"message": "xdcc send #2"}
+    bot.send_queue_items = {"mybot": [item1, item2]}
+
+    cancelled = bot.cancel_queued_send("mybot", "2")
+
+    assert cancelled == [item2]
+    assert item2["cancelled"] is True
+    assert "cancelled" not in item1
+    assert bot.send_queue_items["mybot"] == [item1]
+
+
+def test_cancel_queued_send_by_message_substring(bot):
+    """Test cancel_queued_send narrows to a single item by matching its message text."""
+    item1 = {"message": "xdcc send #1"}
+    item2 = {"message": "xdcc send #2"}
+    bot.send_queue_items = {"mybot": [item1, item2]}
+
+    cancelled = bot.cancel_queued_send("mybot", "SEND #2")
+
+    assert cancelled == [item2]
+    assert bot.send_queue_items["mybot"] == [item1]
+
+
+def test_cancel_queued_send_no_match(bot):
+    """Test cancel_queued_send returns an empty list when the selector matches nothing."""
+    item1 = {"message": "xdcc send #1"}
+    bot.send_queue_items = {"mybot": [item1]}
+
+    assert bot.cancel_queued_send("mybot", "99") == []
+    assert bot.cancel_queued_send("mybot", "nope") == []
+    assert bot.send_queue_items["mybot"] == [item1]
+
+
+def test_untrack_queued_send_removes_by_identity(bot):
+    """Test _untrack_queued_send removes the matching item and cleans up an empty list."""
+    item = {"message": "xdcc send #1"}
+    bot.send_queue_items = {"mybot": [item]}
+
+    bot._untrack_queued_send("mybot", item)
+
+    assert "mybot" not in bot.send_queue_items
+
+
+def test_untrack_queued_send_missing_is_noop(bot):
+    """Test _untrack_queued_send does nothing when the item was already removed (e.g. cancelled)."""
+    bot.send_queue_items = {}
+    bot._untrack_queued_send("mybot", {"message": "xdcc send #1"})
+    assert bot.send_queue_items == {}
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_skips_cancelled_item(bot):
+    """Test _process_queued_send does not send an item that was cancelled before it was dequeued."""
+    data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time(), "cancelled": True}
+
+    with patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock) as mock_send:
+        await bot._process_queued_send("mybot", data)
+
+    mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_send_queue_untracks_dequeued_item(bot, mock_bot_manager):
+    """Test _process_send_queue removes each item from send_queue_items as it's dequeued."""
+    mock_bot_manager.transfers = {}
+    bot.server_config["send_queue_delay"] = 0
+    bot.server_config["send_queue_cooldown"] = 0
+
+    with patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock):
+        await bot.queue_send({"user": "mybot", "message": "xdcc send #1"})
+        assert bot.send_queue_items["mybot"]
+        task = bot.send_queue_tasks["mybot"]
+        await asyncio.wait_for(bot.send_queues["mybot"].join(), timeout=2)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert "mybot" not in bot.send_queue_items

@@ -510,7 +510,7 @@ class TestApiNegative:
 
         resp = await client.post("/msg", json={"server": "irc.example.com", "user": " ", "message": "hi"})
         assert resp.status == 200
-        assert mock_bot.queue_command.call_args[0][0]["user"] == ""
+        assert mock_bot.queue_send.call_args[0][0]["user"] == ""
 
     @pytest.mark.asyncio
     async def test_cancel_empty_filename_rejected(self, api_client):
@@ -547,6 +547,18 @@ class TestApiNegative:
         }
         snapshot = api._build_transfer_snapshot()
         assert [t["filename"] for t in snapshot] == ["good.bin"]
+
+    def test_build_queue_snapshot_empty_bots(self):
+        """No connected bots yields an empty queue snapshot."""
+        api = IRCBotAPI(config_file="config.json", bot_manager=MagicMock())
+        api.bot_manager.bots = {}
+        assert api._build_queue_snapshot() == []
+
+    def test_build_queue_snapshot_non_mapping(self):
+        """A non-mapping bots attribute yields an empty snapshot instead of raising."""
+        api = IRCBotAPI(config_file="config.json", bot_manager=MagicMock())
+        api.bot_manager.bots = "not-a-mapping"  # type: ignore
+        assert api._build_queue_snapshot() == []
 
     @pytest.mark.asyncio
     async def test_websocket_bare_slash_command(self, ws_session):

@@ -23,7 +23,7 @@ from dccbot.command_pipeline import handle_part_command, handle_send_command
 from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, parse_dcc_accept, parse_dcc_send
 from dccbot.ssl_util import create_dcc_ssl_context
 from dccbot.transfer_handler import TransferHandler
-from dccbot.transfers import create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
+from dccbot.transfers import TERMINAL_TRANSFER_STATUSES, create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
 
 if TYPE_CHECKING:
     from dccbot.manager import IRCBotManager
@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 MD5_COMPLETE_RE = re.compile(r"^\*\* Transfer Completed.+ md5sum: ([a-f0-9A-F]{32})", re.I)
 PACK_ANNOUNCE_RE = re.compile(r"^\*\* Sending you pack \#(\d+) \(\"([^\"]+)\"\).+, MD5:([a-f0-9A-F]{32})", re.I)
 SEND_DENIED_RE = re.compile(r"^XDCC SEND denied, (.+)", re.I)
+
+SEND_QUEUE_POLL_INTERVAL = 0.5
 
 
 @dataclass
@@ -74,6 +76,11 @@ class IRCBot(AioSimpleIRCClient):
         bot_channel_map: Map of bot channels to map to channels on the server.
         resume_queue: Queue of resumable transfers.
         command_queue: Queue of commands to send to the server.
+        send_queues: Per-nick queues throttling `xdcc send` requests to the same bot.
+        send_queue_tasks: Per-nick consumer tasks draining `send_queues`.
+        send_queue_items: Per-nick snapshot of items still pending in `send_queues`, for
+            `/queue` and `/cancelqueue` (an `asyncio.Queue` can't be listed or have items
+            removed from its middle, so this mirrors it for introspection/cancellation).
         loop: The asyncio event loop.
         last_active: The last time the bot was active.
         joined_channels: The channels the bot is joined to.
@@ -102,6 +109,9 @@ class IRCBot(AioSimpleIRCClient):
     bot_channel_map: dict[str, set[str]]
     resume_queue: dict[str, list[tuple[str, int, str, str, int, int, bool, bool, float]]]
     command_queue: asyncio.Queue
+    send_queues: dict[str, asyncio.Queue]
+    send_queue_tasks: dict[str, asyncio.Task]
+    send_queue_items: dict[str, list[dict[str, Any]]]
     loop: asyncio.AbstractEventLoop
     last_active: float
     joined_channels: dict[str, float]
@@ -151,6 +161,9 @@ class IRCBot(AioSimpleIRCClient):
         self.passive_resume_queue: dict[tuple[str, int], dict] = {}
         self.pending_join_failures: dict[str, str] = {}
         self.command_queue = asyncio.Queue()
+        self.send_queues = {}
+        self.send_queue_tasks = {}
+        self.send_queue_items = {}
         self.mime_checker = magic.Magic(mime=True)
         self.loop = asyncio.get_event_loop()  # Ensure the loop is set
         self.last_active = time.time()
@@ -309,14 +322,227 @@ class IRCBot(AioSimpleIRCClient):
                 - command (str): The command to be processed. The command can be any of the following:
                     - part: Part the channel.
                     - join: Join the channel.
-                    - send: Send a message to the channel.
                     - quit: Quit the server.
-                - channels (list of str): The channels to be processed. The channels are only required if the command is part, join, or send.
+                - channels (list of str): The channels to be processed. The channels are only required if the command is part or join.
                 - reason (str): The reason for the command. The reason is only required if the command is part or quit.
+
+        `send` commands don't go through this queue — use `queue_send()` instead, which
+        throttles them per target-bot nick rather than serializing them with join/part.
 
         """
         await self.command_queue.put(data)
         logger.debug("Queued command: %s", data)
+
+    def _get_send_queue_setting(self, key: str, default: float) -> float:
+        """Get a send-queue timing setting, with per-server override support."""
+        value = self.server_config.get(key, self.config.get(key, default))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    async def queue_send(self, data: dict[str, Any]) -> None:
+        """Queue an `xdcc send`-style command, throttled per target bot nick.
+
+        Spawns a dedicated consumer task for the nick on first use; later
+        calls for the same nick just enqueue onto the existing queue so
+        requests to that bot are sent one at a time.
+
+        Args:
+            data (dict): The send command, same shape as `handle_send_command` expects
+                (`user`, `message`, optional `channels`).
+
+        """
+        if not data.get("user") or not data.get("message"):
+            return
+
+        nick = data["user"].lower().strip()
+        data["queued_at"] = time.time()
+        queue = self.send_queues.setdefault(nick, asyncio.Queue())
+        self.send_queue_items.setdefault(nick, []).append(data)
+        await queue.put(data)
+        logger.debug("[%s] Queued send: %s", nick, data.get("message"))
+
+        if nick not in self.send_queue_tasks:
+            self.send_queue_tasks[nick] = asyncio.create_task(self._process_send_queue(nick))
+
+    def queue_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        """Return the queued sends still pending (not yet sent), keyed by nick."""
+        return {
+            nick: [{"message": item.get("message"), "channels": item.get("channels"), "queued_at": item.get("queued_at")} for item in items]
+            for nick, items in self.send_queue_items.items()
+        }
+
+    def cancel_queued_send(self, nick: str, selector: str | None = None) -> list[dict[str, Any]]:
+        """Cancel queued `xdcc send` item(s) for `nick` that haven't been sent yet.
+
+        With no selector, cancels every pending item for `nick`. With a selector,
+        narrows to a single item: a plain integer selects it by 1-based position
+        in the queue, anything else does a case-insensitive substring match
+        against the item's message text.
+
+        Cancelled items are marked so `_process_queued_send` skips them even if
+        they're already past `queue.get()` by the time this runs (an
+        `asyncio.Queue` has no API to remove an item once it's been put in).
+
+        Returns the cancelled item(s), if any.
+
+        """
+        items = self.send_queue_items.get(nick)
+        if not items:
+            return []
+
+        if selector is None:
+            cancelled = list(items)
+            items.clear()
+        else:
+            index = None
+            if selector.isdigit() and 1 <= int(selector) <= len(items):
+                index = int(selector) - 1
+            else:
+                for i, item in enumerate(items):
+                    if selector.lower() in str(item.get("message", "")).lower():
+                        index = i
+                        break
+            if index is None:
+                return []
+            cancelled = [items.pop(index)]
+
+        if not items:
+            del self.send_queue_items[nick]
+
+        for item in cancelled:
+            item["cancelled"] = True
+            logger.info("[%s] Cancelled queued send: %s", nick, item.get("message"))
+
+        return cancelled
+
+    def _untrack_queued_send(self, nick: str, data: dict[str, Any]) -> None:
+        """Remove `data` from the pending-item snapshot for `nick`, if still present.
+
+        No-op if it was already removed by `cancel_queued_send` before this item
+        reached the front of the queue.
+
+        """
+        items = self.send_queue_items.get(nick)
+        if not items:
+            return
+        for i, item in enumerate(items):
+            if item is data:
+                del items[i]
+                break
+        if not items:
+            del self.send_queue_items[nick]
+
+    async def _process_send_queue(self, nick: str) -> None:
+        """Consume queued send commands for `nick`, one at a time, forever.
+
+        Runs for the lifetime of the bot once spawned, same lifecycle as
+        `process_command_queue`.
+
+        """
+        queue = self.send_queues[nick]
+        while True:
+            data = await queue.get()
+            self._untrack_queued_send(nick, data)
+            try:
+                await self._process_queued_send(nick, data)
+            except Exception:
+                logger.exception("[%s] Unhandled error processing queued send", nick)
+            finally:
+                queue.task_done()
+
+    async def _process_queued_send(self, nick: str, data: dict[str, Any]) -> None:
+        """Send one queued command, then wait before the next one may go out.
+
+        After sending, waits at least `send_queue_delay` seconds, then for the
+        resulting transfer (if any) to settle, plus `send_queue_cooldown`
+        before returning, so the next queued item isn't sent too soon.
+
+        """
+        if data.get("cancelled"):
+            logger.info("[%s] Skipping cancelled queued send: %s", nick, data.get("message"))
+            return
+
+        sent_at = time.time()
+        # Sends bypass `process_command_queue`, which is what bumps `last_active`
+        # for join/part, so bump it here to keep the server from idling out.
+        self.last_active = sent_at
+        await handle_send_command(self, data)
+        await self._wait_for_queued_transfer(nick, sent_at)
+
+    def _find_transfer_since(self, nick: str, since: float, *, active_only: bool = False) -> dict[str, Any] | None:
+        """Return the first transfer record for `nick` on this server started at/after `since`.
+
+        With `active_only`, transfers already in a terminal status are skipped.
+
+        """
+        for records in self.bot_manager.transfers.values():
+            if not isinstance(records, list):
+                continue
+            for item in records:
+                if not isinstance(item, dict):
+                    continue
+                if active_only and item.get("status") in TERMINAL_TRANSFER_STATUSES:
+                    continue
+                start_time = item.get("start_time")
+                if item.get("nick") == nick and item.get("server") == self.server and isinstance(start_time, (int, float)) and start_time >= since:
+                    return item
+        return None
+
+    async def _wait_for_queued_transfer(self, nick: str, sent_at: float) -> None:
+        """Wait for the bot's response to settle before the next queued send goes out.
+
+        `send_queue_delay` is a minimum gap since `sent_at`: it is always waited in
+        full, even if the resulting transfer finishes sooner. After that, waits until
+        `nick` has had no active transfer (started since `sent_at`) for
+        `send_queue_cooldown` seconds in a row. A transfer starting during that quiet
+        period restarts it, so every file of an `xdcc batch` is covered, including the
+        short gap before the bot offers the next file.
+
+        `send_queue_max_wait` bounds how long an active transfer may go without any
+        progress, so a transfer record that never resolves — e.g. a pack announcement
+        with no follow-up DCC SEND — cannot stall this nick's queue forever, while a
+        long batch that keeps progressing is waited for in full.
+
+        """
+        delay = self._get_send_queue_setting("send_queue_delay", 15)
+        max_wait = self._get_send_queue_setting("send_queue_max_wait", 300)
+        cooldown = self._get_send_queue_setting("send_queue_cooldown", 5)
+
+        remaining_delay = sent_at + delay - time.time()
+        if remaining_delay > 0:
+            await asyncio.sleep(remaining_delay)
+
+        last_progress = time.time()
+        progress_marker: tuple[Any, Any] | None = None
+        quiet_since: float | None = None
+        while True:
+            now = time.time()
+            transfer = self._find_transfer_since(nick, sent_at, active_only=True)
+            if transfer is None:
+                if quiet_since is None:
+                    quiet_since = now
+                if now - quiet_since >= cooldown:
+                    return
+            else:
+                quiet_since = None
+                marker = (transfer.get("id"), transfer.get("bytes_received"))
+                if marker != progress_marker:
+                    progress_marker = marker
+                    last_progress = now
+                elif now - last_progress >= max_wait:
+                    logger.warning(
+                        "[%s] Queued transfer for %s made no progress within send_queue_max_wait=%ds; proceeding anyway",
+                        nick,
+                        transfer.get("filename"),
+                        max_wait,
+                    )
+                    break
+            await asyncio.sleep(SEND_QUEUE_POLL_INTERVAL)
+
+        if cooldown > 0:
+            await asyncio.sleep(cooldown)
 
     async def _handle_authentication(self) -> None:
         """Handle NickServ authentication if required."""
@@ -417,10 +643,6 @@ class IRCBot(AioSimpleIRCClient):
         if data.get("channels"):
             await self._join_channels(data["channels"])
 
-    async def _handle_send_command(self, data: dict[str, Any]) -> None:
-        """Delegate send command to command pipeline."""
-        await handle_send_command(self, data)
-
     async def _handle_part_command(self, data: dict[str, Any]) -> None:
         """Delegate part command to command pipeline."""
         await handle_part_command(self, data)
@@ -429,7 +651,8 @@ class IRCBot(AioSimpleIRCClient):
         """Process commands from the command queue.
 
         This function runs an infinite loop that checks the command queue for new commands.
-        It will process commands according to their type (send, join, or part).
+        It will process commands according to their type (join or part). `send` commands
+        bypass this queue entirely — see `queue_send()`.
 
         """
         await self._handle_authentication()
@@ -447,7 +670,6 @@ class IRCBot(AioSimpleIRCClient):
 
             try:
                 handlers: dict[str, Any] = {
-                    "send": self._handle_send_command,
                     "join": self._handle_join_command,
                     "part": self._handle_part_command,
                 }
