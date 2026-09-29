@@ -22,7 +22,7 @@ Features
 * file size limits
 * private IP filtering for DCC transfers
 * transfer cancellation via API
-* per-bot send queue throttling `xdcc send` requests to the same bot
+* per-bot send queue throttling `xdcc send` requests to the same bot; numeric `xdcc send`/`xdcc batch` ranges (e.g. `xdcc batch 1-5`) are expanded into individual queued sends, so range requests also work on bots without batch support
 * auto-disconnect from idle servers and channels
 * MD5 verification of completed transfers
 * incomplete file suffix support (auto-renamed on completion)

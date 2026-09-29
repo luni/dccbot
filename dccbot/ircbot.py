@@ -36,6 +36,10 @@ PACK_ANNOUNCE_RE = re.compile(r"^\*\* Sending you pack \#(\d+) \(\"([^\"]+)\"\).
 SEND_DENIED_RE = re.compile(r"^XDCC SEND denied, (.+)", re.I)
 
 SEND_QUEUE_POLL_INTERVAL = 0.5
+SEND_QUEUE_EXPAND_MAX = 500
+
+XDCC_RANGE_RE = re.compile(r"^xdcc\s+(s)?(send|batch)\s+(\S+)(?:\s+(.*))?$", re.I)
+XDCC_RANGE_SEGMENT_RE = re.compile(r"^#?(\d+)(?:-#?(\d+))?$")
 
 
 @dataclass
@@ -57,6 +61,48 @@ def _quote_filename(filename: str) -> str:
 def _format_dcc_message(verb: str, filename: str, *parts: object) -> str:
     """Build a DCC CTCP message with a quoted filename."""
     return " ".join(["DCC", verb, _quote_filename(filename), *(str(p) for p in parts)])
+
+
+def _expand_xdcc_range(message: str) -> list[str]:
+    """Expand a numeric `xdcc send`/`xdcc batch` pack spec into individual sends.
+
+    `xdcc batch 1-3` becomes `xdcc send #1`, `xdcc send #2`, `xdcc send #3` —
+    expanded items always use the single-pack SEND verb (or SSEND when the
+    original was already SSL-rewritten), which every bot supports, while a
+    lone `batch <n>` is ambiguous with a group name. Comma-separated mixes of
+    numbers and ranges (`1,3-4`) work too, descending ranges keep their order,
+    and a trailing password is appended to each expanded send.
+
+    Specs that aren't purely numeric (group names, `*pattern` filters) or that
+    would expand beyond SEND_QUEUE_EXPAND_MAX packs are returned unchanged so
+    the bot receives the message exactly as written.
+
+    """
+    match = XDCC_RANGE_RE.match(message)
+    if not match:
+        return [message]
+
+    ssl = "s" if match.group(1) else ""
+    tail = match.group(4)
+
+    packs: list[int] = []
+    for segment in match.group(3).split(","):
+        seg = XDCC_RANGE_SEGMENT_RE.match(segment)
+        if not seg:
+            return [message]
+        first = int(seg.group(1))
+        if seg.group(2) is None:
+            packs.append(first)
+        else:
+            last = int(seg.group(2))
+            step = 1 if last >= first else -1
+            packs.extend(range(first, last + step, step))
+        if len(packs) > SEND_QUEUE_EXPAND_MAX:
+            logger.debug("Not expanding oversized xdcc pack spec: %s", message)
+            return [message]
+
+    suffix = f" {tail.strip()}" if tail else ""
+    return [f"xdcc {ssl}send #{n}{suffix}" for n in packs]
 
 
 class IRCBot(AioSimpleIRCClient):
@@ -344,7 +390,12 @@ class IRCBot(AioSimpleIRCClient):
         return value if math.isfinite(value) and value >= 0 else default
 
     async def queue_send(self, data: dict[str, Any]) -> None:
-        """Queue an `xdcc send`-style command, throttled per target bot nick.
+        """Queue `xdcc send`-style command(s), throttled per target bot nick.
+
+        Numeric `xdcc send`/`xdcc batch` pack ranges (e.g. `xdcc batch 1-5`)
+        are expanded into one queued `xdcc send` per pack, so bots without
+        batch support still receive the whole range and each pack can be
+        tracked and cancelled individually.
 
         Spawns a dedicated consumer task for the nick on first use; later
         calls for the same nick just enqueue onto the existing queue so
@@ -359,11 +410,16 @@ class IRCBot(AioSimpleIRCClient):
             return
 
         nick = data["user"].lower().strip()
-        data["queued_at"] = time.time()
+        messages = _expand_xdcc_range(data["message"])
         queue = self.send_queues.setdefault(nick, asyncio.Queue())
-        self.send_queue_items.setdefault(nick, []).append(data)
-        await queue.put(data)
-        logger.debug("[%s] Queued send: %s", nick, data.get("message"))
+        items = self.send_queue_items.setdefault(nick, [])
+        for message in messages:
+            item = dict(data)
+            item["message"] = message
+            item["queued_at"] = time.time()
+            items.append(item)
+            await queue.put(item)
+            logger.debug("[%s] Queued send: %s", nick, message)
 
         if nick not in self.send_queue_tasks:
             self.send_queue_tasks[nick] = asyncio.create_task(self._process_send_queue(nick))

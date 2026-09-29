@@ -1566,6 +1566,107 @@ async def test_queue_send_spawns_one_task_per_nick(bot):
     assert bot.send_queues["mybot"].qsize() == 2
 
 
+def _queued_messages(bot, nick="mybot"):
+    """Return the pending queued send messages for a nick."""
+    return [item["message"] for item in bot.send_queue_items.get(nick, [])]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_expands_numeric_range(bot):
+    """Test queue_send expands a numeric send range into one send per pack."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc send 1-3"})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == ["xdcc send #1", "xdcc send #2", "xdcc send #3"]
+    assert bot.send_queues["mybot"].qsize() == 3
+
+
+@pytest.mark.asyncio
+async def test_queue_send_expands_batch_range_as_send(bot):
+    """Test an xdcc batch range is expanded to single-pack sends (works on bots without batch support)."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc batch 1-2"})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == ["xdcc send #1", "xdcc send #2"]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_expands_descending_range_and_lists(bot):
+    """Test descending ranges keep their order and comma segments mix."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc batch 5-3"})
+        await bot.queue_send({"user": "OtherBot", "message": "xdcc send 1,3-4"})
+        mock_create_task.call_args[0][0].close()
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == ["xdcc send #5", "xdcc send #4", "xdcc send #3"]
+    assert _queued_messages(bot, "otherbot") == ["xdcc send #1", "xdcc send #3", "xdcc send #4"]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_expanded_items_are_distinct(bot):
+    """Test each expanded queue entry is its own dict so cancelling one doesn't flag the others."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc send 1-2"})
+        mock_create_task.call_args[0][0].close()
+
+    items = bot.send_queue_items["mybot"]
+    assert len(items) == 2
+    assert items[0] is not items[1]
+    items[0]["cancelled"] = True
+    assert "cancelled" not in items[1]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_range_preserves_ssend_verb(bot):
+    """Test an SSL-rewritten ssend/sbatch range expands to ssend."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc sbatch 1-2"})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == ["xdcc ssend #1", "xdcc ssend #2"]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_range_preserves_password(bot):
+    """Test a trailing password is appended to every expanded send."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": "xdcc batch 1-2 secretpw"})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == ["xdcc send #1 secretpw", "xdcc send #2 secretpw"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "xdcc batch mygroup",
+        "xdcc batch 1-10*pattern",
+        "xdcc send 1-600",
+        "xdcc send #7",
+        "xdcc cancel",
+        "hello world",
+    ],
+)
+async def test_queue_send_passes_non_expandable_messages_through(bot, message):
+    """Test group names, pattern filters, oversized ranges and plain messages stay verbatim."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "MyBot", "message": message})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot) == [message]
+
+
 @pytest.mark.asyncio
 async def test_process_queued_send_does_not_drop_long_waiting_item(bot):
     """Test _process_queued_send still sends an item that waited in the queue past send_queue_max_wait."""
