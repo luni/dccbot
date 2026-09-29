@@ -343,7 +343,7 @@ async def test_websocket_handler_cancelqueue_all(ws_session):
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.cancel_queued_send.return_value = [{"message": "xdcc send #1"}, {"message": "xdcc send #2"}]
-    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
+    mock_bot_manager.bots = {"server": mock_bot}
     await ws.send_str("/cancelqueue server SomeBot")
     msg = await ws.receive(timeout=2)
     data = msg.json()
@@ -359,7 +359,7 @@ async def test_websocket_handler_cancelqueue_with_selector(ws_session):
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.cancel_queued_send.return_value = [{"message": "xdcc send #2"}]
-    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
+    mock_bot_manager.bots = {"server": mock_bot}
     await ws.send_str("/cancelqueue server SomeBot 2")
     msg = await ws.receive(timeout=2)
     data = msg.json()
@@ -374,12 +374,27 @@ async def test_websocket_handler_cancelqueue_no_match(ws_session):
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
     mock_bot.cancel_queued_send.return_value = []
-    mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
+    mock_bot_manager.bots = {"server": mock_bot}
     await ws.send_str("/cancelqueue server SomeBot")
     msg = await ws.receive(timeout=2)
     data = msg.json()
     assert data["status"] == "error"
     assert "no matching queued send" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_unknown_server(ws_session):
+    """Test /cancelqueue on an unconnected server errors out without connecting."""
+    ws, mock_bot_manager = ws_session
+    mock_bot_manager.bots = {}
+    mock_bot_manager.get_bot = AsyncMock()
+    await ws.send_str("/cancelqueue nowhere SomeBot")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not connected" in data["message"].lower()
+    mock_bot_manager.get_bot.assert_not_called()
     await ws.close()
 
 

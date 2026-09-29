@@ -201,6 +201,40 @@ def test_load_config_rejects_invalid_send_queue_type(key):
         IRCBotManager(config_file)
 
 
+def test_load_config_rejects_invalid_send_queue_max_concurrent():
+    """Test config validation rejects a non-integer send_queue_max_concurrent."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "send_queue_max_concurrent": 2.5,
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with pytest.raises(ValueError, match="'send_queue_max_concurrent' must be an integer"):
+        IRCBotManager(config_file)
+
+
+def test_send_queue_semaphore_unlimited_by_default(manager):
+    """Test no semaphore is created when send_queue_max_concurrent is unset."""
+    assert manager.send_queue_semaphore is None
+
+
+def test_send_queue_semaphore_created_from_config():
+    """Test a positive send_queue_max_concurrent creates a semaphore of that size."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "send_queue_max_concurrent": 2,
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    assert isinstance(manager.send_queue_semaphore, asyncio.Semaphore)
+    assert manager.send_queue_semaphore._value == 2
+
+
 @pytest.mark.asyncio
 async def test_get_bot_creates_new_bot(manager):
     """Test that get_bot creates a new bot if it doesn't exist."""

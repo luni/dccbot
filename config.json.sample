@@ -63,6 +63,7 @@
   "send_queue_delay": 15,
   "send_queue_cooldown": 5,
   "send_queue_max_wait": 300,
+  "send_queue_max_concurrent": 0,
   "http": {
     "host": "0.0.0.0",
     "port": 9999,

@@ -1483,6 +1483,64 @@ def test_get_send_queue_setting_invalid_value(bot):
     assert bot._get_send_queue_setting("send_queue_delay", 5) == 5
 
 
+def test_get_send_queue_setting_rejects_non_finite_and_negative(bot):
+    """Test _get_send_queue_setting falls back on nan/inf/negative values."""
+    for bad in ("nan", "inf", "-inf", float("nan"), float("inf"), -1, -0.5):
+        bot.server_config["send_queue_delay"] = bad
+        assert bot._get_send_queue_setting("send_queue_delay", 5) == 5, bad
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_respects_manager_semaphore(bot, mock_bot_manager):
+    """Test _process_queued_send serializes sends across bots through the manager semaphore."""
+    mock_bot_manager.send_queue_semaphore = asyncio.Semaphore(1)
+    order: list[str] = []
+
+    async def slow_send(_bot, data):
+        order.append(f"start {data['message']}")
+        await asyncio.sleep(0.05)
+        order.append(f"end {data['message']}")
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", side_effect=slow_send),
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock),
+    ):
+        await asyncio.gather(
+            bot._process_queued_send("botone", {"user": "botone", "message": "one"}),
+            bot._process_queued_send("bottwo", {"user": "bottwo", "message": "two"}),
+        )
+
+    assert order == ["start one", "end one", "start two", "end two"]
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_without_semaphore(bot, mock_bot_manager):
+    """Test _process_queued_send sends directly when no concurrency limit is set."""
+    mock_bot_manager.send_queue_semaphore = None
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock) as mock_send,
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock),
+    ):
+        await bot._process_queued_send("mybot", {"user": "mybot", "message": "xdcc send #1"})
+
+    mock_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_queued_send_ignores_non_semaphore_attr(bot, mock_bot_manager):
+    """Test a non-semaphore send_queue_semaphore attribute (e.g. plain mock) is ignored."""
+    mock_bot_manager.send_queue_semaphore = MagicMock()
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", new_callable=AsyncMock) as mock_send,
+        patch.object(bot, "_wait_for_queued_transfer", new_callable=AsyncMock),
+    ):
+        await bot._process_queued_send("mybot", {"user": "mybot", "message": "xdcc send #1"})
+
+    mock_send.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_queue_send_requires_user_and_message(bot):
     """Test queue_send does nothing without a user and message."""

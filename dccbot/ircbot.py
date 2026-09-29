@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import ipaddress
 import logging
+import math
 import os
 import random
 import re
@@ -337,9 +338,10 @@ class IRCBot(AioSimpleIRCClient):
         """Get a send-queue timing setting, with per-server override support."""
         value = self.server_config.get(key, self.config.get(key, default))
         try:
-            return float(value)
+            value = float(value)
         except (TypeError, ValueError):
             return default
+        return value if math.isfinite(value) and value >= 0 else default
 
     async def queue_send(self, data: dict[str, Any]) -> None:
         """Queue an `xdcc send`-style command, throttled per target bot nick.
@@ -464,6 +466,17 @@ class IRCBot(AioSimpleIRCClient):
             logger.info("[%s] Skipping cancelled queued send: %s", nick, data.get("message"))
             return
 
+        # `send_queue_max_concurrent` bounds how many queue-triggered transfers
+        # may be in flight at once across all bots; 0/unset means no cap.
+        semaphore = getattr(self.bot_manager, "send_queue_semaphore", None)
+        if isinstance(semaphore, asyncio.Semaphore):
+            async with semaphore:
+                await self._send_queued_command(nick, data)
+        else:
+            await self._send_queued_command(nick, data)
+
+    async def _send_queued_command(self, nick: str, data: dict[str, Any]) -> None:
+        """Send the queued command, then wait for the resulting transfer to settle."""
         sent_at = time.time()
         # Sends bypass `process_command_queue`, which is what bumps `last_active`
         # for join/part, so bump it here to keep the server from idling out.

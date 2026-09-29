@@ -597,7 +597,11 @@ class IRCBotAPI:
         server = args.pop(0)
         target = args.pop(0).lower().strip()
         selector = " ".join(args) if args else None
-        bot = await self.bot_manager.get_bot(server)
+        # Look up the bot directly instead of get_bot(), which would open a new
+        # connection for a mistyped or disconnected server just to cancel nothing.
+        bot = self.bot_manager.bots.get(server.lower())
+        if bot is None:
+            raise RuntimeError(f"Not connected to server: {server}")
         cancelled = bot.cancel_queued_send(target, selector)
         if not cancelled:
             raise RuntimeError(f"No matching queued send found for {target}")

@@ -54,6 +54,10 @@ class IRCBotManager:
         self.transfer_list_timeout = self.config.get("transfer_list_timeout", 86400)  # 1 day
         self.md5_check_queue = asyncio.Queue()
         self.transfers: dict[str, list[dict[str, Any]]] = {}
+        max_concurrent = self.config.get("send_queue_max_concurrent", 0)
+        self.send_queue_semaphore: asyncio.Semaphore | None = (
+            asyncio.Semaphore(max_concurrent) if isinstance(max_concurrent, int) and max_concurrent > 0 else None
+        )
         self._dcc_cert_cache_dir: Path | None = None
         self._dcc_cert_paths: tuple[str, str] | None = None
         self._dcc_cert_lock = threading.Lock()
@@ -193,6 +197,8 @@ class IRCBotManager:
                 raise ValueError(f"'{key}' must be a number")
         if "max_file_size" in config and not isinstance(config["max_file_size"], int):
             raise ValueError("'max_file_size' must be an integer")
+        if "send_queue_max_concurrent" in config and not isinstance(config["send_queue_max_concurrent"], int):
+            raise ValueError("'send_queue_max_concurrent' must be an integer")
         if "allowed_mimetypes" in config and config["allowed_mimetypes"] is not None and not isinstance(config["allowed_mimetypes"], list):
             raise ValueError("'allowed_mimetypes' must be a list")
 

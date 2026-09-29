@@ -77,6 +77,7 @@ keys:
 * `send_queue_delay`: The minimum number of seconds between two queued `xdcc send` requests to the same bot (default: 15). This option can also be set per-server.
 * `send_queue_cooldown`: The number of seconds the bot must go without an active transfer (after `send_queue_delay`) before the next queued `xdcc send` to it goes out; a transfer starting in the meantime, e.g. the next file of an `xdcc batch`, restarts it (default: 5). This option can also be set per-server.
 * `send_queue_max_wait`: The maximum number of seconds an active transfer may go without any progress before the queue moves on to the next item anyway, so a stuck transfer cannot stall the queue (default: 300). This option can also be set per-server.
+* `send_queue_max_concurrent`: The maximum number of queue-triggered transfers allowed to run at the same time across all bots and servers (default: 0, meaning unlimited). Global only; sends to the same bot are always serialized per target regardless.
 * `dcc_ssl_cert`: Optional path to a PEM certificate file for SDCC (SSEND). If provided, `dcc_ssl_key` must also be set.
 * `dcc_ssl_key`: Optional path to the PEM private key for `dcc_ssl_cert`. If either is omitted, a self-signed certificate is generated and cached in `~/.local/share/dccbot/`.
 * `http`: a dictionary with the following keys:
