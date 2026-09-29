@@ -176,3 +176,11 @@ The repository includes a full local development and testing setup:
 * **Mutation testing**: `make mutation` runs mutmut against `dccbot/` (nightly in CI via `.github/workflows/mutation.yml`, results uploaded as an artifact)
 * **Fault injection / negative paths**: `tests/unit/test_fault_injection.py` and `tests/unit/test_negative_paths.py` cover injected filesystem/network/queue failures and malformed inputs; `tests/integration/test_fault_injection.py` injects real network faults (latency, resets, truncation, throttling) via toxiproxy
 * **Dependabot**: configured for pip (weekly) and GitHub Actions (monthly)
+
+### Contributions & Thanks
+
+Contributions are welcome — open an issue or pull request on GitHub. Please make sure `make validate` and the test suite pass before submitting a PR.
+
+Thanks to everyone who has contributed to DCCBot:
+
+* **Vincent Schoonenburg** ([@arkancrow](https://github.com/arkancrow)) — per-bot send queue for `xdcc send` requests (PR #36)
