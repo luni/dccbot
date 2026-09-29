@@ -27,6 +27,42 @@ Features
 * MD5 verification of completed transfers
 * incomplete file suffix support (auto-renamed on completion)
 
+Installation
+------------
+
+### From source
+
+```bash
+git clone https://github.com/luni/dccbot.git
+cd dccbot
+uv sync
+cp config.json.sample config.json
+# edit config.json, then:
+uv run python bot.py
+```
+
+### From a release
+
+Each release ships a wheel and a source distribution on the
+[releases page](https://github.com/luni/dccbot/releases):
+
+```bash
+uv tool install ./dccbot-0.4.0-py3-none-any.whl   # or: pipx install / pip install
+dccbot --config /path/to/config.json
+```
+
+### Running as a systemd user service
+
+Copy `dccbot.service` to `~/.config/systemd/user/`, adjust the paths in
+`ExecStart` to your install, then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now dccbot
+# optional: keep it running after logout
+loginctl enable-linger "$USER"
+```
+
 Usage
 -----
 

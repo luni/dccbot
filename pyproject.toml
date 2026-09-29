@@ -12,6 +12,7 @@ description = "An IRC XDCC download bot written in python with aiohttp and ircpy
 readme = "README.md"
 license = {text = "MIT License"}
 requires-python = ">=3.10"
+
 dependencies = [
     "aiohttp>=3.14.1",
     "irc>=20.5.0",
@@ -22,6 +23,9 @@ dependencies = [
     "aiohttp-apispec-acapy>=3.0.3",
     "cryptography>=43.0.0,<51.0.0",
 ]
+
+[project.scripts]
+dccbot = "dccbot.__main__:main"
 
 [dependency-groups]
 dev = [

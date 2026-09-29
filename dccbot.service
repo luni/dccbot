@@ -1,0 +1,17 @@
+[Unit]
+Description=dccbot IRC XDCC download bot
+Documentation=https://github.com/luni/dccbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Installed from a release wheel (pipx/uv tool install/pip):
+ExecStart=%h/.local/bin/dccbot --config %h/.config/dccbot/config.json
+# Running from a source checkout instead? Use its virtualenv:
+# ExecStart=%h/dccbot/.venv/bin/python %h/dccbot/bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
