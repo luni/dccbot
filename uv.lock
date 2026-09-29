@@ -800,7 +800,7 @@ wheels = [
 [[package]]
 name = "dccbot"
 version = "0.4.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiohttp-apispec-acapy" },

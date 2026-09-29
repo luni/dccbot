@@ -1,3 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dccbot"]
+
 [project]
 name = "dccbot"
 version = "0.4.0"
@@ -77,6 +84,11 @@ source_paths = ["dccbot/"]
 also_copy = ["static"]
 pytest_add_cli_args_test_selection = ["tests/unit"]
 pytest_add_cli_args = ["-x", "-q", "--timeout=60"]
+# Log-call argument mutations can never change observable behaviour; the
+# pattern skips the whole Call expression, including multi-line calls.
+do_not_mutate_patterns = [
+    '^\s*(logger|log)\.',
+]
 
 [tool.pyright]
 exclude = ["**/__pycache__", "**/node_modules", "**/dist", "**/build", "**/venv", "**/.venv", "**/mutants"]
