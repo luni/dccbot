@@ -128,7 +128,30 @@ def test_dcc_connection_process_data_chat(dcc_connection, mock_reactor):
     test_data = b"test message\n"
     dcc_connection.process_data(test_data)
 
-    mock_reactor._handle_event.assert_called()
+    mock_reactor._handle_event.assert_called_once()
+    event = mock_reactor._handle_event.call_args[0][1]
+    assert event.type == "dccmsg"
+    assert event.source == "127.0.0.1"
+    assert event.target is None
+    assert event.arguments == ["test message"]
+
+
+def test_dcc_connection_process_data_chat_buffers_partial_line(dcc_connection, mock_reactor):
+    """A line without a terminator stays buffered; the next feed completes it."""
+    dcc_connection.dcctype = "chat"
+    dcc_connection.peeraddress = "127.0.0.1"
+    dcc_connection.passive = False
+    dcc_connection.connected = True
+    dcc_connection.buffer = NonStrictDecodingLineBuffer()
+
+    dcc_connection.process_data(b"partial")
+    mock_reactor._handle_event.assert_not_called()
+
+    dcc_connection.process_data(b" complete\nnext\n")
+    assert mock_reactor._handle_event.call_count == 2
+    first, second = (c[0][1] for c in mock_reactor._handle_event.call_args_list)
+    assert first.arguments == ["partial complete"]
+    assert second.arguments == ["next"]
 
 
 def test_dcc_connection_process_data_chat_too_large(dcc_connection, mock_reactor):

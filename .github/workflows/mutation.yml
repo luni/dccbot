@@ -27,6 +27,17 @@ jobs:
       - name: Set up Python environment
         run: uv sync
 
+      - name: Restore mutmut stats
+        # A full run does not fit in one job; the stats file lets each
+        # nightly run resume where the previous one stopped. Mutmut keys
+        # results by function hash, so changed code is re-checked anyway.
+        uses: actions/cache@v6
+        with:
+          path: mutants/mutmut-stats.json
+          key: mutmut-stats-${{ github.run_id }}
+          restore-keys: |
+            mutmut-stats-
+
       - name: Run mutmut
         run: |
           cp config.json.sample config.json

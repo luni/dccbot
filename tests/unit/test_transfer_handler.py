@@ -690,6 +690,18 @@ def test_update_progress_computes_percent():
     assert transfer["percent"] == 50
 
 
+def test_update_progress_truncates_at_exact_boundary():
+    """Percent must be 100*x/size truncated, not a different scaling factor."""
+    bot = MagicMock()
+    handler = TransferHandler(bot)
+    transfer = _make_transfer(size=400)
+    transfer["bytes_received"] = 199  # 100*199/400 = 49.75 -> 49; 101*x would give 50
+    transfer["last_progress_update"] = time.time() - 60
+
+    handler._update_progress(transfer)
+    assert transfer["percent"] == 49
+
+
 def test_update_progress_throttles_small_jumps():
     """Small progress deltas within 5s must not trigger an update."""
     bot = MagicMock()
