@@ -1601,8 +1601,8 @@ async def test_queue_send_expands_descending_range_and_lists(bot):
         mock_create_task.return_value = MagicMock()
         await bot.queue_send({"user": "MyBot", "message": "xdcc batch 5-3"})
         await bot.queue_send({"user": "OtherBot", "message": "xdcc send 1,3-4"})
-        mock_create_task.call_args[0][0].close()
-        mock_create_task.call_args[0][0].close()
+        for call in mock_create_task.call_args_list:
+            call[0][0].close()
 
     assert _queued_messages(bot) == ["xdcc send #5", "xdcc send #4", "xdcc send #3"]
     assert _queued_messages(bot, "otherbot") == ["xdcc send #1", "xdcc send #3", "xdcc send #4"]

@@ -2,7 +2,7 @@ dccbot
 ========
 
 ![CI](https://github.com/luni/dccbot/actions/workflows/check.yml/badge.svg)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python](https://img.shields.io/badge/python-3.13%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 An IRC XDCC download bot written in python with aiohttp and [irc.py](https://github.com/jaraco/irc).

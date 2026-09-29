@@ -830,7 +830,7 @@ class IRCBotAPI:
                 )
                 and re.match(r"^xdcc (send|batch) ", data["message"], re.I)
             ):
-                data["message"] = re.sub(r"^xdcc (send|batch) ", r"xdcc s\1 ", data["message"], re.I)
+                data["message"] = re.sub(r"^xdcc (send|batch) ", r"xdcc s\1 ", data["message"], flags=re.I)
 
             await self._queue_send_command(
                 data["server"],

@@ -6,7 +6,7 @@ import logging
 import os
 import ssl
 import stat
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +37,8 @@ def _generate_self_signed_cert(cert_path: Path, key_path: Path) -> None:
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("dccbot")]), critical=False)
         .sign(key, hashes.SHA256())
     )

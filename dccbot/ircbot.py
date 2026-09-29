@@ -623,7 +623,7 @@ class IRCBot(AioSimpleIRCClient):
             logging.debug("Waiting for NickServ authentication")
             try:
                 await asyncio.wait_for(self.authenticated_event.wait(), timeout=10)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("Timed out waiting for NickServ authentication")
 
     def _expand_channels(self, channels: list[str]) -> dict[str, str]:
