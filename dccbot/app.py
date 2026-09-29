@@ -48,6 +48,18 @@ WS_COMMAND_HELP = {
         "example": "/info",
         "description": "Request the latest transfer snapshot.",
     },
+    "queue": {
+        "usage": "/queue",
+        "example": "/queue",
+        "description": "List queued xdcc send requests, per server and target bot.",
+    },
+    "cancelqueue": {
+        "usage": "/cancelqueue <server> <target> [index-or-message]",
+        "example": "/cancelqueue irc.example.net SomeBot 2",
+        "description": "Cancel queued xdcc send requests for a target bot. With no third "
+        "argument, cancels everything queued for it; otherwise cancels a single item, "
+        "matched by its 1-based position in the queue or by a substring of its message.",
+    },
 }
 
 
@@ -202,6 +214,27 @@ class TransferInfo(Schema):
     connected = fields.Bool()
 
 
+class QueueItemInfo(Schema):
+    """Schema for the /info endpoint."""
+
+    message = fields.Str()
+    channels = fields.List(
+        fields.Str(),
+        allow_none=True,
+    )
+    queued_at = fields.Float()
+
+
+class QueueInfo(Schema):
+    """Schema for the /info endpoint."""
+
+    server = fields.Str()
+    target = fields.Str()
+    items = fields.List(
+        fields.Nested(QueueItemInfo),
+    )
+
+
 class InfoResponseSchema(Schema):
     """Response Schema for the /info endpoint."""
 
@@ -210,6 +243,9 @@ class InfoResponseSchema(Schema):
     )
     transfers = fields.List(
         fields.Nested(TransferInfo),
+    )
+    queues = fields.List(
+        fields.Nested(QueueInfo),
     )
 
 
@@ -335,13 +371,17 @@ class IRCBotAPI:
             self.transfer_broadcast_task = None
 
     async def broadcast_transfers(self) -> None:
-        """Broadcast current transfer status to all websocket clients."""
+        """Broadcast current transfer and send-queue status to all websocket clients."""
         try:
             while True:
                 try:
                     await self._broadcast_transfers_to_clients()
                 except Exception:
                     logger.exception("Error broadcasting transfer snapshot")
+                try:
+                    await self._broadcast_queues_to_clients()
+                except Exception:
+                    logger.exception("Error broadcasting queue snapshot")
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
@@ -365,6 +405,10 @@ class IRCBotAPI:
         """Broadcast the current transfer snapshot to all WebSocket clients."""
         transfers = self._build_transfer_snapshot()
         await self._broadcast_json({"type": "transfers", "transfers": transfers})
+
+    async def _broadcast_queues_to_clients(self) -> None:
+        """Broadcast the current send-queue snapshot to all WebSocket clients."""
+        await self._broadcast_json({"type": "queues", "queues": self._build_queue_snapshot()})
 
     def _build_transfer_snapshot(self) -> list[dict[str, object]]:
         """Collect current transfer information."""
@@ -409,9 +453,24 @@ class IRCBotAPI:
                 })
         return snapshot
 
+    def _build_queue_snapshot(self) -> list[dict[str, object]]:
+        """Collect pending send-queue items for every connected server, one entry per target bot."""
+        snapshot: list[dict[str, object]] = []
+        bots = getattr(self.bot_manager, "bots", {})
+        if not isinstance(bots, Mapping):
+            return snapshot
+        for server, bot in bots.items():
+            for target, items in bot.queue_snapshot().items():
+                snapshot.append({"server": server, "target": target, "items": items})
+        return snapshot
+
     def _build_info_payload(self) -> dict[str, object]:
         """Build the payload returned by the /info endpoint."""
-        response = {"networks": [], "transfers": self._build_transfer_snapshot()}
+        response = {
+            "networks": [],
+            "transfers": self._build_transfer_snapshot(),
+            "queues": self._build_queue_snapshot(),
+        }
         for server, bot in self.bot_manager.bots.items():
             network_info = {"server": server, "nickname": bot.nick, "channels": []}
 
@@ -473,12 +532,16 @@ class IRCBotAPI:
         message: str,
         channels: list[str] | None = None,
     ) -> None:
-        """Queue a send command on the bot for the given server."""
+        """Queue a send command directly onto the bot's per-nick send queue.
+
+        Bypasses `command_queue`/`process_command_queue()`, which are reserved for
+        `join`/`part`, so throttled sends never block behind (or get blocked by) them.
+        """
         bot = await self.bot_manager.get_bot(server)
-        payload: dict[str, Any] = {"command": "send", "user": user, "message": message}
+        payload: dict[str, Any] = {"user": user, "message": message}
         if channels is not None:
             payload["channels"] = channels
-        await bot.queue_command(payload)
+        await bot.queue_send(payload)
 
     async def _ws_help(self, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle the /help websocket command."""
@@ -523,6 +586,27 @@ class IRCBotAPI:
         """Handle the /info websocket command."""
         await self._send_transfer_snapshot(ws)
 
+    async def _ws_queue(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /queue websocket command."""
+        await ws.send_json({"type": "queues", "queues": self._build_queue_snapshot()})
+
+    async def _ws_cancelqueue(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /cancelqueue websocket command."""
+        if len(args) < 2:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        target = args.pop(0).lower().strip()
+        selector = " ".join(args) if args else None
+        # Look up the bot directly instead of get_bot(), which would open a new
+        # connection for a mistyped or disconnected server just to cancel nothing.
+        bot = self.bot_manager.bots.get(server.lower())
+        if bot is None:
+            raise RuntimeError(f"Not connected to server: {server}")
+        cancelled = bot.cancel_queued_send(target, selector)
+        if not cancelled:
+            raise RuntimeError(f"No matching queued send found for {target}")
+        await ws.send_json({"status": "ok", "message": f"Cancelled {len(cancelled)} queued send(s) for {target}."})
+
     async def handle_ws_command(self, command: str | None, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle a WebSocket command.
 
@@ -545,6 +629,8 @@ class IRCBotAPI:
                 "msg": self._ws_msg,
                 "msgjoin": self._ws_msgjoin,
                 "info": self._ws_info,
+                "queue": self._ws_queue,
+                "cancelqueue": self._ws_cancelqueue,
             }
             handler = handlers.get(command or "")
             if handler is None:
@@ -717,9 +803,10 @@ class IRCBotAPI:
     @docs(
         tags=["IRC Commands"],
         summary="Send a message to a user",
-        description="Send a message to a specified user on a given IRC server.",
+        description="Send a message to a specified user on a given IRC server. Messages are queued per target and throttled "
+        "(see `send_queue_delay`, `send_queue_cooldown` and `send_queue_max_wait`).",
         responses={
-            200: {"description": "Message sent successfully"},
+            200: {"description": "Message queued successfully"},
             400: {"description": "Invalid request or missing parameters"},
         },
     )

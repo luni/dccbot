@@ -183,7 +183,7 @@ async def test_websocket_handler_help_command(api_client):
     data = msg.json()
     assert data["status"] == "ok"
     assert "available websocket commands" in data["message"].lower()
-    for command in ("help", "join", "part", "msg", "msgjoin", "info"):
+    for command in ("help", "join", "part", "msg", "msgjoin", "info", "queue", "cancelqueue"):
         assert f"/{command}" in data["message"].lower()
     await ws.close()
 
@@ -214,6 +214,8 @@ async def test_websocket_handler_help_with_command(api_client):
         ("msg", "usage: /msg <server> <target> <message>"),
         ("msgjoin", "usage: /msgjoin <server> <channel> <target> <message>"),
         ("info", "usage: /info"),
+        ("queue", "usage: /queue"),
+        ("cancelqueue", "usage: /cancelqueue <server> <target> [index-or-message]"),
     ],
 )
 async def test_websocket_handler_help_with_specific_commands(api_client, command, expected):
@@ -249,13 +251,12 @@ async def test_websocket_handler_msg_command(ws_session):
     """Test websocket /msg command."""
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
-    mock_bot.queue_command = AsyncMock()
+    mock_bot.queue_send = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
     await ws.send_str("/msg server target hello world")
     await asyncio.sleep(0.1)
-    mock_bot.queue_command.assert_called_once()
-    call_args = mock_bot.queue_command.call_args[0][0]
-    assert call_args["command"] == "send"
+    mock_bot.queue_send.assert_called_once()
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert call_args["user"] == "target"
     assert call_args["message"] == "hello world"
     await ws.close()
@@ -266,13 +267,12 @@ async def test_websocket_handler_msgjoin_command(ws_session):
     """Test websocket /msgjoin command."""
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
-    mock_bot.queue_command = AsyncMock()
+    mock_bot.queue_send = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
     await ws.send_str("/msgjoin server #channel target hello world")
     await asyncio.sleep(0.1)
-    mock_bot.queue_command.assert_called_once()
-    call_args = mock_bot.queue_command.call_args[0][0]
-    assert call_args["command"] == "send"
+    mock_bot.queue_send.assert_called_once()
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert call_args["user"] == "target"
     assert call_args["channels"] == ["#channel"]
     assert call_args["message"] == "hello world"
@@ -284,12 +284,117 @@ async def test_websocket_handler_msgjoin_normalizes_channel(ws_session):
     """Test websocket /msgjoin adds # to bare channel names."""
     ws, mock_bot_manager = ws_session
     mock_bot = MagicMock()
-    mock_bot.queue_command = AsyncMock()
+    mock_bot.queue_send = AsyncMock()
     mock_bot_manager.get_bot = AsyncMock(return_value=mock_bot)
     await ws.send_str("/msgjoin server Channel target hello world")
     await asyncio.sleep(0.1)
-    call_args = mock_bot.queue_command.call_args[0][0]
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert call_args["channels"] == ["#channel"]
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_queue_no_bots(ws_session):
+    """Test websocket /queue command with no connected servers returns an empty snapshot."""
+    ws, mock_bot_manager = ws_session
+    mock_bot_manager.bots = {}
+    mock_bot_manager.get_bot = AsyncMock()
+    await ws.send_str("/queue")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data == {"type": "queues", "queues": []}
+    mock_bot_manager.get_bot.assert_not_called()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_queue_command(ws_session):
+    """Test websocket /queue command returns the queue snapshot of every connected server."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.queue_snapshot.return_value = {"somebot": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}
+    mock_bot_manager.bots = {"server1": mock_bot}
+    mock_bot_manager.get_bot = AsyncMock()
+    await ws.send_str("/queue")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["type"] == "queues"
+    assert data["queues"] == [{"server": "server1", "target": "somebot", "items": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}]
+    # Listing queues must not connect to a server as a side effect.
+    mock_bot_manager.get_bot.assert_not_called()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_not_enough_args(ws_session):
+    """Test websocket /cancelqueue command with insufficient arguments."""
+    ws, _ = ws_session
+    await ws.send_str("/cancelqueue onlyone")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not enough arguments" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_all(ws_session):
+    """Test websocket /cancelqueue with no selector cancels everything queued for the target."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.cancel_queued_send.return_value = [{"message": "xdcc send #1"}, {"message": "xdcc send #2"}]
+    mock_bot_manager.bots = {"server": mock_bot}
+    await ws.send_str("/cancelqueue server SomeBot")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "ok"
+    mock_bot.cancel_queued_send.assert_called_once_with("somebot", None)
+    assert "cancelled 2" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_with_selector(ws_session):
+    """Test websocket /cancelqueue passes a selector through to narrow the cancellation."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.cancel_queued_send.return_value = [{"message": "xdcc send #2"}]
+    mock_bot_manager.bots = {"server": mock_bot}
+    await ws.send_str("/cancelqueue server SomeBot 2")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "ok"
+    mock_bot.cancel_queued_send.assert_called_once_with("somebot", "2")
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_no_match(ws_session):
+    """Test websocket /cancelqueue reports an error when nothing matched."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.cancel_queued_send.return_value = []
+    mock_bot_manager.bots = {"server": mock_bot}
+    await ws.send_str("/cancelqueue server SomeBot")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "no matching queued send" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_cancelqueue_unknown_server(ws_session):
+    """Test /cancelqueue on an unconnected server errors out without connecting."""
+    ws, mock_bot_manager = ws_session
+    mock_bot_manager.bots = {}
+    mock_bot_manager.get_bot = AsyncMock()
+    await ws.send_str("/cancelqueue nowhere SomeBot")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not connected" in data["message"].lower()
+    mock_bot_manager.get_bot.assert_not_called()
     await ws.close()
 
 

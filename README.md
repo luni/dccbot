@@ -22,6 +22,7 @@ Features
 * file size limits
 * private IP filtering for DCC transfers
 * transfer cancellation via API
+* per-bot send queue throttling `xdcc send` requests to the same bot; numeric `xdcc send`/`xdcc batch` ranges (e.g. `xdcc batch 1-5`) are expanded into individual queued sends, so range requests also work on bots without batch support
 * auto-disconnect from idle servers and channels
 * MD5 verification of completed transfers
 * incomplete file suffix support (auto-renamed on completion)
@@ -73,6 +74,10 @@ keys:
 * `passive_dcc_listen_ip`: The reachable IP address to bind and advertise the passive DCC listener on. If omitted, it defaults to the hostname's IP. `0.0.0.0` is treated as unset. This option can also be set per-server.
 * `passive_dcc_port_range`: A list of two integers `[min_port, max_port]` defining the port range to try binding the listener to. If omitted, the OS assigns a port. This option can also be set per-server.
 * `passive_dcc_timeout`: The number of seconds to wait for the peer to connect to the passive listener before aborting (default: 60). This option can also be set per-server.
+* `send_queue_delay`: The minimum number of seconds between two queued `xdcc send` requests to the same bot (default: 15). This option can also be set per-server.
+* `send_queue_cooldown`: The number of seconds the bot must go without an active transfer (after `send_queue_delay`) before the next queued `xdcc send` to it goes out; a transfer starting in the meantime, e.g. the next file of an `xdcc batch`, restarts it (default: 5). This option can also be set per-server.
+* `send_queue_max_wait`: The maximum number of seconds an active transfer may go without any progress before the queue moves on to the next item anyway, so a stuck transfer cannot stall the queue (default: 300). This option can also be set per-server.
+* `send_queue_max_concurrent`: The maximum number of queue-triggered transfers allowed to run at the same time across all bots and servers (default: 0, meaning unlimited). Global only; sends to the same bot are always serialized per target regardless.
 * `dcc_ssl_cert`: Optional path to a PEM certificate file for SDCC (SSEND). If provided, `dcc_ssl_key` must also be set.
 * `dcc_ssl_key`: Optional path to the PEM private key for `dcc_ssl_cert`. If either is omitted, a self-signed certificate is generated and cached in `~/.local/share/dccbot/`.
 * `http`: a dictionary with the following keys:
@@ -88,11 +93,11 @@ available at `http://localhost:8080/` by default.
 
 * `POST /join`: join a channel
 * `POST /part`: part a channel
-* `POST /msg`: send a message to a channel or user
+* `POST /msg`: send a message to a channel or user (queued per target, see `send_queue_*`)
 * `POST /cancel`: cancel a running transfer
 * `POST /shutdown`: shutdown the bot
-* `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers)
-* `GET /ws`: WebSocket endpoint for live transfer updates and log streaming
+* `GET /info`: get information about the current status of the bot (networks, current transfers, finished transfers, pending send queues)
+* `GET /ws`: WebSocket endpoint for live transfer/queue updates and log streaming
 * `GET /swagger`: interactive OpenAPI/Swagger UI documentation
 * `GET /static/`: static web assets (unified web UI)
 
@@ -117,6 +122,8 @@ Supported websocket commands:
 * `/msg <server> <target> <message>`
 * `/msgjoin <server> <channel> <target> <message>`
 * `/info`
+* `/queue`
+* `/cancelqueue <server> <target> [index-or-message]`
 
 ### Browser Userscript for Easy Downloads
 
@@ -169,3 +176,11 @@ The repository includes a full local development and testing setup:
 * **Mutation testing**: `make mutation` runs mutmut against `dccbot/` (nightly in CI via `.github/workflows/mutation.yml`, results uploaded as an artifact)
 * **Fault injection / negative paths**: `tests/unit/test_fault_injection.py` and `tests/unit/test_negative_paths.py` cover injected filesystem/network/queue failures and malformed inputs; `tests/integration/test_fault_injection.py` injects real network faults (latency, resets, truncation, throttling) via toxiproxy
 * **Dependabot**: configured for pip (weekly) and GitHub Actions (monthly)
+
+### Contributions & Thanks
+
+Contributions are welcome — open an issue or pull request on GitHub. Please make sure `make validate` and the test suite pass before submitting a PR.
+
+Thanks to everyone who has contributed to DCCBot:
+
+* **Vincent Schoonenburg** ([@arkancrow](https://github.com/arkancrow)) — per-bot send queue for `xdcc send` requests (PR #36)

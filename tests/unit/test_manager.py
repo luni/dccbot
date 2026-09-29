@@ -186,6 +186,55 @@ def test_load_config_rejects_invalid_http_port_type():
         IRCBotManager(config_file)
 
 
+@pytest.mark.parametrize("key", ["send_queue_delay", "send_queue_cooldown", "send_queue_max_wait"])
+def test_load_config_rejects_invalid_send_queue_type(key):
+    """Test config validation rejects non-numeric send queue timing keys."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        key: "not-a-number",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with pytest.raises(ValueError, match=f"'{key}' must be a number"):
+        IRCBotManager(config_file)
+
+
+def test_load_config_rejects_invalid_send_queue_max_concurrent():
+    """Test config validation rejects a non-integer send_queue_max_concurrent."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "send_queue_max_concurrent": 2.5,
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    with pytest.raises(ValueError, match="'send_queue_max_concurrent' must be an integer"):
+        IRCBotManager(config_file)
+
+
+def test_send_queue_semaphore_unlimited_by_default(manager):
+    """Test no semaphore is created when send_queue_max_concurrent is unset."""
+    assert manager.send_queue_semaphore is None
+
+
+def test_send_queue_semaphore_created_from_config():
+    """Test a positive send_queue_max_concurrent creates a semaphore of that size."""
+    config = {
+        "servers": {"irc.example.com": {"nick": "testbot"}},
+        "send_queue_max_concurrent": 2,
+    }
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        json.dump(config, f)
+        config_file = f.name
+
+    manager = IRCBotManager(config_file)
+    assert isinstance(manager.send_queue_semaphore, asyncio.Semaphore)
+    assert manager.send_queue_semaphore._value == 2
+
+
 @pytest.mark.asyncio
 async def test_get_bot_creates_new_bot(manager):
     """Test that get_bot creates a new bot if it doesn't exist."""
@@ -474,6 +523,7 @@ async def test_cleanup_bots_idle_server(manager):
     mock_bot.current_transfers = {}
     mock_bot.command_queue = MagicMock()
     mock_bot.command_queue.empty.return_value = True
+    mock_bot.send_queue_items = {}
     mock_bot.last_active = time.time() - 2000
     mock_bot.cleanup = AsyncMock()
 
@@ -484,6 +534,29 @@ async def test_cleanup_bots_idle_server(manager):
 
     mock_bot.disconnect.assert_called_once_with("Idle timeout")
     assert "irc.example.com" not in manager.bots
+
+
+@pytest.mark.asyncio
+async def test_cleanup_bots_keeps_server_with_pending_sends(manager):
+    """Test that a server with queued xdcc sends is not disconnected as idle."""
+    import time
+
+    mock_bot = AsyncMock()
+    mock_bot.joined_channels = {}
+    mock_bot.current_transfers = {}
+    mock_bot.command_queue = MagicMock()
+    mock_bot.command_queue.empty.return_value = True
+    mock_bot.send_queue_items = {"somebot": [{"message": "xdcc send #2"}]}
+    mock_bot.last_active = time.time() - 2000
+    mock_bot.cleanup = AsyncMock()
+
+    manager.bots = {"irc.example.com": mock_bot}
+    manager.server_idle_timeout = 1800
+
+    await manager._cleanup_bots()
+
+    mock_bot.disconnect.assert_not_called()
+    assert "irc.example.com" in manager.bots
 
 
 @pytest.mark.asyncio

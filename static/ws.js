@@ -29,6 +29,7 @@
     const callbacks = {
       onLog: noop,
       onTransfers: noop,
+      onQueues: noop,
       onCommandResponse: noop,
       onError: noop,
       onOpen: noop,
@@ -66,6 +67,8 @@
         callbacks.onLog(payload);
       } else if (payload.type === "transfers") {
         callbacks.onTransfers(payload);
+      } else if (payload.type === "queues") {
+        callbacks.onQueues(payload);
       } else {
         callbacks.onCommandResponse(payload);
       }

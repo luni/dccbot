@@ -300,7 +300,7 @@ async def test_msg_success(api_client):
     data = await resp.json()
     assert data["status"] == "ok"
 
-    mock_bot.queue_command.assert_called_once()
+    mock_bot.queue_send.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -343,7 +343,7 @@ async def test_msg_with_xdcc_rewrite(api_client):
     assert resp.status == 200
 
     # Verify the message was rewritten
-    call_args = mock_bot.queue_command.call_args[0][0]
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert "xdcc ssend" in call_args["message"].lower()
 
 
@@ -367,7 +367,7 @@ async def test_msg_with_xdcc_rewrite_ssend_map(api_client):
     assert resp.status == 200
 
     # Verify the message was rewritten and user lowercased
-    call_args = mock_bot.queue_command.call_args[0][0]
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert call_args["user"] == "testbot"
     assert "xdcc ssend" in call_args["message"].lower()
 
@@ -386,8 +386,7 @@ async def test_msg_without_channel(api_client):
     resp = await client.post("/msg", json=payload)
     assert resp.status == 200
 
-    call_args = mock_bot.queue_command.call_args[0][0]
-    assert call_args["command"] == "send"
+    call_args = mock_bot.queue_send.call_args[0][0]
     assert call_args["user"] == "testuser"
     assert call_args["channels"] == []
 
@@ -464,7 +463,7 @@ async def test_info_success_empty_bot_manager(api_client):
     resp = await client.get("/info")
     assert resp.status == 200
     data = await resp.json()
-    assert data == {"networks": [], "transfers": []}
+    assert data == {"networks": [], "transfers": [], "queues": []}
 
 
 @pytest.mark.asyncio
@@ -581,6 +580,23 @@ async def test_info_success_bot_manager_with_bots_and_transfers(api_client):
     data = await resp.json()
     assert len(data["networks"]) == 2
     assert len(data["transfers"]) == 2
+    assert data["queues"] == []
+
+
+@pytest.mark.asyncio
+async def test_info_success_with_pending_queues(api_client):
+    """Test info endpoint surfaces per-server pending send-queue items."""
+    client, mock_bot_manager = api_client
+
+    bot = IRCBot("server1", {}, "download_path", ["mimetype1"], 1000000, mock_bot_manager)
+    bot.send_queue_items = {"somebot": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}
+    mock_bot_manager.bots = {"server1": bot}
+    mock_bot_manager.transfers = {}
+
+    resp = await client.get("/info")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["queues"] == [{"server": "server1", "target": "somebot", "items": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}]
 
 
 @pytest.mark.asyncio
@@ -629,7 +645,7 @@ async def test_info_no_bots_no_transfers(api_client):
     resp = await client.get("/info")
     assert resp.status == 200
     data = await resp.json()
-    assert data == {"networks": [], "transfers": []}
+    assert data == {"networks": [], "transfers": [], "queues": []}
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,10 @@ class IRCBotManager:
         self.transfer_list_timeout = self.config.get("transfer_list_timeout", 86400)  # 1 day
         self.md5_check_queue = asyncio.Queue()
         self.transfers: dict[str, list[dict[str, Any]]] = {}
+        max_concurrent = self.config.get("send_queue_max_concurrent", 0)
+        self.send_queue_semaphore: asyncio.Semaphore | None = (
+            asyncio.Semaphore(max_concurrent) if isinstance(max_concurrent, int) and max_concurrent > 0 else None
+        )
         self._dcc_cert_cache_dir: Path | None = None
         self._dcc_cert_paths: tuple[str, str] | None = None
         self._dcc_cert_lock = threading.Lock()
@@ -180,11 +184,21 @@ class IRCBotManager:
     @staticmethod
     def _validate_transfer_keys(config: dict[str, Any]) -> None:
         """Validate types for transfer-related config keys."""
-        for key in ("server_idle_timeout", "channel_idle_timeout", "resume_timeout", "transfer_list_timeout"):
+        for key in (
+            "server_idle_timeout",
+            "channel_idle_timeout",
+            "resume_timeout",
+            "transfer_list_timeout",
+            "send_queue_delay",
+            "send_queue_cooldown",
+            "send_queue_max_wait",
+        ):
             if key in config and not isinstance(config[key], (int, float)):
                 raise ValueError(f"'{key}' must be a number")
         if "max_file_size" in config and not isinstance(config["max_file_size"], int):
             raise ValueError("'max_file_size' must be an integer")
+        if "send_queue_max_concurrent" in config and not isinstance(config["send_queue_max_concurrent"], int):
+            raise ValueError("'send_queue_max_concurrent' must be an integer")
         if "allowed_mimetypes" in config and config["allowed_mimetypes"] is not None and not isinstance(config["allowed_mimetypes"], list):
             raise ValueError("'allowed_mimetypes' must be a list")
 
@@ -325,6 +339,7 @@ class IRCBotManager:
                 not bot.joined_channels
                 and not bot.current_transfers
                 and bot.command_queue.empty()
+                and not bot.send_queue_items
                 and self.server_idle_timeout > 0
                 and isinstance(bot.last_active, (int, float))
                 and bot.last_active + self.server_idle_timeout < now

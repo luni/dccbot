@@ -6,6 +6,7 @@ pure mocks cannot reach.
 """
 
 import asyncio
+import json
 import socket
 import ssl
 import struct
@@ -365,6 +366,7 @@ class TestManagerFaults:
         idle_bot.joined_channels = {}
         idle_bot.current_transfers = {}
         idle_bot.command_queue.empty.return_value = True
+        idle_bot.send_queue_items = {}
         idle_bot.last_active = time.time() - 100
         idle_bot.disconnect = AsyncMock(side_effect=RuntimeError("gone already"))
 
@@ -480,11 +482,11 @@ class TestIrcbotFaults:
         bot.connection = MagicMock()
 
         mock_handler = AsyncMock(side_effect=[RuntimeError("boom"), None])
-        with patch.object(bot, "_handle_send_command", mock_handler):
+        with patch.object(bot, "_handle_join_command", mock_handler):
             task = asyncio.create_task(bot.process_command_queue())
             try:
-                await bot.command_queue.put({"command": "send", "user": "u", "message": "one"})
-                await bot.command_queue.put({"command": "send", "user": "u", "message": "two"})
+                await bot.command_queue.put({"command": "join", "channels": ["#one"]})
+                await bot.command_queue.put({"command": "join", "channels": ["#two"]})
                 for _ in range(50):
                     if mock_handler.call_count >= 2:
                         break
@@ -530,6 +532,28 @@ class TestAppFaults:
         good_ws.send_str.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_broadcast_queues_to_clients_payload(self):
+        """The periodic queue broadcast mirrors every connected bot's pending sends."""
+        mock_bot_manager = MagicMock()
+        api = IRCBotAPI(config_file="config.json", bot_manager=mock_bot_manager)
+        bot = IRCBot("server1", {}, "download_path", ["mimetype"], 1000000, mock_bot_manager)
+        bot.send_queue_items = {"somebot": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}
+        mock_bot_manager.bots = {"server1": bot}
+
+        ws = MagicMock()
+        ws.closed = False
+        ws.send_str = AsyncMock()
+        api.websockets = {ws}
+
+        await api._broadcast_queues_to_clients()
+
+        payload = json.loads(ws.send_str.call_args[0][0])
+        assert payload == {
+            "type": "queues",
+            "queues": [{"server": "server1", "target": "somebot", "items": [{"message": "xdcc send #1", "channels": None, "queued_at": 123.0}]}],
+        }
+
+    @pytest.mark.asyncio
     async def test_websocket_binary_message_ignored(self, ws_session):
         """Binary frames are ignored and the connection stays usable."""
         ws, _ = ws_session
@@ -543,6 +567,7 @@ class TestAppFaults:
         """A snapshot failure is logged and the broadcast loop keeps running."""
         api = IRCBotAPI(config_file="config.json", bot_manager=MagicMock())
         api._broadcast_transfers_to_clients = AsyncMock(side_effect=[RuntimeError("boom"), None, None])  # type: ignore
+        api._broadcast_queues_to_clients = AsyncMock(side_effect=[None, RuntimeError("boom"), None])  # type: ignore
 
         sleeps = 0
 
@@ -556,6 +581,7 @@ class TestAppFaults:
             await api.broadcast_transfers()
 
         assert api._broadcast_transfers_to_clients.call_count == 2
+        assert api._broadcast_queues_to_clients.call_count == 2
 
     def test_ws_log_handler_emit_without_loop_leaks_nothing(self):
         """emit() with no event loop sends nothing and creates no coroutine."""
