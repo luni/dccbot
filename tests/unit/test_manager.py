@@ -38,7 +38,7 @@ def manager(config_file):
 def test_load_config_success(manager):
     """Test successful config loading."""
     assert "servers" in manager.config
-    assert "irc.example.com" in manager.config["servers"]
+    assert manager.config["servers"].get("irc.example.com") is not None
 
 
 def test_load_config_lower_cases_server_keys():
@@ -54,8 +54,8 @@ def test_load_config_lower_cases_server_keys():
         config_file = f.name
 
     manager = IRCBotManager(config_file)
-    assert "irc.example.com" in manager.config["servers"]
-    assert "IRC.Example.COM" not in manager.config["servers"]
+    assert manager.config["servers"].get("irc.example.com") is not None
+    assert manager.config["servers"].get("IRC.Example.COM") is None
 
 
 def test_load_config_lower_cases_ssend_map():
@@ -294,7 +294,7 @@ async def test_get_bot_connect_failure_not_cached(manager):
         with pytest.raises(RuntimeError, match="connect failed"):
             await manager.get_bot("irc.example.com")
 
-        assert "irc.example.com" not in manager.bots
+        assert manager.bots.get("irc.example.com") is None
 
 
 @pytest.mark.asyncio
@@ -533,7 +533,7 @@ async def test_cleanup_bots_idle_server(manager):
     await manager._cleanup_bots()
 
     mock_bot.disconnect.assert_called_once_with("Idle timeout")
-    assert "irc.example.com" not in manager.bots
+    assert manager.bots.get("irc.example.com") is None
 
 
 @pytest.mark.asyncio
@@ -556,7 +556,7 @@ async def test_cleanup_bots_keeps_server_with_pending_sends(manager):
     await manager._cleanup_bots()
 
     mock_bot.disconnect.assert_not_called()
-    assert "irc.example.com" in manager.bots
+    assert manager.bots.get("irc.example.com") is mock_bot
 
 
 @pytest.mark.asyncio
@@ -578,7 +578,7 @@ async def test_cleanup_bots_active_server(manager):
     await manager._cleanup_bots()
 
     mock_bot.disconnect.assert_not_called()
-    assert "irc.example.com" in manager.bots
+    assert manager.bots.get("irc.example.com") is mock_bot
 
 
 def test_get_md5(tmp_path):

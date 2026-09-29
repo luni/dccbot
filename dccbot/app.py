@@ -694,11 +694,6 @@ class IRCBotAPI:
         with open(fullpath, encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
 
-    async def _return_static_html(self, request: web.Request) -> web.Response:
-        """Serve HTML files located under the static directory."""
-        filename = request.rel_url.path.split("/")[-1]
-        return self._read_html_file(filename)
-
     async def _return_index_html(self, request: web.Request) -> web.Response:
         """Serve the merged UI index page."""
         del request
@@ -714,7 +709,7 @@ class IRCBotAPI:
         self.app.router.add_get("/info", self.info)
         self.app.router.add_get("/ws", self.websocket_handler)
         self.app.router.add_get("/", self._return_index_html)
-        self.app.router.add_get("/index.html", self._return_static_html)
+        self.app.router.add_get("/index.html", self._return_index_html)
         self.app.router.add_static("/static/", path=str(self.static_dir))
 
     def setup_apispec(self) -> None:

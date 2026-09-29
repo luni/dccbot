@@ -250,7 +250,7 @@ class IRCBotManager:
     def _normalize_cert_keys(config: dict[str, Any]) -> None:
         """Validate the DCC certificate config keys."""
         for key in ("dcc_ssl_cert", "dcc_ssl_key"):
-            if key in config and not isinstance(config[key], str):
+            if config.get(key) is not None and not isinstance(config[key], str):
                 raise ValueError(f"'{key}' must be a string")
 
     async def get_bot(self, server: str) -> IRCBot:
