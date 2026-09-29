@@ -714,14 +714,28 @@
       return `${seconds}s ago`;
     }
 
+    let lastQueueSignature = null;
+
     function renderQueues(queues) {
-      queueList.replaceChildren();
       const items = [];
       (Array.isArray(queues) ? queues : []).forEach((queue) => {
         (queue.items || []).forEach((item, idx) => {
           items.push({ server: queue.server, nick: queue.target, index: idx + 1, ...item });
         });
       });
+
+      const signature = JSON.stringify(queues);
+      if (signature === lastQueueSignature) {
+        // Unchanged broadcast: only refresh the "queued ago" labels in place.
+        // Rebuilding the DOM every second destroys buttons between mousedown
+        // and mouseup, silently eating clicks.
+        queueList.querySelectorAll("[data-queued-at]").forEach((el) => {
+          el.textContent = `Queued: ${formatQueuedAgo(Number(el.dataset.queuedAt) || null)}`;
+        });
+        return;
+      }
+      lastQueueSignature = signature;
+      queueList.replaceChildren();
 
       if (items.length === 0) {
         addTextElement(queueList, "p", "placeholder", "No queued sends.");
@@ -755,7 +769,10 @@
         addTextElement(detailsDiv, "div", "", `Server: ${item.server}`);
         addTextElement(detailsDiv, "div", "", `Target: ${item.nick}`);
         addTextElement(detailsDiv, "div", "", `Channels: ${channels}`);
-        addTextElement(detailsDiv, "div", "", `Queued: ${formatQueuedAgo(item.queued_at)}`);
+        const queuedEl = addTextElement(detailsDiv, "div", "", `Queued: ${formatQueuedAgo(item.queued_at)}`);
+        if (item.queued_at) {
+          queuedEl.dataset.queuedAt = String(item.queued_at);
+        }
         queueItem.appendChild(detailsDiv);
 
         queueList.appendChild(queueItem);
