@@ -73,9 +73,10 @@ def _expand_xdcc_range(message: str) -> list[str]:
     numbers and ranges (`1,3-4`) work too, descending ranges keep their order,
     and a trailing password is appended to each expanded send.
 
-    Specs that aren't purely numeric (group names, `*pattern` filters) or that
-    would expand beyond SEND_QUEUE_EXPAND_MAX packs are returned unchanged so
-    the bot receives the message exactly as written.
+    Single-pack `send`/`ssend` messages, specs that aren't purely numeric
+    (group names, `*pattern` filters), and specs that would expand beyond
+    SEND_QUEUE_EXPAND_MAX packs are returned unchanged so the bot receives
+    the message exactly as written.
 
     """
     match = XDCC_RANGE_RE.match(message)
@@ -100,6 +101,9 @@ def _expand_xdcc_range(message: str) -> list[str]:
         if len(packs) > SEND_QUEUE_EXPAND_MAX:
             logger.debug("Not expanding oversized xdcc pack spec: %s", message)
             return [message]
+
+    if len(packs) == 1 and match.group(2).lower() == "send":
+        return [message]
 
     suffix = f" {tail.strip()}" if tail else ""
     return [f"xdcc {ssl}send #{n}{suffix}" for n in packs]

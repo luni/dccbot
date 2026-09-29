@@ -1653,6 +1653,8 @@ async def test_queue_send_range_preserves_password(bot):
         "xdcc batch 1-10*pattern",
         "xdcc send 1-600",
         "xdcc send #7",
+        "xdcc send 7",
+        "xdcc ssend 7",
         "xdcc cancel",
         "hello world",
     ],
