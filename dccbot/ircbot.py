@@ -1122,7 +1122,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        nick = event.source.nick.lower()
+        nick = (event.source.nick or "").lower()
 
         parsed = parse_dcc_accept(event.arguments[1])
         if not parsed:
@@ -1198,7 +1198,7 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC SEND command (not enough arguments): %s", event.arguments)
             return
 
-        nick = event.source.nick.lower()
+        nick = (event.source.nick or "").lower()
         filename = parsed.filename
 
         # Validate size and filename before proceeding with any DCC transfer
@@ -1278,7 +1278,7 @@ class IRCBot(AioSimpleIRCClient):
             if (
                 isinstance(item, dict)
                 and item.get("size") == parsed.size
-                and item.get("connected", False)
+                and item.get("status") not in TERMINAL_TRANSFER_STATUSES
                 and str(item.get("nick") or "").lower() == nick
                 and str(item.get("server") or "").lower() == self.server
             ):

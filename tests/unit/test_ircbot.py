@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 import pytest
 
 from dccbot.ircbot import IRCBot
-from dccbot.transfers import create_pending_transfer
+from dccbot.transfers import create_pending_transfer, create_transfer
 
 
 @pytest.fixture
@@ -2429,3 +2429,96 @@ async def test_reconnect_attempt_counter_resets_per_drop(bot):
         await bot._reconnect()
 
     assert len(attempts) == 4
+
+
+def test_on_dcc_send_null_nick_does_not_crash(bot):
+    """A DCC SEND from a null-nick source is handled without AttributeError."""
+    bot.connection = MagicMock()
+    bot.config = {"allow_private_ips": True}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = None
+    event.arguments = ["DCC", 'SEND "test.txt" 127.0.0.1 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as init_mock:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    init_mock.assert_called_once()
+
+
+def test_on_dcc_accept_null_nick_does_not_crash(bot):
+    """A DCC ACCEPT from a null-nick source warns instead of AttributeError."""
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = None
+    event.arguments = ["DCC", "ACCEPT file.bin 5000 100"]
+
+    bot.on_dcc_accept(bot.connection, event)
+    # Should not raise
+
+
+def test_touch_channels_for_null_nick(bot):
+    """_touch_channels_for_nick with a None nick is a no-op."""
+    bot.bot_channel_map = {}
+    bot._touch_channels_for_nick(None)
+
+
+def test_active_dcc_send_rejects_duplicate_pending_transfer(bot_factory, mock_bot_manager):
+    """A second SEND offer for a file still connecting is rejected, not double-downloaded."""
+    mock_bot_manager.config = {"allow_private_ips": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, server_config={"channels": []})
+    bot.connection = MagicMock()
+    bot.nick = "mybot"
+
+    pending = create_transfer(
+        nick="sender",
+        server="irc.example.com",
+        peer_address="127.0.0.1",
+        peer_port=5000,
+        file_path="/tmp/file.bin",
+        filename="file.bin",
+        size=1000,
+    )
+    pending["status"] = "started"
+    pending["connected"] = False  # still connecting
+    mock_bot_manager.transfers = {"file.bin": [pending]}
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "file.bin" 127.0.0.1 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as init_mock:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    init_mock.assert_not_called()
+
+
+def test_active_dcc_send_allows_after_terminal_record(bot_factory, mock_bot_manager):
+    """A fresh SEND offer proceeds when the previous record already terminated."""
+    mock_bot_manager.config = {"allow_private_ips": True}
+    bot = bot_factory(allowed_mimetypes=None, manager=mock_bot_manager, server_config={"channels": []})
+    bot.connection = MagicMock()
+    bot.nick = "mybot"
+
+    failed = create_transfer(
+        nick="sender",
+        server="irc.example.com",
+        peer_address="127.0.0.1",
+        peer_port=5000,
+        file_path="/tmp/file.bin",
+        filename="file.bin",
+        size=1000,
+    )
+    failed["status"] = "failed"
+    mock_bot_manager.transfers = {"file.bin": [failed]}
+
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "sender"
+    event.arguments = ["DCC", 'SEND "file.bin" 127.0.0.1 5000 1000']
+
+    with patch.object(bot, "init_dcc_connection") as init_mock:
+        bot.on_dcc_send(bot.connection, event, False)
+
+    init_mock.assert_called_once()

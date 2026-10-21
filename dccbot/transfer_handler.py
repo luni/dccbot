@@ -33,7 +33,7 @@ class TransferHandler:
         Only updates channels the bot has actually joined so that parted
         channels are not re-created.
         """
-        normalized = nick.lower()
+        normalized = (nick or "").lower()
         if normalized not in self.bot.bot_channel_map:
             return
         now = time.time()
