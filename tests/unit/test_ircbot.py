@@ -2274,3 +2274,94 @@ async def test_host_is_private(bot):
     assert await bot._host_is_private("peer.example.com", 5000) is False
     bot.loop.getaddrinfo = AsyncMock(side_effect=OSError("no dns"))
     assert await bot._host_is_private("peer.example.com", 5000) is False
+
+
+def test_on_nicknameinuse_retries_random_nick(bot):
+    """A 433 numeric during reconnect swaps to a random nick."""
+    conn = MagicMock()
+    bot.server_config["nick"] = "mybot"
+    bot.nick = "mybot"
+
+    bot.on_nicknameinuse(conn, MagicMock())
+
+    assert bot.nick != "mybot"
+    assert bot.nick.startswith("mybot")
+    conn.nick.assert_called_once_with(bot.nick)
+
+
+def test_on_nick_tracks_own_nick_change(bot):
+    """self.nick follows server-confirmed nick changes."""
+    event = MagicMock()
+    event.source.nick = "oldnick"
+    event.target = "newnick"
+    bot.nick = "oldnick"
+
+    bot.on_nick(MagicMock(), event)
+
+    assert bot.nick == "newnick"
+
+
+def test_on_nick_ignores_other_users(bot):
+    """Nick changes of other users leave self.nick alone."""
+    event = MagicMock()
+    event.source.nick = "someone"
+    event.target = "someoneelse"
+    bot.nick = "mybot"
+
+    bot.on_nick(MagicMock(), event)
+
+    assert bot.nick == "mybot"
+
+
+@pytest.mark.asyncio
+async def test_kick_reconnect_schedules_when_offline(bot):
+    """New work while disconnected kicks the reconnect loop."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+
+    bot._kick_reconnect()
+
+    assert bot._reconnect_task is not None
+    bot._reconnect_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_kick_reconnect_noop_when_connected(bot):
+    """No reconnect task is started while the connection is live."""
+    conn = MagicMock()
+    conn.connected = True
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+
+    bot._kick_reconnect()
+
+    assert bot._reconnect_task is None
+
+
+@pytest.mark.asyncio
+async def test_queue_command_kicks_reconnect(bot):
+    """Queueing a command on a dead connection starts the reconnect loop."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+
+    await bot.queue_command({"command": "part"})
+
+    assert bot._reconnect_task is not None
+    bot._reconnect_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_connect_clears_closing_flag(bot):
+    """connect() re-arms a bot that was previously closed."""
+    conn = MagicMock()
+    conn.connect = AsyncMock()
+    bot._closing = True
+
+    with patch("dccbot.ircbot.AioConnection", return_value=conn):
+        await bot.connect()
+
+    assert not bot._closing

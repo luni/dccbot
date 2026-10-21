@@ -299,6 +299,7 @@ class IRCBot(AioSimpleIRCClient):
 
         If the connection fails, an error message will be logged.
         """
+        self._closing = False
         self.connection = AioConnection(self.reactor)
         connect_factory = None
 
@@ -406,6 +407,23 @@ class IRCBot(AioSimpleIRCClient):
                 return
         logger.info("No pending work left for %s - not reconnecting", self.server)
 
+    def _kick_reconnect(self) -> None:
+        """Schedule a reconnect when new work arrives while the connection is down.
+
+        The reconnect loop exits once pending work drains; if a queued command
+        or send arrives afterwards, nothing would bring the connection back
+        (no further disconnect event fires). Kick it here instead.
+
+        """
+        if (
+            not self._closing
+            and self.loop.is_running()
+            and not getattr(self.connection, "connected", False)
+            and (self._reconnect_task is None or self._reconnect_task.done())
+        ):
+            logger.info("Work queued while disconnected from %s - reconnecting", self.server)
+            self._reconnect_task = self.loop.create_task(self._reconnect())
+
     async def join_channel(self, channel: str) -> None:
         """Join the specified channel.
 
@@ -463,6 +481,7 @@ class IRCBot(AioSimpleIRCClient):
         """
         await self.command_queue.put(data)
         logger.debug("Queued command: %s", data)
+        self._kick_reconnect()
 
     def _get_send_queue_setting(self, key: str, default: float) -> float:
         """Get a send-queue timing setting, with per-server override support."""
@@ -507,6 +526,7 @@ class IRCBot(AioSimpleIRCClient):
 
         if nick not in self.send_queue_tasks:
             self.send_queue_tasks[nick] = asyncio.create_task(self._process_send_queue(nick))
+        self._kick_reconnect()
 
     def queue_snapshot(self) -> dict[str, list[dict[str, Any]]]:
         """Return the queued sends still pending (not yet sent), keyed by nick."""
@@ -630,6 +650,9 @@ class IRCBot(AioSimpleIRCClient):
             if self._closing:
                 return
             await asyncio.sleep(1)
+        # After a reconnect, wait for NickServ auth again (no-op without a
+        # configured password or when already authenticated).
+        await self._handle_authentication()
         await handle_send_command(self, data)
         await self._wait_for_queued_transfer(nick, sent_at)
 
@@ -872,6 +895,23 @@ class IRCBot(AioSimpleIRCClient):
         if self._command_task is not None:
             self._command_task.cancel()
         self._command_task = asyncio.create_task(self.process_command_queue())
+
+    def on_nicknameinuse(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_NICKNAMEINUSE (433) by retrying with a random nick.
+
+        Common after a reconnect while the old session is still ghosted on
+        the server; without a valid nick the welcome message never arrives
+        and channels are never rejoined.
+
+        """
+        self.nick = self._generate_random_nick(self.server_config.get("nick", "dccbot"))
+        logger.warning("Nick already in use on %s - retrying as %s", self.server, self.nick)
+        connection.nick(self.nick)
+
+    def on_nick(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Track nick changes so self-event comparisons keep working."""
+        if (event.source.nick or "").lower() == self.nick.lower():
+            self.nick = event.target
 
     def on_nosuchnick(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Show an error message when the bot receives a NOSUCHNICK message from the server.

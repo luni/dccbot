@@ -883,3 +883,41 @@ def test_mark_complete_extract_formats_filter(tmp_path):
 
     bot._add_extract_queue_item.assert_not_called()
     mock_create_task.assert_not_called()
+
+
+def test_on_dccmsg_trailing_bytes_on_complete_transfer_disconnects():
+    """Extra bytes after all declared data close the DCC instead of failing."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=3)
+    transfer["bytes_received"] = 3
+    transfer["completed"] = time.time()
+    transfer["status"] = "completed"
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = [b"x"]
+
+    handler.on_dccmsg(dcc, event)
+
+    dcc.disconnect.assert_called_once()
+    dcc.send_bytes.assert_not_called()
+    assert "error" not in transfer
+    assert transfer["status"] == "in_progress"  # still tracked; finalize handles completion
+
+
+def test_on_dccmsg_overshoot_mid_transfer_fails():
+    """Overshooting the declared size mid-transfer fails the transfer."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=10)
+    transfer["bytes_received"] = 5
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = [b"123456"]
+
+    handler.on_dccmsg(dcc, event)
+
+    assert transfer["status"] == "failed"
+    assert "more data than declared" in transfer["error"]
+    dcc.disconnect.assert_called_once()
+    assert dcc not in bot.current_transfers

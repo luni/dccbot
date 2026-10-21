@@ -140,6 +140,12 @@ class TransferHandler:
         # unboundedly and overflow the 32-bit acknowledgement. Abort instead.
         expected = transfer["size"] - transfer["offset"] - transfer["bytes_received"]
         if len(data) > expected:
+            if expected <= 0:
+                # All declared bytes are already on disk - treat stray trailing
+                # bytes as the end of the transfer instead of failing it.
+                logger.debug("[%s] Ignoring %d trailing bytes for complete transfer %s", transfer["nick"], len(data), transfer["filename"])
+                dcc.disconnect()
+                return
             self._abort_transfer(dcc, transfer, f"Peer sent more data than declared ({transfer['size']} bytes)", "failed")
             return
 
