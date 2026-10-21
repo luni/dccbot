@@ -87,7 +87,7 @@ def _write_member(target: Path, src: IO[bytes], out: list[Path]) -> None:
     out.append(final)
 
 
-def _extract_tar(archive: Path, dest_dir: Path, out: list[Path]) -> None:
+def _extract_tar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
     """Extract regular files and dirs from a tar archive, member by member."""
     with tarfile.open(archive) as tf:
         for member in tf.getmembers():
@@ -95,17 +95,20 @@ def _extract_tar(archive: Path, dest_dir: Path, out: list[Path]) -> None:
             if target is None:
                 logger.warning("Skipping unsafe tar member %r in %s", member.name, archive)
                 continue
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif member.isreg():
-                src = tf.extractfile(member)
-                if src is None:
-                    continue
-                _write_member(target, src, out)
-            # Links, devices and fifos are skipped entirely.
+            try:
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif member.isreg():
+                    src = tf.extractfile(member)
+                    if src is None:
+                        continue
+                    _write_member(target, src, out)
+                # Links, devices and fifos are skipped entirely.
+            except Exception as e:
+                errors.append(f"{member.name}: {e}")
 
 
-def _extract_zip(archive: Path, dest_dir: Path, out: list[Path]) -> None:
+def _extract_zip(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
     """Extract regular files and dirs from a zip archive, member by member."""
     with zipfile.ZipFile(archive) as zf:
         for info in zf.infolist():
@@ -113,15 +116,18 @@ def _extract_zip(archive: Path, dest_dir: Path, out: list[Path]) -> None:
             if target is None:
                 logger.warning("Skipping unsafe zip member %r in %s", info.filename, archive)
                 continue
-            if info.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif stat.S_ISLNK(info.external_attr >> 16):
-                logger.warning("Skipping symlink member %r in %s", info.filename, archive)
-            else:
-                _write_member(target, zf.open(info), out)
+            try:
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif stat.S_ISLNK(info.external_attr >> 16):
+                    logger.warning("Skipping symlink member %r in %s", info.filename, archive)
+                else:
+                    _write_member(target, zf.open(info), out)
+            except Exception as e:
+                errors.append(f"{info.filename}: {e}")
 
 
-def _extract_rar(archive: Path, dest_dir: Path, out: list[Path]) -> None:
+def _extract_rar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
     """Extract regular files and dirs from a rar archive, member by member.
 
     Requires an external backend tool (unrar, unar, bsdtar or 7z) on PATH;
@@ -133,15 +139,18 @@ def _extract_rar(archive: Path, dest_dir: Path, out: list[Path]) -> None:
             if target is None:
                 logger.warning("Skipping unsafe rar member %r in %s", info.filename, archive)
                 continue
-            if info.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif info.is_symlink():
-                logger.warning("Skipping symlink member %r in %s", info.filename, archive)
-            else:
-                _write_member(target, cast("IO[bytes]", rf.open(info)), out)
+            try:
+                if info.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif info.is_symlink():
+                    logger.warning("Skipping symlink member %r in %s", info.filename, archive)
+                else:
+                    _write_member(target, cast("IO[bytes]", rf.open(info)), out)
+            except Exception as e:
+                errors.append(f"{info.filename}: {e}")
 
 
-def _extract_7z(archive: Path, dest_dir: Path, out: list[Path]) -> None:
+def _extract_7z(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
     """Extract a 7z archive via a staging dir so members get unique names.
 
     py7zr cannot remap member names during extraction, so files are first
@@ -163,13 +172,17 @@ def _extract_7z(archive: Path, dest_dir: Path, out: list[Path]) -> None:
             if target is None:
                 logger.warning("Skipping unsafe 7z member %r in %s", rel.as_posix(), archive)
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            final = _unique_path(target)
-            shutil.move(str(src), final)
-            out.append(final)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                final = _unique_path(target)
+                shutil.move(str(src), final)
+            except Exception as e:
+                errors.append(f"{rel.as_posix()}: {e}")
+            else:
+                out.append(final)
 
 
-_EXTRACTORS: dict[str, Callable[[Path, Path, list[Path]], None]] = {
+_EXTRACTORS: dict[str, Callable[[Path, Path, list[Path], list[str]], None]] = {
     "tar": _extract_tar,
     "zip": _extract_zip,
     "rar": _extract_rar,
@@ -241,18 +254,20 @@ def extract_recursive(
             kind = archive_kind(archive.name)
             if kind is None or kind not in enabled_set:
                 continue
+            member_errors: list[str] = []
             try:
                 new_files: list[Path] = []
-                _EXTRACTORS[kind](archive, archive.parent, new_files)
+                _EXTRACTORS[kind](archive, archive.parent, new_files, member_errors)
             except Exception as e:
                 logger.exception("Failed to extract %s", archive)
                 result["errors"].append(f"{archive.name}: {e}")
                 continue
+            result["errors"].extend(f"{archive.name}: {e}" for e in member_errors)
             for path in new_files:
                 result["extracted"].append(os.path.relpath(path, base_dir))
                 if is_extractable(path.name, enabled_set):
                     discovered.append(path)
-            if delete_archives:
+            if delete_archives and not member_errors:
                 _delete_archive(archive, kind)
         current = discovered
         depth += 1

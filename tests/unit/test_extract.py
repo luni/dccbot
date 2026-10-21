@@ -167,6 +167,29 @@ def test_extract_delete_archives(tmp_path):
     assert (tmp_path / "x.txt").exists()
 
 
+def test_extract_member_failure_does_not_abort_archive(tmp_path):
+    """A member that collides with an existing file is skipped with an
+    error while the remaining members are still extracted."""
+    (tmp_path / "sub").write_bytes(b"i am a file, not a dir")
+    archive = _make_zip(tmp_path / "pack.zip", {"sub/": b"", "sub/b.txt": b"bb", "ok.txt": b"ok"})
+    result = extract_recursive(archive)
+    assert "ok.txt" in result["extracted"]
+    assert (tmp_path / "ok.txt").read_bytes() == b"ok"
+    assert result["errors"]
+    assert any("sub" in e for e in result["errors"])
+
+
+def test_extract_member_failure_keeps_archive(tmp_path):
+    """delete_archives keeps the archive when some members failed, so the
+    failed content is not lost."""
+    (tmp_path / "sub").write_bytes(b"i am a file, not a dir")
+    archive = _make_zip(tmp_path / "pack.zip", {"sub/b.txt": b"bb", "ok.txt": b"ok"})
+    result = extract_recursive(archive, delete_archives=True)
+    assert "ok.txt" in result["extracted"]
+    assert result["errors"]
+    assert archive.exists()
+
+
 def test_extract_keeps_archive_on_failure(tmp_path):
     """A corrupt archive is not deleted and reports an error."""
     archive = tmp_path / "broken.tar"

@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-10-21-2
+// @version      2026-10-21-3
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -650,7 +650,10 @@
             if (prev === status) return;
 
             const t = currentMeta[key];
-            if (status === 'in_progress' || status === 'started') {
+            // 'started -> in_progress' is the normal connect progression, so
+            // only announce a start for new keys or retries after a terminal
+            // state - otherwise every transfer would toast "Started" twice.
+            if ((status === 'in_progress' || status === 'started') && (!prev || isTerminalTransferStatus(prev))) {
                 addTransferEvent('Started: ' + t.filename + ' (' + (t.nick || '?') + ')', 'info');
             } else if (prev && isTerminalTransferStatus(status)) {
                 const kind = status === 'completed' ? 'success' : 'error';

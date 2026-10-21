@@ -167,4 +167,14 @@ describe("transfer notifications", () => {
       createdNotices.filter((t) => t.includes("Started: file.rar"))
     ).toHaveLength(2);
   });
+
+  test("started -> in_progress progression notifies Started only once", async () => {
+    await deliver([]);
+    await nextPoll([T("started")]);
+    await nextPoll([T("in_progress")]);
+    await nextPoll([T("in_progress")]);
+    expect(
+      createdNotices.filter((t) => t.includes("Started: file.rar"))
+    ).toHaveLength(1);
+  });
 });

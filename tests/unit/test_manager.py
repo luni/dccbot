@@ -778,6 +778,36 @@ async def test_extract_queue_processor_marks_failure(manager, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_extract_queue_processor_unexpected_error_not_stuck(manager, tmp_path):
+    """An unexpected exception inside extract_recursive must not leave
+    extract_status stuck at 'in_progress'."""
+    archive = tmp_path / "pack.zip"
+    archive.write_bytes(b"whatever")
+
+    transfer_job = {
+        "id": "extract-raise-id",
+        "filename": "pack.zip",
+        "file_path": str(archive),
+    }
+    manager.transfers = {"pack.zip": [{"id": "extract-raise-id"}]}
+
+    with patch("dccbot.manager.extract_recursive", side_effect=RuntimeError("boom")):
+        await manager.extract_queue.put(transfer_job)
+        task = asyncio.create_task(manager.extract_queue_processor(asyncio.get_running_loop(), manager.extract_queue))
+        await asyncio.sleep(0.2)
+        task.cancel()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    record = manager.transfers["pack.zip"][0]
+    assert record["extract_status"] == "failed"
+    assert "boom" in record["extract_error"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["auto_extract", "auto_extract_delete_archives"])
 async def test_load_config_rejects_invalid_auto_extract_bool(config_file_factory, key):
     """Non-boolean auto_extract flags are rejected."""

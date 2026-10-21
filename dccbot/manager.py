@@ -473,16 +473,21 @@ class IRCBotManager:
                 try:
                     file_path = transfer_job.get("file_path")
                     transfer_job["extract_status"] = "in_progress"
-                    result = await loop.run_in_executor(
-                        None,
-                        functools.partial(
-                            extract_recursive,
-                            file_path,
-                            max_depth=self.config.get("auto_extract_max_depth", 3),
-                            delete_archives=self.config.get("auto_extract_delete_archives", False),
-                            enabled=self.config.get("auto_extract_formats"),
-                        ),
-                    )
+                    try:
+                        result = await loop.run_in_executor(
+                            None,
+                            functools.partial(
+                                extract_recursive,
+                                file_path,
+                                max_depth=self.config.get("auto_extract_max_depth", 3),
+                                delete_archives=self.config.get("auto_extract_delete_archives", False),
+                                enabled=self.config.get("auto_extract_formats"),
+                            ),
+                        )
+                    except Exception as e:
+                        # Keep extract_status from staying "in_progress" forever.
+                        logger.exception("Archive extraction failed for %s", file_path)
+                        result = {"extracted": [], "errors": [str(e)]}
                     status = "failed" if result["errors"] else "completed"
                     error = "; ".join(result["errors"]) or None
 
