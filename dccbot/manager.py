@@ -11,6 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
+from dccbot.extract import SUPPORTED_FORMATS, extract_recursive
 from dccbot.ircbot import IRCBot
 from dccbot.ssl_util import get_or_create_dcc_cert
 from dccbot.transfers import ensure_transfer_defaults
@@ -53,6 +54,7 @@ class IRCBotManager:
         self.resume_timeout = self.config.get("resume_timeout", 30)  # Timeout until ACCEPT response send by server
         self.transfer_list_timeout = self.config.get("transfer_list_timeout", 86400)  # 1 day
         self.md5_check_queue = asyncio.Queue()
+        self.extract_queue = asyncio.Queue()
         self.transfers: dict[str, list[dict[str, Any]]] = {}
         max_concurrent = self.config.get("send_queue_max_concurrent", 0)
         self.send_queue_semaphore: asyncio.Semaphore | None = (
@@ -199,6 +201,20 @@ class IRCBotManager:
             raise ValueError("'max_file_size' must be an integer")
         if "send_queue_max_concurrent" in config and not isinstance(config["send_queue_max_concurrent"], int):
             raise ValueError("'send_queue_max_concurrent' must be an integer")
+        for key in ("auto_extract", "auto_extract_delete_archives"):
+            if key in config and not isinstance(config[key], bool):
+                raise ValueError(f"'{key}' must be a boolean")
+        if "auto_extract_max_depth" in config and not isinstance(config["auto_extract_max_depth"], int):
+            raise ValueError("'auto_extract_max_depth' must be an integer")
+        if "auto_extract_formats" in config:
+            formats = config["auto_extract_formats"]
+            if not isinstance(formats, list) or not all(isinstance(f, str) for f in formats):
+                raise ValueError("'auto_extract_formats' must be a list of strings")
+            unknown = sorted(set(formats) - SUPPORTED_FORMATS)
+            if unknown:
+                raise ValueError(
+                    f"'auto_extract_formats' contains unsupported formats: {', '.join(unknown)} (supported: {', '.join(sorted(SUPPORTED_FORMATS))})"
+                )
         if "allowed_mimetypes" in config and config["allowed_mimetypes"] is not None and not isinstance(config["allowed_mimetypes"], list):
             raise ValueError("'allowed_mimetypes' must be a list")
 
@@ -442,6 +458,53 @@ class IRCBotManager:
             except Exception:
                 logger.exception("Failed to process MD5 check job")
 
+    async def extract_queue_processor(self, loop: asyncio.AbstractEventLoop, extract_queue: asyncio.Queue) -> None:
+        """Run a loop that processes jobs from the extract_queue.
+
+        For each job, extract the downloaded archive (recursively, like
+        SABnzbd's unpacker) and update the matching transfer records in
+        self.transfers with extract_status/extracted_files/extract_error.
+
+        The loop will exit if a CancelledError is raised.
+        """
+        while True:
+            try:
+                transfer_job = await extract_queue.get()
+                try:
+                    file_path = transfer_job.get("file_path")
+                    transfer_job["extract_status"] = "in_progress"
+                    result = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            extract_recursive,
+                            file_path,
+                            max_depth=self.config.get("auto_extract_max_depth", 3),
+                            delete_archives=self.config.get("auto_extract_delete_archives", False),
+                            enabled=self.config.get("auto_extract_formats"),
+                        ),
+                    )
+                    status = "failed" if result["errors"] else "completed"
+                    error = "; ".join(result["errors"]) or None
+
+                    for transfer in self.transfers.get(transfer_job["filename"], []):
+                        if transfer.get("id") is not None and transfer["id"] != transfer_job["id"]:
+                            continue
+                        ensure_transfer_defaults(transfer_job["filename"], transfer)
+                        if transfer["id"] == transfer_job["id"]:
+                            transfer["extract_status"] = status
+                            transfer["extracted_files"] = result["extracted"]
+                            transfer["extract_error"] = error
+
+                    transfer_job["extract_status"] = status
+                    transfer_job["extracted_files"] = result["extracted"]
+                    transfer_job["extract_error"] = error
+                finally:
+                    extract_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Failed to process extract job")
+
 
 async def start_background_tasks(app: web.Application) -> None:
     """Start the background task for cleaning up idle bots.
@@ -455,6 +518,7 @@ async def start_background_tasks(app: web.Application) -> None:
     bot_manager: IRCBotManager = app["bot_manager"]
     app["cleanup_task"] = asyncio.create_task(bot_manager.cleanup())
     app["queue_processor_task"] = asyncio.create_task(bot_manager.check_queue_processor(asyncio.get_running_loop(), bot_manager.md5_check_queue))
+    app["extract_processor_task"] = asyncio.create_task(bot_manager.extract_queue_processor(asyncio.get_running_loop(), bot_manager.extract_queue))
 
 
 async def cleanup_background_tasks(app: web.Application) -> None:
@@ -469,9 +533,12 @@ async def cleanup_background_tasks(app: web.Application) -> None:
     # Cancel the background task, which will allow it to exit cleanly
     app["cleanup_task"].cancel()
     app["queue_processor_task"].cancel()
+    app["extract_processor_task"].cancel()
 
     # Wait for the tasks to finish
     with contextlib.suppress(asyncio.CancelledError):
         await app["cleanup_task"]
     with contextlib.suppress(asyncio.CancelledError):
         await app["queue_processor_task"]
+    with contextlib.suppress(asyncio.CancelledError):
+        await app["extract_processor_task"]

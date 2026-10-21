@@ -26,6 +26,9 @@ _STATIC_DEFAULTS: dict[str, Any] = {
     "connected": False,
     "md5": None,
     "file_md5": None,
+    "extract_status": None,
+    "extracted_files": None,
+    "extract_error": None,
     "error": None,
 }
 

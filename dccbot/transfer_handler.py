@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from dccbot.aiodcc import AioDCCConnection
     from dccbot.ircbot import IRCBot
+from dccbot.extract import is_extractable
 from dccbot.transfers import get_incomplete_suffix, transfer_speeds
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,9 @@ class TransferHandler:
                 transfer["file_path"] = target
             except Exception as e:
                 logger.error("Error renaming %s to %s: %s", file_path, target, e)
+
+        if self.bot.config.get("auto_extract") and is_extractable(os.path.basename(transfer["file_path"]), self.bot.config.get("auto_extract_formats")):
+            asyncio.create_task(self.bot._add_extract_queue_item(transfer))
 
     def _report_size_mismatch(self, transfer: dict, file_size: int) -> None:
         """Record a size mismatch failure for a transfer."""

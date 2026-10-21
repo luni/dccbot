@@ -570,6 +570,19 @@
         }
       }
 
+      if (transfer.status === "completed" && transfer.extract_status) {
+        if (transfer.extract_status === "in_progress") {
+          cssClass = "in_progress";
+          text += ", extracting...";
+        } else if (transfer.extract_status === "completed") {
+          const count = (transfer.extracted_files || []).length;
+          text += `, extracted ${count} file${count === 1 ? "" : "s"}`;
+        } else if (transfer.extract_status === "failed") {
+          cssClass = "failed";
+          text += ", extract failed";
+        }
+      }
+
       return { cssClass, text };
     }
 

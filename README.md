@@ -102,6 +102,19 @@ keys:
     the bot sends the md5sum as message on start of transfer or after successful transfer
 * `incomplete_suffix`: a string that is appended to the filename while downloading.
     If file was transferred successfully this suffix is removed.
+* `auto_extract`: a boolean indicating to automatically extract downloaded archives
+    (`tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `zip`, `rar`, `7z`) after a transfer
+    completes. Archives contained inside an extracted archive are extracted
+    recursively (default: false). RAR support additionally requires an external
+    tool on `PATH` (`unrar`, `unar`, `bsdtar` or `7z`) used by the `rarfile`
+    package; `7z` archives are handled by the bundled `py7zr` library.
+* `auto_extract_formats`: a list of archive formats to unpack, any of
+    `tar`, `zip`, `rar`, `7z` (default: all of them).
+* `auto_extract_delete_archives`: a boolean indicating to delete archive files
+    (including all volumes of a multi-part rar set) after successful extraction
+    (default: false).
+* `auto_extract_max_depth`: the maximum recursion depth for nested archives
+    (default: 3).
 * `ssend_map`: a dictionary of users which support ssend (secure send). `xdcc send` command is
     replaced with `xdcc ssend` for these users. This tells the XDCC bot to use TLS-wrapped DCC (SDCC).
 * `rewrite_to_ssend`: a list of channels where `xdcc send` is rewritten to `xdcc ssend`.

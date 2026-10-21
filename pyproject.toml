@@ -22,6 +22,8 @@ dependencies = [
     "marshmallow>=4.3.0",
     "aiohttp-apispec-acapy>=3.0.3",
     "cryptography>=43.0.0,<51.0.0",
+    "rarfile>=4.5",
+    "py7zr>=1.1.4",
 ]
 
 [project.scripts]
