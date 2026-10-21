@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-from dccbot.ircbot import IRCBot
+from dccbot.ircbot import SEND_QUEUE_EXPAND_MAX, IRCBot
 from dccbot.transfers import create_pending_transfer, create_transfer
 
 
@@ -2522,3 +2522,28 @@ def test_active_dcc_send_allows_after_terminal_record(bot_factory, mock_bot_mana
         bot.on_dcc_send(bot.connection, event, False)
 
     init_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_queue_send_oversized_range_passes_through_unexpanded(bot):
+    """A huge xdcc range stays a single unexpanded send instead of allocating."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "somebot", "message": "xdcc send 1-999999999"})
+        mock_create_task.call_args[0][0].close()
+
+    assert _queued_messages(bot, "somebot") == ["xdcc send 1-999999999"]
+
+
+@pytest.mark.asyncio
+async def test_queue_send_range_at_max_boundary(bot):
+    """A range exactly at the cap still expands; one over stays unexpanded."""
+    with patch("dccbot.ircbot.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = MagicMock()
+        await bot.queue_send({"user": "somebot", "message": f"xdcc send 1-{SEND_QUEUE_EXPAND_MAX}"})
+        await bot.queue_send({"user": "otherbot", "message": f"xdcc send 1-{SEND_QUEUE_EXPAND_MAX + 1}"})
+        for call in mock_create_task.call_args_list:
+            call[0][0].close()
+
+    assert len(bot.send_queue_items["somebot"]) == SEND_QUEUE_EXPAND_MAX
+    assert _queued_messages(bot, "otherbot") == [f"xdcc send 1-{SEND_QUEUE_EXPAND_MAX + 1}"]

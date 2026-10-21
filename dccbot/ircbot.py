@@ -100,6 +100,11 @@ def _expand_xdcc_range(message: str) -> list[str]:
             packs.append(first)
         else:
             last = int(seg.group(2))
+            # Bound the span before extending so a huge range like 1-999999999
+            # is rejected without materializing it.
+            if len(packs) + abs(last - first) + 1 > SEND_QUEUE_EXPAND_MAX:
+                logger.debug("Not expanding oversized xdcc pack spec: %s", message)
+                return [message]
             step = 1 if last >= first else -1
             packs.extend(range(first, last + step, step))
         if len(packs) > SEND_QUEUE_EXPAND_MAX:
