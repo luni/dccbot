@@ -134,6 +134,8 @@ def irc_bot_manager(tmp_path) -> IRCBotManager:
         "server_idle_timeout": 60,
         "channel_idle_timeout": 60,
         "resume_timeout": 30,
+        # Integration peers are always localhost.
+        "allow_private_ips": True,
         "transfers": {},
     }
     config_file = tmp_path / "config.json"
