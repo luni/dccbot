@@ -335,6 +335,51 @@ def test_on_privmsg_ignores_nonmatching_message(bot):
     assert bot.authenticated_event.is_set() is False
 
 
+def test_on_privmsg_warns_on_failed_nickserv_reply(bot_factory, caplog):
+    """A non-success NickServ reply warns while authentication is pending."""
+    bot = bot_factory(server_config={"nickserv_password": "secret"})
+    bot.authenticated = False
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "NickServ"
+    event.arguments = ["Nick \x02notmynick\x02 isn't registered."]
+
+    with caplog.at_level("WARNING"):
+        bot.on_privmsg(bot.connection, event)
+
+    assert bot.authenticated is False
+    assert "NickServ authentication not confirmed" in caplog.text
+
+
+def test_on_privmsg_no_nickserv_warning_without_password(bot, caplog):
+    """No NickServ warning when the server has no nickserv_password configured."""
+    bot.authenticated = False
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "NickServ"
+    event.arguments = ["Nick \x02notmynick\x02 isn't registered."]
+
+    with caplog.at_level("WARNING"):
+        bot.on_privmsg(bot.connection, event)
+
+    assert "NickServ authentication not confirmed" not in caplog.text
+
+
+def test_on_privmsg_no_nickserv_warning_when_authenticated(bot_factory, caplog):
+    """No NickServ warning once authentication already succeeded."""
+    bot = bot_factory(server_config={"nickserv_password": "secret"})
+    bot.authenticated = True
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "NickServ"
+    event.arguments = ["Some later NickServ notice"]
+
+    with caplog.at_level("WARNING"):
+        bot.on_privmsg(bot.connection, event)
+
+    assert "NickServ authentication not confirmed" not in caplog.text
+
+
 def test_on_privmsg_transfer_completed_normalizes_sparse_transfer(bot, mock_bot_manager):
     """MD5 completion notices should work even with sparse transfer records."""
     bot.connection = MagicMock()

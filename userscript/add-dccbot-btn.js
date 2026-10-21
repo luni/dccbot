@@ -2,7 +2,7 @@
 // @name         add-dccbot-btn
 // @namespace    https://github.com/luni/dccbot/
 // @website      https://github.com/luni/dccbot/
-// @version      2026-09-20-3
+// @version      2026-10-21-2
 // @description  Add button for DCCbot to automate downloads.
 // @author       luni
 // @match        https://www.xdcc.eu/search.php*
@@ -186,6 +186,8 @@
             note.style.background = '#b81d13';
         } else if (kind === 'success') {
             note.style.background = '#227a34';
+        } else if (kind === 'warning') {
+            note.style.background = '#8a6d1a';
         } else {
             note.style.background = '#2e3238';
         }
@@ -333,6 +335,7 @@
     let transferPollTimer = null;
     let transferUsingPollingFallback = false;
     const transferStateByKey = {};
+    let transferEventsSeeded = false;
 
     function isTerminalTransferStatus(status) {
         return ['completed', 'failed', 'error', 'cancelled'].indexOf(status) !== -1;
@@ -396,8 +399,28 @@
 
     function addTransferEvent(text, kind) {
         const level = kind || 'info';
-        const timeoutMs = level === 'error' ? 9000 : 5500;
+        const timeoutMs = level === 'error' ? 9000 : (level === 'warning' ? 7000 : 5500);
         showNotice('[DCCBOT] ' + text, level, timeoutMs);
+    }
+
+    const LOG_NOTICE_KINDS = { WARNING: 'warning', ERROR: 'error', CRITICAL: 'error', FATAL: 'error' };
+    const LOG_NOTICE_DEDUP_MS = 60000;
+    const recentLogNotices = {};
+
+    function handleLogPayload(payload) {
+        const kind = LOG_NOTICE_KINDS[String(payload.level || '').toUpperCase()];
+        if (!kind) return;
+        const message = String(payload.message || '').trim();
+        if (!message) return;
+        const now = Date.now();
+        Object.keys(recentLogNotices).forEach(function (key) {
+            if (now - recentLogNotices[key] > LOG_NOTICE_DEDUP_MS) {
+                delete recentLogNotices[key];
+            }
+        });
+        if (recentLogNotices[message]) return;
+        recentLogNotices[message] = now;
+        addTransferEvent(message, kind);
     }
 
     function ensureTransferOverlay() {
@@ -600,22 +623,45 @@
     }
 
     function processTransferEvents(transfers) {
+        // Multiple records can exist per key (e.g. a stale terminal record
+        // plus a newer attempt); the last entry is the newest, so last-wins.
         const currentByKey = {};
+        const currentMeta = {};
         (transfers || []).forEach(function (t) {
             if (!t || !t.filename) return;
             const key = transferKey(t);
-            const status = (t.status || 'unknown').toLowerCase();
-            currentByKey[key] = status;
+            currentByKey[key] = (t.status || 'unknown').toLowerCase();
+            currentMeta[key] = t;
+        });
 
+        // The first snapshot after page load only seeds the baseline; every
+        // transfer in it is already ongoing or done, so nothing is "new".
+        if (!transferEventsSeeded) {
+            transferEventsSeeded = true;
+            replaceTransferState(currentByKey);
+            return;
+        }
+
+        // Compare one status per key so duplicate records cannot retrigger
+        // the same transition on every broadcast.
+        Object.keys(currentByKey).forEach(function (key) {
+            const status = currentByKey[key];
             const prev = transferStateByKey[key];
-            if (!prev && (status === 'in_progress' || status === 'started')) {
+            if (prev === status) return;
+
+            const t = currentMeta[key];
+            if (status === 'in_progress' || status === 'started') {
                 addTransferEvent('Started: ' + t.filename + ' (' + (t.nick || '?') + ')', 'info');
-            } else if (prev && prev !== status && isTerminalTransferStatus(status)) {
+            } else if (prev && isTerminalTransferStatus(status)) {
                 const kind = status === 'completed' ? 'success' : 'error';
                 addTransferEvent((status === 'completed' ? 'Finished: ' : 'Ended (' + status + '): ') + t.filename + ' (' + (t.nick || '?') + ')', kind);
             }
         });
 
+        replaceTransferState(currentByKey);
+    }
+
+    function replaceTransferState(currentByKey) {
         Object.keys(transferStateByKey).forEach(function (key) {
             delete transferStateByKey[key];
         });
@@ -708,11 +754,18 @@
             } catch (e) {
                 return;
             }
-            if (!payload || payload.type !== 'transfers') return;
+            if (!payload) return;
 
-            const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
-            processTransferEvents(transfers);
-            renderTransferOverlay(transfers);
+            if (payload.type === 'transfers') {
+                const transfers = Array.isArray(payload.transfers) ? payload.transfers : [];
+                processTransferEvents(transfers);
+                renderTransferOverlay(transfers);
+                return;
+            }
+
+            if (payload.type === 'log') {
+                handleLogPayload(payload);
+            }
         });
 
         transferSocket.addEventListener('close', function () {

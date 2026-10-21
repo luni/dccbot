@@ -3,12 +3,13 @@
 import asyncio
 import datetime
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import web
 
-from dccbot.app import WebSocketLogHandler
+from dccbot.app import IRCBotAPI, WebSocketLogHandler
 
 
 @pytest.mark.asyncio
@@ -64,6 +65,27 @@ async def test_websocket_log_handler_removes_closed_ws():
     assert ws_closed not in handler.websockets
     # ws_open should remain
     assert ws_open in handler.websockets
+
+
+@pytest.mark.asyncio
+async def test_dccbot_submodule_logs_reach_websockets():
+    """Records from any dccbot submodule (e.g. transfer_handler) are forwarded to ws clients."""
+    api = IRCBotAPI(config_file="config.json", bot_manager=AsyncMock())
+
+    ws_mock = MagicMock()
+    ws_mock.closed = False
+    ws_mock.send_str = AsyncMock()
+    api.websockets.add(ws_mock)
+    api.ws_log_handler.set_event_loop(asyncio.get_running_loop())
+
+    logging.getLogger("dccbot.transfer_handler").warning("Unable to join channel #x: Banned from channel")
+    await asyncio.sleep(0.1)
+
+    ws_mock.send_str.assert_awaited_once()
+    payload = json.loads(ws_mock.send_str.await_args.args[0])
+    assert payload["type"] == "log"
+    assert payload["level"] == "WARNING"
+    assert "Banned from channel" in payload["message"]
 
 
 @pytest.mark.asyncio

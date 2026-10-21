@@ -355,9 +355,7 @@ class IRCBotAPI:
 
         self.ws_log_handler.setFormatter(logging.Formatter("%(message)s"))
 
-        logger.addHandler(self.ws_log_handler)
-        ircbot_logger = logging.getLogger("dccbot.ircbot")
-        ircbot_logger.addHandler(self.ws_log_handler)
+        logging.getLogger("dccbot").addHandler(self.ws_log_handler)
         self.app.on_startup.append(self.start_transfer_broadcast)
         self.app.on_cleanup.append(self.stop_transfer_broadcast)
         self.app.on_startup.append(self.capture_event_loop)
