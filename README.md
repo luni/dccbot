@@ -20,12 +20,15 @@ Features
 * passive DCC (incoming connections) with configurable listen IP and port range
 * MIME type filtering for received files
 * file size limits
-* private IP filtering for DCC transfers
+* private IP filtering for DCC transfers (peers may advertise IPs or hostnames; hostnames are resolved and checked too)
 * transfer cancellation via API
 * per-bot send queue throttling `xdcc send` requests to the same bot; numeric `xdcc send`/`xdcc batch` ranges (e.g. `xdcc batch 1-5`) are expanded into individual queued sends, so range requests also work on bots without batch support
 * auto-disconnect from idle servers and channels
+* automatic reconnect with exponential backoff when the IRC connection drops while work is pending; channels are rejoined and queued sends resume (`reconnect_max_attempts`)
 * MD5 verification of completed transfers
 * incomplete file suffix support (auto-renamed on completion)
+* automatic recursive extraction of downloaded archives (`tar`/`zip`/`rar`/`7z`), deferred until after the MD5 check when one is announced
+* runtime nickname changes via `/nick` (websocket command) or `POST /nick`
 
 Installation
 ------------
@@ -47,7 +50,7 @@ Each release ships a wheel and a source distribution on the
 [releases page](https://github.com/luni/dccbot/releases):
 
 ```bash
-uv tool install ./dccbot-0.4.0-py3-none-any.whl   # or: pipx install / pip install
+uv tool install ./dccbot-0.6.0-py3-none-any.whl   # or: pipx install / pip install
 dccbot --config /path/to/config.json
 ```
 
@@ -100,7 +103,8 @@ keys:
     from the transfer list in /info response
 * `reconnect_max_attempts`: how many times the bot retries connecting after the
     IRC connection drops while work is still pending, with exponential backoff
-    between attempts (default: 5). Set to 0 to disable reconnecting.
+    between attempts (default: 5). Set to 0 to disable reconnecting. This option
+    can also be set per-server.
 * `auto_md5sum`: a boolean indicating to verify the md5sum of the file if
     the bot sends the md5sum as message on start of transfer or after successful transfer
 * `incomplete_suffix`: a string that is appended to the filename while downloading.
@@ -123,7 +127,10 @@ keys:
 * `ssend_map`: a dictionary of users which support ssend (secure send). `xdcc send` command is
     replaced with `xdcc ssend` for these users. This tells the XDCC bot to use TLS-wrapped DCC (SDCC).
 * `rewrite_to_ssend`: a list of channels where `xdcc send` is rewritten to `xdcc ssend`.
-* `allow_private_ips`: a boolean indicating whether to allow private ips in dcc send command
+* `allow_private_ips`: a boolean indicating whether to allow private/reserved IPs
+    in DCC SEND offers (default: false). Peer addresses may be numeric IPs or
+    hostnames; hostnames are resolved via DNS and the offer is rejected if any
+    resolved address is private.
 * `passive_dcc`: A boolean indicating whether to accept passive DCC transfers (where the peer sends `port=0` and a token, and the bot listens for an incoming connection). This option can also be set per-server.
 * `passive_dcc_listen_ip`: The reachable IP address to bind and advertise the passive DCC listener on. If omitted, it defaults to the hostname's IP. `0.0.0.0` is treated as unset. This option can also be set per-server.
 * `passive_dcc_port_range`: A list of two integers `[min_port, max_port]` defining the port range to try binding the listener to. If omitted, the OS assigns a port. This option can also be set per-server.
