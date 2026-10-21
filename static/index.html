@@ -330,6 +330,11 @@
       background: #5b2525;
     }
 
+    .toast.warning {
+      border-color: #8f7430;
+      background: #5a4a20;
+    }
+
     @media (max-width: 980px) {
       .layout {
         grid-template-columns: 1fr;
@@ -549,6 +554,32 @@
       }, 2800);
     }
 
+    const NOTIFY_LOG_LEVELS = { warning: "warning", error: "error", critical: "error", fatal: "error" };
+    const LOG_NOTIFY_DEDUP_MS = 60000;
+    const notifiedLogMessages = new Map();
+
+    function maybeNotifyLog(logEntry) {
+      const kind = NOTIFY_LOG_LEVELS[String(logEntry.level || "").toLowerCase()];
+      if (!kind) {
+        return;
+      }
+      const message = String(logEntry.message || "").trim();
+      if (!message) {
+        return;
+      }
+      const now = Date.now();
+      notifiedLogMessages.forEach((shownAt, key) => {
+        if (now - shownAt > LOG_NOTIFY_DEDUP_MS) {
+          notifiedLogMessages.delete(key);
+        }
+      });
+      if (notifiedLogMessages.has(message)) {
+        return;
+      }
+      notifiedLogMessages.set(message, now);
+      showToast(message, kind);
+    }
+
     function setPanelCollapsed(panel, button, collapsed) {
       panel.classList.toggle("collapsed", collapsed);
       button.setAttribute("aria-expanded", String(!collapsed));
@@ -699,6 +730,7 @@
       logsElement.appendChild(line);
       trimLogs();
       logsElement.scrollTop = logsElement.scrollHeight;
+      maybeNotifyLog(logEntry);
     }
 
     function appendCommandResponse(payload) {

@@ -1527,6 +1527,8 @@ class IRCBot(AioSimpleIRCClient):
 
             self.authenticated = True
             self.authenticated_event.set()
+        elif not self.authenticated and self.server_config.get("nickserv_password"):
+            logger.warning("NickServ authentication not confirmed: %s", message)
 
         return True
 
