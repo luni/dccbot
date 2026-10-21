@@ -6,7 +6,7 @@ import irc.client
 import pytest
 from hypothesis import assume, given, settings, strategies as st
 
-from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, parse_dcc_accept, parse_dcc_send
+from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, is_valid_hostname, parse_dcc_accept, parse_dcc_send
 
 BASE_PATH = "/downloads"
 
@@ -39,7 +39,10 @@ def test_parse_dcc_send_result_invariants(payload: str):
     assert 0 <= result.peer_port <= 65535
     assert result.size >= 1
     assert result.token is None or result.token >= 0
-    ipaddress.ip_address(result.peer_address)
+    try:
+        ipaddress.ip_address(result.peer_address)
+    except ValueError:
+        assert is_valid_hostname(result.peer_address)
 
 
 @given(payload=st.text())

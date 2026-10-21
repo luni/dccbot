@@ -1219,7 +1219,7 @@ def test_init_dcc_connection_preserves_pending_md5(bot, mock_bot_manager):
     pending = create_pending_transfer("test.txt", "sender", "irc.example.com", md5="abc123", now=time.time())
     mock_bot_manager.transfers = {"test.txt": [pending]}
 
-    with patch.object(bot, "loop") as mock_loop, patch.object(bot, "dcc", return_value=MagicMock()):
+    with patch.object(bot, "loop") as mock_loop, patch.object(bot, "dcc", return_value=MagicMock()), patch.object(bot, "_connect_dcc", new=MagicMock()):
         bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
 
     assert pending["md5"] == "abc123"
@@ -1233,7 +1233,7 @@ def test_init_dcc_connection_creates_download_directory(bot, mock_bot_manager, t
     bot.bot_manager = mock_bot_manager
     bot.download_path = str(tmp_path / "missing")
 
-    with patch.object(bot, "loop"), patch.object(bot, "dcc", return_value=MagicMock()):
+    with patch.object(bot, "loop"), patch.object(bot, "dcc", return_value=MagicMock()), patch.object(bot, "_connect_dcc", new=MagicMock()):
         bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", str(tmp_path / "missing" / "test.txt"), 1024, 0, False, False)
 
     assert (tmp_path / "missing").is_dir()
@@ -1479,6 +1479,7 @@ async def test_init_dcc_connection_ssend(bot, mock_bot_manager):
     """Test active SSEND uses an SSL context and the transfer records ssl=True."""
     bot.connection = MagicMock()
     bot.bot_manager = mock_bot_manager
+    bot.config["allow_private_ips"] = True
     mock_ssl_ctx = MagicMock()
 
     mock_dcc = MagicMock()
@@ -1538,6 +1539,7 @@ def test_get_send_queue_setting_rejects_non_finite_and_negative(bot):
 @pytest.mark.asyncio
 async def test_process_queued_send_respects_manager_semaphore(bot, mock_bot_manager):
     """Test _process_queued_send serializes sends across bots through the manager semaphore."""
+    bot.connection.connected = True
     mock_bot_manager.send_queue_semaphore = asyncio.Semaphore(1)
     order: list[str] = []
 
@@ -1561,6 +1563,7 @@ async def test_process_queued_send_respects_manager_semaphore(bot, mock_bot_mana
 @pytest.mark.asyncio
 async def test_process_queued_send_without_semaphore(bot, mock_bot_manager):
     """Test _process_queued_send sends directly when no concurrency limit is set."""
+    bot.connection.connected = True
     mock_bot_manager.send_queue_semaphore = None
 
     with (
@@ -1575,6 +1578,7 @@ async def test_process_queued_send_without_semaphore(bot, mock_bot_manager):
 @pytest.mark.asyncio
 async def test_process_queued_send_ignores_non_semaphore_attr(bot, mock_bot_manager):
     """Test a non-semaphore send_queue_semaphore attribute (e.g. plain mock) is ignored."""
+    bot.connection.connected = True
     mock_bot_manager.send_queue_semaphore = MagicMock()
 
     with (
@@ -1717,6 +1721,7 @@ async def test_queue_send_passes_non_expandable_messages_through(bot, message):
 @pytest.mark.asyncio
 async def test_process_queued_send_does_not_drop_long_waiting_item(bot):
     """Test _process_queued_send still sends an item that waited in the queue past send_queue_max_wait."""
+    bot.connection.connected = True
     bot.server_config["send_queue_max_wait"] = 1
     data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time() - 10}
 
@@ -1732,6 +1737,7 @@ async def test_process_queued_send_does_not_drop_long_waiting_item(bot):
 @pytest.mark.asyncio
 async def test_process_queued_send_sends_and_waits(bot):
     """Test _process_queued_send sends the command and waits for it to settle."""
+    bot.connection.connected = True
     data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time()}
 
     with (
@@ -1748,6 +1754,7 @@ async def test_process_queued_send_sends_and_waits(bot):
 @pytest.mark.asyncio
 async def test_process_queued_send_bumps_last_active(bot):
     """Test _process_queued_send refreshes last_active, since sends bypass process_command_queue."""
+    bot.connection.connected = True
     bot.last_active = 0
     data = {"user": "mybot", "message": "xdcc send #1", "queued_at": time.time()}
 
@@ -1943,6 +1950,7 @@ async def test_wait_for_queued_transfer_bounded_by_max_wait_without_progress(bot
 @pytest.mark.asyncio
 async def test_process_send_queue_processes_items_in_order(bot, mock_bot_manager):
     """Test _process_send_queue drains queued sends one at a time, in order."""
+    bot.connection.connected = True
     mock_bot_manager.transfers = {}
     bot.server_config["send_queue_delay"] = 0
     bot.server_config["send_queue_cooldown"] = 0
@@ -2082,6 +2090,7 @@ async def test_process_queued_send_skips_cancelled_item(bot):
 @pytest.mark.asyncio
 async def test_process_send_queue_untracks_dequeued_item(bot, mock_bot_manager):
     """Test _process_send_queue removes each item from send_queue_items as it's dequeued."""
+    bot.connection.connected = True
     mock_bot_manager.transfers = {}
     bot.server_config["send_queue_delay"] = 0
     bot.server_config["send_queue_cooldown"] = 0
@@ -2096,3 +2105,172 @@ async def test_process_send_queue_untracks_dequeued_item(bot, mock_bot_manager):
             await task
 
     assert "mybot" not in bot.send_queue_items
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cancels_send_queue_consumers(bot):
+    """disconnect() cancels per-nick send consumers and marks pending items cancelled."""
+    item = {"message": "xdcc send #1"}
+    task = asyncio.create_task(asyncio.sleep(60))
+    bot.send_queue_tasks["mybot"] = task
+    bot.send_queue_items["mybot"] = [item]
+    bot.connection = MagicMock()
+
+    await bot.disconnect("bye")
+
+    assert bot.send_queue_tasks == {}
+    assert bot.send_queue_items == {}
+    assert item["cancelled"] is True
+    await asyncio.sleep(0)
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_schedules_reconnect_with_pending_work(bot):
+    """A dropped connection with pending work schedules the reconnect loop."""
+    conn = MagicMock()
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+    bot.joined_channels["#chan"] = time.time()
+
+    async def fake_reconnect():
+        return
+
+    bot._reconnect = fake_reconnect
+    bot.on_disconnect(conn, MagicMock())
+
+    assert bot._reconnect_task is not None
+    await bot._reconnect_task
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_no_reconnect_when_closing(bot):
+    """An intentional disconnect never triggers a reconnect."""
+    conn = MagicMock()
+    bot.connection = conn
+    bot._closing = True
+    bot.joined_channels["#chan"] = time.time()
+
+    bot.on_disconnect(conn, MagicMock())
+
+    assert bot._reconnect_task is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_ignores_stale_connection(bot):
+    """Disconnect events from a replaced connection object are ignored."""
+    conn = MagicMock()
+    bot.connection = conn
+    bot.joined_channels["#chan"] = time.time()
+
+    bot.on_disconnect(MagicMock(), MagicMock())
+
+    assert bot._reconnect_task is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_no_reconnect_without_work(bot):
+    """With nothing pending, a dropped connection is not reconnected."""
+    conn = MagicMock()
+    bot.connection = conn
+
+    bot.on_disconnect(conn, MagicMock())
+
+    assert bot._reconnect_task is None
+
+
+@pytest.mark.asyncio
+async def test_reconnect_retries_until_connected(bot):
+    """_reconnect retries connect() with backoff until it succeeds."""
+    bot.joined_channels["#chan"] = time.time()
+    attempts = []
+
+    async def flaky_connect():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise OSError("connect failed")
+
+    with patch.object(bot, "connect", side_effect=flaky_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+        await bot._reconnect()
+
+    assert len(attempts) == 3
+
+
+@pytest.mark.asyncio
+async def test_reconnect_gives_up_without_pending_work(bot):
+    """_reconnect exits immediately when there is nothing to reconnect for."""
+    with patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
+        await bot._reconnect()
+
+    connect_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_queued_command_waits_for_connection(bot):
+    """Queued sends wait out a disconnected connection instead of erroring."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    sent = []
+
+    async def fake_send(_bot, data):
+        sent.append(data["message"])
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", side_effect=fake_send),
+        patch.object(bot, "_wait_for_queued_transfer", new=AsyncMock()),
+    ):
+        task = asyncio.create_task(bot._send_queued_command("nick", {"message": "xdcc send #1"}))
+        await asyncio.sleep(0.05)
+        assert sent == []
+        conn.connected = True
+        await asyncio.wait_for(task, timeout=2)
+
+    assert sent == ["xdcc send #1"]
+
+
+@pytest.mark.asyncio
+async def test_connect_dcc_rejects_private_resolving_hostname(bot):
+    """Hostname offers resolving to private IPs are refused before connecting."""
+    bot.config = {"allow_private_ips": False}
+    dcc = MagicMock()
+    dcc.connect = AsyncMock()
+    transfer_item = {"filename": "f.bin"}
+    bot.current_transfers[dcc] = transfer_item
+    bot._host_is_private = AsyncMock(return_value=True)
+
+    await bot._connect_dcc(dcc, "peer.example.com", 5000, MagicMock(), transfer_item)
+
+    dcc.connect.assert_not_called()
+    assert transfer_item["status"] == "error"
+    assert dcc not in bot.current_transfers
+
+
+@pytest.mark.asyncio
+async def test_connect_dcc_allows_public_host(bot):
+    """Public peers connect normally."""
+    bot.config = {"allow_private_ips": False}
+    dcc = MagicMock()
+    dcc.connect = AsyncMock()
+    transfer_item = {"filename": "f.bin"}
+    factory = MagicMock()
+    bot._host_is_private = AsyncMock(return_value=False)
+
+    await bot._connect_dcc(dcc, "peer.example.com", 5000, factory, transfer_item)
+
+    dcc.connect.assert_awaited_once_with("peer.example.com", 5000, connect_factory=factory, transfer_item=transfer_item)
+
+
+@pytest.mark.asyncio
+async def test_host_is_private(bot):
+    """_host_is_private covers IP literals and resolved hostnames."""
+    assert await bot._host_is_private("10.0.0.1", 5000) is True
+    assert await bot._host_is_private("8.8.8.8", 5000) is False
+
+    bot.loop = MagicMock()
+    bot.loop.getaddrinfo = AsyncMock(return_value=[(2, 1, 6, "", ("10.0.0.5", 5000))])
+    assert await bot._host_is_private("peer.example.com", 5000) is True
+    bot.loop.getaddrinfo = AsyncMock(return_value=[(2, 1, 6, "", ("93.184.216.34", 5000))])
+    assert await bot._host_is_private("peer.example.com", 5000) is False
+    bot.loop.getaddrinfo = AsyncMock(side_effect=OSError("no dns"))
+    assert await bot._host_is_private("peer.example.com", 5000) is False

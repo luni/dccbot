@@ -338,6 +338,10 @@ class IRCBotManager:
         """
         now = time.time()
 
+        # Records still attached to a live DCC connection must not expire -
+        # a very slow transfer would otherwise lose its entry mid-download.
+        active_transfers = {id(transfer) for bot in self.bots.values() for transfer in bot.current_transfers.values()}
+
         expired_transfer_names = []
         for filename, transfers in self.transfers.items():
             if not isinstance(transfers, list):
@@ -351,7 +355,7 @@ class IRCBotManager:
                 for transfer in transfers
                 if isinstance(transfer, dict)
                 and isinstance(transfer.get("start_time"), (int, float))
-                and transfer["start_time"] + self.transfer_list_timeout >= now
+                and (transfer["start_time"] + self.transfer_list_timeout >= now or id(transfer) in active_transfers)
             ]
             if not transfers:
                 expired_transfer_names.append(filename)

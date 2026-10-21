@@ -638,6 +638,7 @@ class TestRealSocketFaults:
         """Start a scripted TCP peer and run a real DCC receive against it."""
         bot = IRCBot("irc.example.com", {"nick": "b", "channels": []}, str(tmp_path), None, 1000, mock_bot_manager)
         bot.connection = MagicMock()
+        bot.config["allow_private_ips"] = True
 
         server = await asyncio.start_server(serve, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
@@ -701,6 +702,7 @@ class TestRealSocketFaults:
 
         bot = IRCBot("irc.example.com", {"nick": "b", "channels": []}, str(tmp_path), None, 1000, mock_bot_manager)
         bot.connection = MagicMock()
+        bot.config["allow_private_ips"] = True
 
         server = await asyncio.start_server(serve, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]

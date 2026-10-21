@@ -45,9 +45,23 @@ def test_parse_dcc_send_valid_dotted_ipv4():
     assert parsed.peer_address == "127.0.0.1"
 
 
+def test_parse_dcc_send_valid_hostname():
+    """Hostname-form peer addresses are accepted per the DCC spec."""
+    parsed = parse_dcc_send('SEND "file.mkv" host.example.com 5000 1024')
+    assert parsed is not None
+    assert parsed.peer_address == "host.example.com"
+
+    parsed = parse_dcc_send('SEND "file.mkv" xdcccc.local 5000 1024')
+    assert parsed is not None
+    assert parsed.peer_address == "xdcccc.local"
+
+
 def test_parse_dcc_send_rejects_invalid():
     """Test parser rejects malformed DCC SEND payload."""
-    assert parse_dcc_send('SEND "file.mkv" x.x.x.x 5000 1024') is None
+    assert parse_dcc_send('SEND "file.mkv" x..x..x 5000 1024') is None
+    assert parse_dcc_send('SEND "file.mkv" -bad-.example.com 5000 1024') is None
+    assert parse_dcc_send('SEND "file.mkv" bad_host!.example 5000 1024') is None
+    assert parse_dcc_send('SEND "file.mkv" 999.1.1.1 5000 1024') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 -1 1024') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 0') is None
     assert parse_dcc_send('SEND "file.mkv" 127.0.0.1 5000 notanint') is None

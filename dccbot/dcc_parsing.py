@@ -32,6 +32,22 @@ class DccAcceptPayload:
     token: int | None = None
 
 
+_HOSTNAME_LABEL_RE = re.compile(r"[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?")
+
+
+def is_valid_hostname(value: str) -> bool:
+    """Check whether `value` is a syntactically valid hostname.
+
+    Accepts RFC 952/1123 labels with underscores (common on IRC networks) and
+    an optional trailing dot. Numeric-only strings are rejected so malformed
+    IPv4 offers like "999.1.1.1" don't slip through as DNS names.
+
+    """
+    if not value or len(value) > 253 or not any(c.isalpha() for c in value):
+        return False
+    return all(_HOSTNAME_LABEL_RE.fullmatch(label) for label in value.rstrip(".").split("."))
+
+
 def _parse_int(value: str, min_value: int = 0, max_value: int | None = None) -> int | None:
     """Parse an integer, returning None if out of range or not numeric."""
     try:
@@ -109,13 +125,19 @@ def parse_dcc_send(payload: str) -> DccSendPayload | None:
         if token is None:
             return None
 
+    peer_address: str | None = None
     try:
-        if "." in raw_address or ":" in raw_address:
-            ipaddress.ip_address(raw_address)
-            peer_address = raw_address
-        else:
+        ipaddress.ip_address(raw_address)
+        peer_address = raw_address
+    except ValueError:
+        try:
             peer_address = irc.client.ip_numstr_to_quad(raw_address)
-    except (ValueError, struct.error):
+        except (ValueError, struct.error):
+            # Hostname-form addresses are legal per the DCC spec.
+            if is_valid_hostname(raw_address):
+                peer_address = raw_address
+
+    if peer_address is None:
         return None
 
     return DccSendPayload(filename=filename, peer_address=peer_address, peer_port=peer_port, size=size, token=token)

@@ -6,6 +6,7 @@ import math
 import os
 import random
 import re
+import socket
 import ssl
 import string
 import time
@@ -37,6 +38,9 @@ SEND_DENIED_RE = re.compile(r"^XDCC SEND denied, (.+)", re.I)
 
 SEND_QUEUE_POLL_INTERVAL = 0.5
 SEND_QUEUE_EXPAND_MAX = 500
+
+RECONNECT_DELAY = 5.0
+RECONNECT_MAX_DELAY = 120.0
 
 XDCC_RANGE_RE = re.compile(r"^xdcc\s+(s)?(send|batch)\s+(\S+)(?:\s+(.*))?$", re.I)
 XDCC_RANGE_SEGMENT_RE = re.compile(r"^#?(\d+)(?:-#?(\d+))?$")
@@ -222,6 +226,9 @@ class IRCBot(AioSimpleIRCClient):
         self.bot_manager = bot_manager
         self.authenticated_event = asyncio.Event()
         self.authenticated = False
+        self._closing = False
+        self._command_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
         self.config = bot_manager.config
         self.transfer_handler = TransferHandler(self)
 
@@ -319,12 +326,85 @@ class IRCBot(AioSimpleIRCClient):
     async def disconnect(self, reason: str | None = None) -> None:
         """Disconnect the bot from the IRC server.
 
+        Cancels background consumers (command queue, per-nick send queues) and
+        marks pending queued sends as cancelled so nothing outlives the bot.
+
         Args:
             reason (str): Optional quit message to send to the server.
 
         """
+        self._closing = True
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
+        if self._command_task is not None:
+            self._command_task.cancel()
+            self._command_task = None
+        for task in self.send_queue_tasks.values():
+            task.cancel()
+        self.send_queue_tasks.clear()
+        for items in self.send_queue_items.values():
+            for item in items:
+                item["cancelled"] = True
+        self.send_queue_items.clear()
         self.connection.disconnect(reason or "")
         logger.info("Disconnected from server %s (%s)", self.server, reason)
+
+    def on_disconnect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle loss of the IRC connection.
+
+        The irc library fires this for both intentional disconnects and drops
+        detected via ``connection_lost``. When work is still pending (joined
+        channels, running transfers, queued commands/sends), a reconnect loop
+        is scheduled; explicit disconnects never reconnect.
+
+        """
+        if connection is not self.connection:
+            return
+        self.authenticated = False
+        self.authenticated_event.clear()
+        if self._command_task is not None:
+            self._command_task.cancel()
+            self._command_task = None
+        if self._closing or not self._has_pending_work():
+            return
+        if self._reconnect_task is None or self._reconnect_task.done():
+            logger.warning("Connection to %s lost with pending work - scheduling reconnect", self.server)
+            self._reconnect_task = self.loop.create_task(self._reconnect())
+
+    def _has_pending_work(self) -> bool:
+        """Return True while the bot still has work needing a live connection."""
+        return bool(
+            self.joined_channels
+            or self.current_transfers
+            or not self.command_queue.empty()
+            or self.send_queue_items
+            or any(self.resume_queue.values())
+            or self.passive_resume_queue
+        )
+
+    async def _reconnect(self) -> None:
+        """Reconnect to the server while pending work remains.
+
+        Retries with exponential backoff (capped at RECONNECT_MAX_DELAY) until
+        connected, explicitly disconnected, or nothing is left to reconnect
+        for - idle channels expire via cleanup() even while offline.
+
+        """
+        delay = RECONNECT_DELAY
+        while not self._closing and self._has_pending_work():
+            try:
+                await self.connect()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Reconnect to %s failed; retrying in %.0fs", self.server, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, RECONNECT_MAX_DELAY)
+            else:
+                logger.info("Reconnected to %s", self.server)
+                return
+        logger.info("No pending work left for %s - not reconnecting", self.server)
 
     async def join_channel(self, channel: str) -> None:
         """Join the specified channel.
@@ -544,6 +624,12 @@ class IRCBot(AioSimpleIRCClient):
         # Sends bypass `process_command_queue`, which is what bumps `last_active`
         # for join/part, so bump it here to keep the server from idling out.
         self.last_active = sent_at
+        # Hold queued sends while the connection is down; the reconnect loop
+        # brings it back as long as work is pending.
+        while not getattr(self.connection, "connected", False):
+            if self._closing:
+                return
+            await asyncio.sleep(1)
         await handle_send_command(self, data)
         await self._wait_for_queued_transfer(nick, sent_at)
 
@@ -733,6 +819,12 @@ class IRCBot(AioSimpleIRCClient):
         """
         await self._handle_authentication()
 
+        # Rejoin channels still tracked from a previous connection - after a
+        # reconnect joined_channels is already populated, so join_channel()
+        # would skip them; issue raw JOINs here instead.
+        for normalized in list(self.joined_channels):
+            self.connection.join(normalized)
+
         channels = self.server_config.get("channels", [])
         if channels:
             await self._join_channels(channels)
@@ -775,8 +867,11 @@ class IRCBot(AioSimpleIRCClient):
             self.connection.privmsg("NickServ", f"IDENTIFY {self.server_config['nickserv_password']}")
             logger.info("Sent NickServ IDENTIFY command")
 
-        # Start processing the message queue
-        asyncio.create_task(self.process_command_queue())
+        # (Re)start the message queue consumer - on_welcome fires after every
+        # reconnect and the tracked task may still be mid-shutdown.
+        if self._command_task is not None:
+            self._command_task.cancel()
+        self._command_task = asyncio.create_task(self.process_command_queue())
 
     def on_nosuchnick(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Show an error message when the bot receives a NOSUCHNICK message from the server.
@@ -1054,8 +1149,13 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC SEND command (file name contains invalid characters): %s", filename)
             return
 
-        # Reject private IP addresses unless explicitly allowed
-        if parsed.peer_port > 0 and not self.config.get("allow_private_ips", False) and ipaddress.ip_address(parsed.peer_address).is_private:
+        # Reject private IP addresses unless explicitly allowed. Hostname-form
+        # addresses are checked again in _connect_dcc after DNS resolution.
+        try:
+            peer_is_private = ipaddress.ip_address(parsed.peer_address).is_private
+        except ValueError:
+            peer_is_private = False
+        if parsed.peer_port > 0 and not self.config.get("allow_private_ips", False) and peer_is_private:
             logger.warning("Rejected %s: Private IP address (%s) not allowed", filename, parsed.peer_address)
             return
 
@@ -1278,7 +1378,48 @@ class IRCBot(AioSimpleIRCClient):
         self.current_transfers[dcc] = transfer_item
 
         # Schedule the connection to be established
-        self.loop.create_task(dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item))
+        self.loop.create_task(self._connect_dcc(dcc, peer_address, peer_port, connect_factory, transfer_item))
+
+    async def _connect_dcc(
+        self,
+        dcc: AioDCCConnection,
+        peer_address: str,
+        peer_port: int,
+        connect_factory: AioFactory,
+        transfer_item: dict[str, Any],
+    ) -> None:
+        """Connect a DCC session, enforcing the private-address check.
+
+        DCC SEND offers may carry a hostname instead of an IP literal; resolve
+        it here so `allow_private_ips` still applies to the resolved addresses.
+
+        """
+        if not self.config.get("allow_private_ips", False) and await self._host_is_private(peer_address, peer_port):
+            logger.warning("Rejected %s: peer address %s resolves to a private IP", transfer_item.get("filename"), peer_address)
+            transfer_item["status"] = "error"
+            transfer_item["error"] = "Private peer address not allowed"
+            self.current_transfers.pop(dcc, None)
+            dcc.disconnect("Private address not allowed")
+            return
+        await dcc.connect(peer_address, peer_port, connect_factory=connect_factory, transfer_item=transfer_item)
+
+    async def _host_is_private(self, host: str, port: int) -> bool:
+        """Return True if `host` is or resolves to a private IP address."""
+        try:
+            return ipaddress.ip_address(host).is_private
+        except ValueError:
+            pass
+        try:
+            infos = await self.loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return False  # unresolvable - connect() reports the failure itself
+        for info in infos:
+            try:
+                if ipaddress.ip_address(info[4][0]).is_private:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     def _send_passive_resume(self, nick: str, filename: str, offset: int, token: int) -> None:
         """Send a passive DCC RESUME request including the negotiation token."""
@@ -1641,9 +1782,14 @@ class IRCBot(AioSimpleIRCClient):
                 if not isinstance(last_active, (int, float)) or now - last_active > channel_idle_timeout:
                     idle_channels.append(channel)
 
-            # Part idle channels
+            # Part idle channels. While disconnected there is no way to send
+            # PART (the server already dropped us) - just forget the channel
+            # so pending work drains and the reconnect loop can give up.
             for channel in idle_channels:
-                await self.part_channel(channel, "Idle timeout")
+                if getattr(self.connection, "connected", False):
+                    await self.part_channel(channel, "Idle timeout")
+                else:
+                    del self.joined_channels[channel]
 
         for _, resume_queue in self.resume_queue.items():
             for resume_item in list(resume_queue):

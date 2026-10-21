@@ -957,3 +957,28 @@ def test_queue_extract_if_eligible_gates(manager):
     assert manager.queue_extract_if_eligible({"filename": "a.txt", "file_path": "/tmp/dl/a.txt"}) is False
     assert manager.queue_extract_if_eligible({"filename": "pack.zip"}) is False
     assert manager.extract_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_transfers_keeps_active_records(manager):
+    """Records still tracked by a live DCC connection never expire."""
+    import time
+
+    active = {"filename": "f.bin", "start_time": time.time() - 999999, "status": "in_progress"}
+    stale = {"filename": "g.bin", "start_time": time.time() - 999999, "status": "failed"}
+    manager.transfers = {"f.bin": [active], "g.bin": [stale]}
+    manager.transfer_list_timeout = 10
+
+    bot = MagicMock()
+    bot.current_transfers = {MagicMock(): active}
+    manager.bots = {"irc.example.com": bot}
+
+    await manager._cleanup_transfers()
+
+    assert manager.transfers["f.bin"] == [active]
+    assert "g.bin" not in manager.transfers
+
+    # Once the connection ends, the record expires normally.
+    bot.current_transfers = {}
+    await manager._cleanup_transfers()
+    assert "f.bin" not in manager.transfers
