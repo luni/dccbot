@@ -268,7 +268,10 @@ def extract_recursive(
                 if is_extractable(path.name, enabled_set):
                     discovered.append(path)
             if delete_archives and not member_errors:
-                _delete_archive(archive, kind)
+                try:
+                    _delete_archive(archive, kind)
+                except Exception as e:
+                    logger.warning("Cannot delete archive %s: %s", archive, e)
         current = discovered
         depth += 1
     return result

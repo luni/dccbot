@@ -387,7 +387,7 @@ class IRCBotManager:
                 idle_servers.append(server)
             else:
                 try:
-                    await bot.cleanup(self.server_idle_timeout, self.resume_timeout)
+                    await bot.cleanup(self.channel_idle_timeout, self.resume_timeout)
                 except Exception:
                     logger.exception("Error during cleanup for server %s", server)
 

@@ -581,6 +581,30 @@ async def test_cleanup_bots_active_server(manager):
     assert manager.bots.get("irc.example.com") is mock_bot
 
 
+@pytest.mark.asyncio
+async def test_cleanup_bots_uses_channel_idle_timeout(manager):
+    """bot.cleanup must get the channel timeout, not the server timeout."""
+    import time
+
+    mock_bot = AsyncMock()
+    mock_bot.joined_channels = {"#test": time.time()}
+    mock_bot.current_transfers = {}
+    mock_bot.command_queue = MagicMock()
+    mock_bot.command_queue.empty.return_value = True
+    mock_bot.send_queue_items = {}
+    mock_bot.last_active = time.time()
+    mock_bot.cleanup = AsyncMock()
+
+    manager.bots = {"irc.example.com": mock_bot}
+    manager.server_idle_timeout = 9999
+    manager.channel_idle_timeout = 42
+    manager.resume_timeout = 7
+
+    await manager._cleanup_bots()
+
+    mock_bot.cleanup.assert_awaited_once_with(42, 7)
+
+
 def test_get_md5(tmp_path):
     """Test MD5 calculation."""
     test_file = tmp_path / "test.txt"
