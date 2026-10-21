@@ -384,28 +384,54 @@ class IRCBot(AioSimpleIRCClient):
             or self.passive_resume_queue
         )
 
+    def _get_reconnect_max_attempts(self) -> int:
+        """Max failed reconnect attempts per drop; per-server override, default 5.
+
+        A value of 0 or less disables reconnecting.
+        """
+        value = self.server_config.get("reconnect_max_attempts", self.config.get("reconnect_max_attempts", 5))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 5
+        return max(0, int(value))
+
     async def _reconnect(self) -> None:
         """Reconnect to the server while pending work remains.
 
         Retries with exponential backoff (capped at RECONNECT_MAX_DELAY) until
-        connected, explicitly disconnected, or nothing is left to reconnect
-        for - idle channels expire via cleanup() even while offline.
+        connected, explicitly disconnected, the attempt budget is exhausted, or
+        nothing is left to reconnect for - idle channels expire via cleanup()
+        even while offline.
 
         """
+        max_attempts = self._get_reconnect_max_attempts()
         delay = RECONNECT_DELAY
-        while not self._closing and self._has_pending_work():
+        attempts = 0
+        while not self._closing and self._has_pending_work() and attempts < max_attempts:
+            attempts += 1
             try:
                 await self.connect()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.warning("Reconnect to %s failed; retrying in %.0fs", self.server, delay)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                if attempts < max_attempts:
+                    logger.warning(
+                        "Reconnect to %s failed (attempt %d/%d); retrying in %.0fs",
+                        self.server,
+                        attempts,
+                        max_attempts,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
             else:
                 logger.info("Reconnected to %s", self.server)
                 return
-        logger.info("No pending work left for %s - not reconnecting", self.server)
+        if not self._has_pending_work():
+            logger.info("No pending work left for %s - not reconnecting", self.server)
+        elif attempts >= max_attempts:
+            logger.error("Giving up reconnecting to %s after %d failed attempt(s) - pending work remains", self.server, attempts)
+        else:
+            logger.info("Reconnecting to %s is disabled (reconnect_max_attempts=%d)", self.server, max_attempts)
 
     def _kick_reconnect(self) -> None:
         """Schedule a reconnect when new work arrives while the connection is down.

@@ -2365,3 +2365,67 @@ async def test_connect_clears_closing_flag(bot):
         await bot.connect()
 
     assert not bot._closing
+
+
+@pytest.mark.asyncio
+async def test_reconnect_gives_up_after_max_attempts(bot):
+    """_reconnect stops after reconnect_max_attempts failed connects."""
+    bot.joined_channels["#chan"] = time.time()
+    bot.config = {"reconnect_max_attempts": 3}
+    attempts = []
+
+    async def fail_connect():
+        attempts.append(1)
+        raise OSError("connect failed")
+
+    with patch.object(bot, "connect", side_effect=fail_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+        await bot._reconnect()
+
+    assert len(attempts) == 3
+
+
+@pytest.mark.asyncio
+async def test_reconnect_disabled_with_zero_attempts(bot):
+    """reconnect_max_attempts=0 never attempts a connect."""
+    bot.joined_channels["#chan"] = time.time()
+    bot.config = {"reconnect_max_attempts": 0}
+
+    with patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
+        await bot._reconnect()
+
+    connect_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_max_attempts_per_server_override(bot):
+    """A server-level reconnect_max_attempts overrides the global one."""
+    bot.config = {"reconnect_max_attempts": 9}
+    bot.server_config["reconnect_max_attempts"] = 2
+    assert bot._get_reconnect_max_attempts() == 2
+
+
+@pytest.mark.asyncio
+async def test_reconnect_max_attempts_invalid_falls_back_to_default(bot):
+    """Non-numeric reconnect_max_attempts values fall back to 5."""
+    bot.config = {"reconnect_max_attempts": "many"}
+    assert bot._get_reconnect_max_attempts() == 5
+    bot.config = {"reconnect_max_attempts": True}
+    assert bot._get_reconnect_max_attempts() == 5
+
+
+@pytest.mark.asyncio
+async def test_reconnect_attempt_counter_resets_per_drop(bot):
+    """Each _reconnect invocation gets a fresh attempt budget."""
+    bot.joined_channels["#chan"] = time.time()
+    bot.config = {"reconnect_max_attempts": 2}
+    attempts = []
+
+    async def fail_connect():
+        attempts.append(1)
+        raise OSError("connect failed")
+
+    with patch.object(bot, "connect", side_effect=fail_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+        await bot._reconnect()
+        await bot._reconnect()
+
+    assert len(attempts) == 4

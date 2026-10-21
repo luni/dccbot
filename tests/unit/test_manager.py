@@ -1006,3 +1006,10 @@ async def test_cleanup_transfers_keeps_active_records(manager):
     bot.current_transfers = {}
     await manager._cleanup_transfers()
     assert "f.bin" not in manager.transfers
+
+
+def test_validate_reconnect_max_attempts_must_be_int(manager):
+    """reconnect_max_attempts is validated as an integer."""
+    manager.config = {"servers": {}, "reconnect_max_attempts": "five"}
+    with pytest.raises(ValueError, match="reconnect_max_attempts"):
+        manager._validate_transfer_keys(manager.config)

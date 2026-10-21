@@ -206,6 +206,8 @@ class IRCBotManager:
                 raise ValueError(f"'{key}' must be a boolean")
         if "auto_extract_max_depth" in config and not isinstance(config["auto_extract_max_depth"], int):
             raise ValueError("'auto_extract_max_depth' must be an integer")
+        if "reconnect_max_attempts" in config and not isinstance(config["reconnect_max_attempts"], int):
+            raise ValueError("'reconnect_max_attempts' must be an integer")
         if "auto_extract_formats" in config:
             formats = config["auto_extract_formats"]
             if not isinstance(formats, list) or not all(isinstance(f, str) for f in formats):
