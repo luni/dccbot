@@ -933,3 +933,27 @@ async def test_extract_queue_processor_respects_enabled_formats(manager, tmp_pat
     assert record["extract_status"] == "completed"
     assert record["extracted_files"] == []
     assert not (tmp_path / "file.txt").exists()
+
+
+def test_queue_extract_if_eligible(manager):
+    """queue_extract_if_eligible enqueues an archive transfer exactly once."""
+    manager.config["auto_extract"] = True
+    transfer = {"filename": "pack.zip", "file_path": "/tmp/dl/pack.zip"}
+
+    assert manager.queue_extract_if_eligible(transfer) is True
+    assert manager.extract_queue.qsize() == 1
+    # Second call (e.g. late MD5 job after direct post-completion queue) is a no-op.
+    assert manager.queue_extract_if_eligible(transfer) is False
+    assert manager.extract_queue.qsize() == 1
+
+
+def test_queue_extract_if_eligible_gates(manager):
+    """queue_extract_if_eligible rejects disabled/non-archive/missing-path transfers."""
+    manager.config["auto_extract"] = False
+    transfer = {"filename": "pack.zip", "file_path": "/tmp/dl/pack.zip"}
+    assert manager.queue_extract_if_eligible(transfer) is False
+
+    manager.config["auto_extract"] = True
+    assert manager.queue_extract_if_eligible({"filename": "a.txt", "file_path": "/tmp/dl/a.txt"}) is False
+    assert manager.queue_extract_if_eligible({"filename": "pack.zip"}) is False
+    assert manager.extract_queue.qsize() == 0

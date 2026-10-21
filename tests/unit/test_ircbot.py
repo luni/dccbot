@@ -2041,6 +2041,16 @@ def test_cancel_queued_send_no_match(bot):
     assert bot.send_queue_items["mybot"] == [item1]
 
 
+def test_cancel_queued_send_out_of_range_digit_no_fallback(bot):
+    """A numeric selector outside the queue range must not fall back to substring matching."""
+    item1 = {"message": "xdcc send #2"}
+    bot.send_queue_items = {"mybot": [item1]}
+
+    assert bot.cancel_queued_send("mybot", "2") == []
+    assert "cancelled" not in item1
+    assert bot.send_queue_items["mybot"] == [item1]
+
+
 def test_untrack_queued_send_removes_by_identity(bot):
     """Test _untrack_queued_send removes the matching item and cleans up an empty list."""
     item = {"message": "xdcc send #1"}

@@ -269,6 +269,26 @@ class IRCBotManager:
             if config.get(key) is not None and not isinstance(config[key], str):
                 raise ValueError(f"'{key}' must be a string")
 
+    def queue_extract_if_eligible(self, transfer: dict[str, Any]) -> bool:
+        """Queue a transfer record for archive extraction, at most once.
+
+        Checks the auto_extract settings and whether the completed file is an
+        archive, and marks the record so the direct post-completion path and
+        the deferred post-MD5 path cannot queue the same file twice.
+
+        """
+        file_path = transfer.get("file_path")
+        if (
+            not self.config.get("auto_extract")
+            or not file_path
+            or transfer.get("_extract_queued")
+            or not is_extractable(Path(str(file_path)).name, self.config.get("auto_extract_formats"))
+        ):
+            return False
+        transfer["_extract_queued"] = True
+        self.extract_queue.put_nowait(transfer)
+        return True
+
     async def get_bot(self, server: str) -> IRCBot:
         """Get an IRCBot instance for a server.
 
@@ -452,9 +472,7 @@ class IRCBotManager:
 
                     # Archive extraction is deferred to here so the hash always
                     # completes before delete_archives can remove the file.
-                    file_path = transfer_job.get("file_path")
-                    if self.config.get("auto_extract") and file_path and is_extractable(Path(file_path).name, self.config.get("auto_extract_formats")):
-                        await self.extract_queue.put(transfer_job)
+                    self.queue_extract_if_eligible(transfer_job)
                 finally:
                     # task_done pairs with the successful get() above; calling it
                     # in the outer except could raise ValueError when get() itself failed.

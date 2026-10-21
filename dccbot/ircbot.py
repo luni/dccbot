@@ -459,8 +459,11 @@ class IRCBot(AioSimpleIRCClient):
             items.clear()
         else:
             index = None
-            if selector.isdigit() and 1 <= int(selector) <= len(items):
-                index = int(selector) - 1
+            if selector.isdigit():
+                # A numeric selector is positional only - no substring
+                # fallback, or "0"/"99" would match unrelated messages.
+                if 1 <= int(selector) <= len(items):
+                    index = int(selector) - 1
             else:
                 for i, item in enumerate(items):
                     if selector.lower() in str(item.get("message", "")).lower():
@@ -843,7 +846,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        if event.source.nick.lower() != self.nick.lower():
+        if (event.source.nick or "").lower() != self.nick.lower():
             return
 
         channel_name = event.target.lower()
@@ -861,7 +864,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        if event.source.nick.lower() != self.nick.lower():
+        if (event.source.nick or "").lower() != self.nick.lower():
             return
 
         channel_name = event.target.lower()
@@ -880,7 +883,7 @@ class IRCBot(AioSimpleIRCClient):
             event (irc.client_aio.Event): The event that triggered this method to be called.
 
         """
-        kicked_nick = event.arguments[0].lower() if event.arguments else ""
+        kicked_nick = (event.arguments[0] or "").lower() if event.arguments else ""
         if kicked_nick != self.nick.lower():
             return
 
@@ -1487,12 +1490,13 @@ class IRCBot(AioSimpleIRCClient):
         """Add a transfer to the archive extraction queue.
 
         The file will be processed by the extract processor in the bot manager.
+        The manager deduplicates, so a record is never queued twice.
 
         Args:
             transfer (dict): The transfer to add to the extract queue.
 
         """
-        await self.bot_manager.extract_queue.put(transfer)
+        self.bot_manager.queue_extract_if_eligible(transfer)
 
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Delegate DCC disconnect handling to transfer handler."""
