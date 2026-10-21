@@ -1483,6 +1483,17 @@ class IRCBot(AioSimpleIRCClient):
         """
         await self.bot_manager.md5_check_queue.put(transfer)
 
+    async def _add_extract_queue_item(self, transfer: dict) -> None:
+        """Add a transfer to the archive extraction queue.
+
+        The file will be processed by the extract processor in the bot manager.
+
+        Args:
+            transfer (dict): The transfer to add to the extract queue.
+
+        """
+        await self.bot_manager.extract_queue.put(transfer)
+
     def on_dcc_disconnect(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Delegate DCC disconnect handling to transfer handler."""
         self.transfer_handler.on_dcc_disconnect(cast(AioDCCConnection, connection), event)

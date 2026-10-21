@@ -762,3 +762,98 @@ def test_mark_complete_enqueues_md5_with_transfer(tmp_path):
 
     bot._add_md5_check_queue_item.assert_called_once_with(transfer)
     mock_create_task.assert_called_once_with(bot._add_md5_check_queue_item.return_value)
+
+
+def test_mark_complete_enqueues_extract_for_archive(tmp_path):
+    """auto_extract config queues archives for extraction after completion."""
+    dcc = MagicMock()
+    file_path = tmp_path / "pack.tar"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["filename"] = "pack.tar"
+    transfer["md5"] = None
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot.config = {"auto_extract": True}
+    bot._add_extract_queue_item = MagicMock()
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    with patch("asyncio.create_task") as mock_create_task:
+        handler.on_dcc_disconnect(dcc, event)
+
+    bot._add_extract_queue_item.assert_called_once_with(transfer)
+    mock_create_task.assert_called_once_with(bot._add_extract_queue_item.return_value)
+
+
+def test_mark_complete_skips_extract_for_non_archive(tmp_path):
+    """auto_extract does not queue non-archive filenames."""
+    dcc = MagicMock()
+    file_path = tmp_path / "movie.mkv"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["filename"] = "movie.mkv"
+    transfer["md5"] = None
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot.config = {"auto_extract": True}
+    bot._add_extract_queue_item = MagicMock()
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    with patch("asyncio.create_task") as mock_create_task:
+        handler.on_dcc_disconnect(dcc, event)
+
+    bot._add_extract_queue_item.assert_not_called()
+    mock_create_task.assert_not_called()
+
+
+def test_mark_complete_extract_disabled_by_default(tmp_path):
+    """Without auto_extract config nothing is queued."""
+    dcc = MagicMock()
+    file_path = tmp_path / "pack.tar"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["filename"] = "pack.tar"
+    transfer["md5"] = None
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot._add_extract_queue_item = MagicMock()
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    with patch("asyncio.create_task") as mock_create_task:
+        handler.on_dcc_disconnect(dcc, event)
+
+    bot._add_extract_queue_item.assert_not_called()
+    mock_create_task.assert_not_called()
+
+
+def test_mark_complete_extract_formats_filter(tmp_path):
+    """auto_extract_formats restricts which archive kinds get queued."""
+    dcc = MagicMock()
+    file_path = tmp_path / "pack.tar"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["filename"] = "pack.tar"
+    transfer["md5"] = None
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot.config = {"auto_extract": True, "auto_extract_formats": ["zip", "rar"]}
+    bot._add_extract_queue_item = MagicMock()
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    with patch("asyncio.create_task") as mock_create_task:
+        handler.on_dcc_disconnect(dcc, event)
+
+    bot._add_extract_queue_item.assert_not_called()
+    mock_create_task.assert_not_called()

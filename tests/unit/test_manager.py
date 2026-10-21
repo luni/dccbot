@@ -664,23 +664,31 @@ async def test_start_background_tasks():
     mock_manager = MagicMock()
     mock_manager.cleanup = AsyncMock(return_value=None)
     mock_manager.check_queue_processor = AsyncMock(return_value=None)
+    mock_manager.extract_queue_processor = AsyncMock(return_value=None)
     mock_manager.md5_check_queue = asyncio.Queue()
+    mock_manager.extract_queue = asyncio.Queue()
     app["bot_manager"] = mock_manager
 
     await start_background_tasks(app)
 
     assert "cleanup_task" in app
     assert "queue_processor_task" in app
+    assert "extract_processor_task" in app
 
     # Cancel tasks to clean up
     app["cleanup_task"].cancel()
     app["queue_processor_task"].cancel()
+    app["extract_processor_task"].cancel()
     try:
         await app["cleanup_task"]
     except asyncio.CancelledError:
         pass
     try:
         await app["queue_processor_task"]
+    except asyncio.CancelledError:
+        pass
+    try:
+        await app["extract_processor_task"]
     except asyncio.CancelledError:
         pass
 
@@ -695,7 +703,149 @@ async def test_cleanup_background_tasks_handles_cancelled_errors():
 
     cleanup_task = asyncio.create_task(_never())
     queue_task = asyncio.create_task(_never())
+    extract_task = asyncio.create_task(_never())
     app["cleanup_task"] = cleanup_task
     app["queue_processor_task"] = queue_task
+    app["extract_processor_task"] = extract_task
 
     await cleanup_background_tasks(app)
+
+
+@pytest.mark.asyncio
+async def test_extract_queue_processor(manager, tmp_path):
+    """Test extract queue processor extracts archives and updates records."""
+    import zipfile
+
+    archive = tmp_path / "pack.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("file.txt", b"content")
+
+    transfer_job = {
+        "id": "extract-id",
+        "filename": "pack.zip",
+        "file_path": str(archive),
+    }
+    manager.transfers = {
+        "pack.zip": [
+            {
+                "id": "extract-id",
+            }
+        ]
+    }
+
+    await manager.extract_queue.put(transfer_job)
+    task = asyncio.create_task(manager.extract_queue_processor(asyncio.get_running_loop(), manager.extract_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    record = manager.transfers["pack.zip"][0]
+    assert record["extract_status"] == "completed"
+    assert record["extracted_files"] == ["file.txt"]
+    assert (tmp_path / "file.txt").read_bytes() == b"content"
+
+
+@pytest.mark.asyncio
+async def test_extract_queue_processor_marks_failure(manager, tmp_path):
+    """A corrupt archive marks the transfer record's extract_status as failed."""
+    archive = tmp_path / "broken.tar"
+    archive.write_bytes(b"not a tar")
+
+    transfer_job = {
+        "id": "extract-fail-id",
+        "filename": "broken.tar",
+        "file_path": str(archive),
+    }
+    manager.transfers = {"broken.tar": [{"id": "extract-fail-id"}]}
+
+    await manager.extract_queue.put(transfer_job)
+    task = asyncio.create_task(manager.extract_queue_processor(asyncio.get_running_loop(), manager.extract_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    record = manager.transfers["broken.tar"][0]
+    assert record["extract_status"] == "failed"
+    assert record["extract_error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["auto_extract", "auto_extract_delete_archives"])
+async def test_load_config_rejects_invalid_auto_extract_bool(config_file_factory, key):
+    """Non-boolean auto_extract flags are rejected."""
+    path = config_file_factory({"servers": {}, key: "yes"})
+    with pytest.raises(ValueError, match=f"'{key}' must be a boolean"):
+        IRCBotManager(path)
+
+
+@pytest.mark.asyncio
+async def test_load_config_rejects_invalid_auto_extract_max_depth(config_file_factory):
+    """Non-integer auto_extract_max_depth is rejected."""
+    path = config_file_factory({"servers": {}, "auto_extract_max_depth": "3"})
+    with pytest.raises(ValueError, match="'auto_extract_max_depth' must be an integer"):
+        IRCBotManager(path)
+
+
+@pytest.mark.asyncio
+async def test_load_config_rejects_invalid_auto_extract_formats_type(config_file_factory):
+    """Non-list auto_extract_formats is rejected."""
+    path = config_file_factory({"servers": {}, "auto_extract_formats": "tar,zip"})
+    with pytest.raises(ValueError, match="'auto_extract_formats' must be a list of strings"):
+        IRCBotManager(path)
+
+
+@pytest.mark.asyncio
+async def test_load_config_rejects_unknown_auto_extract_formats(config_file_factory):
+    """Unknown archive format names are rejected."""
+    path = config_file_factory({"servers": {}, "auto_extract_formats": ["tar", "lha"]})
+    with pytest.raises(ValueError, match="'auto_extract_formats' contains unsupported formats: lha"):
+        IRCBotManager(path)
+
+
+@pytest.mark.asyncio
+async def test_load_config_accepts_auto_extract_formats(config_file_factory):
+    """A valid subset of formats is accepted."""
+    path = config_file_factory({"servers": {}, "auto_extract_formats": ["zip", "7z"]})
+    manager = IRCBotManager(path)
+    assert manager.config["auto_extract_formats"] == ["zip", "7z"]
+
+
+@pytest.mark.asyncio
+async def test_extract_queue_processor_respects_enabled_formats(manager, tmp_path):
+    """The processor skips extraction when the format is not enabled."""
+    import zipfile
+
+    manager.config["auto_extract_formats"] = ["tar"]
+    archive = tmp_path / "pack.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("file.txt", b"content")
+
+    transfer_job = {
+        "id": "extract-fmt-id",
+        "filename": "pack.zip",
+        "file_path": str(archive),
+    }
+    manager.transfers = {"pack.zip": [{"id": "extract-fmt-id"}]}
+
+    await manager.extract_queue.put(transfer_job)
+    task = asyncio.create_task(manager.extract_queue_processor(asyncio.get_running_loop(), manager.extract_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    record = manager.transfers["pack.zip"][0]
+    assert record["extract_status"] == "completed"
+    assert record["extracted_files"] == []
+    assert not (tmp_path / "file.txt").exists()

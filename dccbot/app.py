@@ -204,6 +204,17 @@ class TransferInfo(Schema):
     file_md5 = fields.Str(
         allow_none=True,
     )
+    extract_status = fields.Str(
+        allow_none=True,
+        validate=validate.OneOf(["in_progress", "completed", "failed"]),
+    )
+    extracted_files = fields.List(
+        fields.Str(),
+        allow_none=True,
+    )
+    extract_error = fields.Str(
+        allow_none=True,
+    )
     status = fields.Str(
         validate=validate.OneOf(["started", "in_progress", "completed", "failed", "error", "cancelled"]),
     )
@@ -446,6 +457,9 @@ class IRCBotAPI:
                     "speed_avg": round(speed_avg, 2),
                     "md5": transfer.get("md5"),
                     "file_md5": transfer.get("file_md5"),
+                    "extract_status": transfer.get("extract_status"),
+                    "extracted_files": transfer.get("extracted_files"),
+                    "extract_error": transfer.get("extract_error"),
                     "status": transfer.get("status"),
                     "error": transfer.get("error"),
                     "resumed": transfer.get("offset", 0) > 0,
