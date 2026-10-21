@@ -67,6 +67,18 @@ def _safe_join(dest_dir: Path, member_name: str) -> Path | None:
     return target
 
 
+def _member_target_name(member_name: str, flatten: bool) -> str:
+    """Return the member's output name inside dest_dir.
+
+    With flatten enabled the archive's directory structure is dropped so
+    extracted files land directly in the destination root (SABnzbd-style
+    flat unpack). Stripping the path also defuses traversal attempts.
+    """
+    if not flatten:
+        return member_name
+    return Path(member_name.replace("\\", "/")).name
+
+
 def _unique_path(target: Path) -> Path:
     """Return a non-existing variant of target by appending a numeric suffix."""
     if not target.exists():
@@ -87,17 +99,18 @@ def _write_member(target: Path, src: IO[bytes], out: list[Path]) -> None:
     out.append(final)
 
 
-def _extract_tar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
+def _extract_tar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str], flatten: bool = False) -> None:
     """Extract regular files and dirs from a tar archive, member by member."""
     with tarfile.open(archive) as tf:
         for member in tf.getmembers():
-            target = _safe_join(dest_dir, member.name)
+            target = _safe_join(dest_dir, _member_target_name(member.name, flatten))
             if target is None:
                 logger.warning("Skipping unsafe tar member %r in %s", member.name, archive)
                 continue
             try:
                 if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    if not flatten:
+                        target.mkdir(parents=True, exist_ok=True)
                 elif member.isreg():
                     src = tf.extractfile(member)
                     if src is None:
@@ -108,17 +121,18 @@ def _extract_tar(archive: Path, dest_dir: Path, out: list[Path], errors: list[st
                 errors.append(f"{member.name}: {e}")
 
 
-def _extract_zip(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
+def _extract_zip(archive: Path, dest_dir: Path, out: list[Path], errors: list[str], flatten: bool = False) -> None:
     """Extract regular files and dirs from a zip archive, member by member."""
     with zipfile.ZipFile(archive) as zf:
         for info in zf.infolist():
-            target = _safe_join(dest_dir, info.filename)
+            target = _safe_join(dest_dir, _member_target_name(info.filename, flatten))
             if target is None:
                 logger.warning("Skipping unsafe zip member %r in %s", info.filename, archive)
                 continue
             try:
                 if info.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    if not flatten:
+                        target.mkdir(parents=True, exist_ok=True)
                 elif stat.S_ISLNK(info.external_attr >> 16):
                     logger.warning("Skipping symlink member %r in %s", info.filename, archive)
                 else:
@@ -127,7 +141,7 @@ def _extract_zip(archive: Path, dest_dir: Path, out: list[Path], errors: list[st
                 errors.append(f"{info.filename}: {e}")
 
 
-def _extract_rar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
+def _extract_rar(archive: Path, dest_dir: Path, out: list[Path], errors: list[str], flatten: bool = False) -> None:
     """Extract regular files and dirs from a rar archive, member by member.
 
     Requires an external backend tool (unrar, unar, bsdtar or 7z) on PATH;
@@ -135,13 +149,14 @@ def _extract_rar(archive: Path, dest_dir: Path, out: list[Path], errors: list[st
     """
     with rarfile.RarFile(archive) as rf:
         for info in rf.infolist():
-            target = _safe_join(dest_dir, info.filename)
+            target = _safe_join(dest_dir, _member_target_name(info.filename, flatten))
             if target is None:
                 logger.warning("Skipping unsafe rar member %r in %s", info.filename, archive)
                 continue
             try:
                 if info.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    if not flatten:
+                        target.mkdir(parents=True, exist_ok=True)
                 elif info.is_symlink():
                     logger.warning("Skipping symlink member %r in %s", info.filename, archive)
                 else:
@@ -150,7 +165,7 @@ def _extract_rar(archive: Path, dest_dir: Path, out: list[Path], errors: list[st
                 errors.append(f"{info.filename}: {e}")
 
 
-def _extract_7z(archive: Path, dest_dir: Path, out: list[Path], errors: list[str]) -> None:
+def _extract_7z(archive: Path, dest_dir: Path, out: list[Path], errors: list[str], flatten: bool = False) -> None:
     """Extract a 7z archive via a staging dir so members get unique names.
 
     py7zr cannot remap member names during extraction, so files are first
@@ -168,7 +183,7 @@ def _extract_7z(archive: Path, dest_dir: Path, out: list[Path], errors: list[str
                 continue
             if src.is_dir():
                 continue
-            target = _safe_join(dest_dir, rel.as_posix())
+            target = _safe_join(dest_dir, _member_target_name(rel.as_posix(), flatten))
             if target is None:
                 logger.warning("Skipping unsafe 7z member %r in %s", rel.as_posix(), archive)
                 continue
@@ -182,7 +197,7 @@ def _extract_7z(archive: Path, dest_dir: Path, out: list[Path], errors: list[str
                 out.append(final)
 
 
-_EXTRACTORS: dict[str, Callable[[Path, Path, list[Path], list[str]], None]] = {
+_EXTRACTORS: dict[str, Callable[..., None]] = {
     "tar": _extract_tar,
     "zip": _extract_zip,
     "rar": _extract_rar,
@@ -226,10 +241,14 @@ def extract_recursive(
     max_depth: int = 3,
     delete_archives: bool = False,
     enabled: Iterable[str] | None = None,
+    flatten: bool = False,
 ) -> dict[str, Any]:
     """Extract an archive and any archives found in the extracted output.
 
-    Each archive is extracted in place (into its own parent directory).
+    Without 'flatten' each archive is extracted in place (into its own parent
+    directory). With 'flatten' enabled all extracted files land directly in
+    the top-level archive's directory (SABnzbd-style flat unpack), including
+    contents of nested archives; name collisions get a numeric suffix.
     'enabled' restricts the archive kinds to unpack (see SUPPORTED_FORMATS);
     None enables all of them. Returns a dict with 'extracted' (paths
     relative to the top-level archive's directory) and 'errors'.
@@ -257,7 +276,8 @@ def extract_recursive(
             member_errors: list[str] = []
             try:
                 new_files: list[Path] = []
-                _EXTRACTORS[kind](archive, archive.parent, new_files, member_errors)
+                dest_dir = base_dir if flatten else archive.parent
+                _EXTRACTORS[kind](archive, dest_dir, new_files, member_errors, flatten)
             except Exception as e:
                 logger.exception("Failed to extract %s", archive)
                 result["errors"].append(f"{archive.name}: {e}")

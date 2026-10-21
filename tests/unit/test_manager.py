@@ -886,7 +886,7 @@ async def test_extract_queue_processor_unexpected_error_not_stuck(manager, tmp_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["auto_extract", "auto_extract_delete_archives"])
+@pytest.mark.parametrize("key", ["auto_extract", "auto_extract_delete_archives", "auto_extract_flatten"])
 async def test_load_config_rejects_invalid_auto_extract_bool(config_file_factory, key):
     """Non-boolean auto_extract flags are rejected."""
     path = config_file_factory({"servers": {}, key: "yes"})

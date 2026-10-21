@@ -319,3 +319,88 @@ def test_extract_enabled_formats_restricts_nested(tmp_path):
 def test_is_extractable(filename, enabled, expected):
     """is_extractable honours the enabled-format list."""
     assert is_extractable(filename, enabled) == expected
+
+
+def test_extract_flatten_tar(tmp_path):
+    """Flatten drops the archive's directory structure into the root."""
+    archive = _make_tar(tmp_path / "pack.tar", {"Movie/film.mkv": b"vid", "a.txt": b"aaa"})
+    result = extract_recursive(archive, flatten=True)
+    assert result["errors"] == []
+    assert sorted(result["extracted"]) == ["a.txt", "film.mkv"]
+    assert (tmp_path / "film.mkv").read_bytes() == b"vid"
+    assert not (tmp_path / "Movie").exists()
+
+
+def test_extract_flatten_zip(tmp_path):
+    """Flatten lands nested zip members directly in the root."""
+    archive = _make_zip(tmp_path / "pack.zip", {"sub/deep/file.txt": b"deep"})
+    result = extract_recursive(archive, flatten=True)
+    assert result["errors"] == []
+    assert result["extracted"] == ["file.txt"]
+    assert (tmp_path / "file.txt").read_bytes() == b"deep"
+    assert not (tmp_path / "sub").exists()
+
+
+def test_extract_flatten_7z(tmp_path):
+    """Flatten lands nested 7z members directly in the root."""
+    archive = _make_7z(tmp_path / "pack.7z", {"sub/b.txt": b"bb"})
+    result = extract_recursive(archive, flatten=True)
+    assert result["errors"] == []
+    assert result["extracted"] == ["b.txt"]
+    assert (tmp_path / "b.txt").read_bytes() == b"bb"
+    assert not (tmp_path / "sub").exists()
+
+
+def test_extract_flatten_collision(tmp_path):
+    """Same-named files from different subdirs get unique names at the root."""
+    archive = _make_zip(tmp_path / "pack.zip", {"a/dup.txt": b"one", "b/dup.txt": b"two"})
+    result = extract_recursive(archive, flatten=True)
+    assert result["errors"] == []
+    assert sorted(result["extracted"]) == ["dup.1.txt", "dup.txt"]
+    contents = sorted((tmp_path / n).read_bytes() for n in ("dup.txt", "dup.1.txt"))
+    assert contents == [b"one", b"two"]
+
+
+def test_extract_flatten_nested_archive(tmp_path):
+    """A nested archive inside a subdir extracts its contents to the root too."""
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("deep/movie.mkv", b"vid")
+    outer = _make_tar(tmp_path / "outer.tar", {"pack/inner.zip": inner.getvalue()})
+    result = extract_recursive(outer, flatten=True)
+    assert result["errors"] == []
+    assert sorted(result["extracted"]) == ["inner.zip", "movie.mkv"]
+    assert (tmp_path / "movie.mkv").read_bytes() == b"vid"
+    assert not (tmp_path / "pack" / "deep").exists()
+
+
+def test_extract_flatten_defuses_traversal(tmp_path):
+    """Flattened extraction turns traversal members into plain basenames."""
+    archive = tmp_path / "evil.tar"
+    with tarfile.open(archive, "w") as tf:
+        data = b"bad"
+        info = tarfile.TarInfo("../escape.txt")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+
+    result = extract_recursive(archive, flatten=True)
+    assert result["errors"] == []
+    assert not (tmp_path.parent / "escape.txt").exists()
+    assert (tmp_path / "escape.txt").read_bytes() == b"bad"
+
+
+def test_extract_flatten_leaves_no_subdirs(tmp_path):
+    """Flattened output never creates archive subdirectories at all."""
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("file.txt", b"f")
+    outer = _make_zip(tmp_path / "outer.zip", {"pack/inner.zip": inner.getvalue(), "top.txt": b"t"})
+    result = extract_recursive(outer, flatten=True, delete_archives=True)
+    assert result["errors"] == []
+    assert (tmp_path / "file.txt").exists()
+    assert (tmp_path / "top.txt").exists()
+    assert not (tmp_path / "pack").exists()
+    assert not (tmp_path / "inner.zip").exists()
+    assert not (tmp_path / "outer.zip").exists()
+    # The download dir contains only the flattened output - no subdirs.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["file.txt", "top.txt"]

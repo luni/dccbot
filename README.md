@@ -122,6 +122,10 @@ keys:
     (default: false). When a pack announces an MD5 checksum, extraction is
     deferred until after the hash check so the archive is never deleted before
     it has been hashed.
+* `auto_extract_flatten`: a boolean indicating to extract all files directly
+    into the download directory instead of keeping the archive's directory
+    structure, SABnzbd-style flat unpack (default: true). Nested archives are
+    extracted to the root as well; name collisions get a numeric suffix.
 * `auto_extract_max_depth`: the maximum recursion depth for nested archives
     (default: 3).
 * `ssend_map`: a dictionary of users which support ssend (secure send). `xdcc send` command is

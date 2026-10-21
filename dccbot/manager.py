@@ -201,7 +201,7 @@ class IRCBotManager:
             raise ValueError("'max_file_size' must be an integer")
         if "send_queue_max_concurrent" in config and not isinstance(config["send_queue_max_concurrent"], int):
             raise ValueError("'send_queue_max_concurrent' must be an integer")
-        for key in ("auto_extract", "auto_extract_delete_archives"):
+        for key in ("auto_extract", "auto_extract_delete_archives", "auto_extract_flatten"):
             if key in config and not isinstance(config[key], bool):
                 raise ValueError(f"'{key}' must be a boolean")
         if "auto_extract_max_depth" in config and not isinstance(config["auto_extract_max_depth"], int):
@@ -512,6 +512,7 @@ class IRCBotManager:
                                 max_depth=self.config.get("auto_extract_max_depth", 3),
                                 delete_archives=self.config.get("auto_extract_delete_archives", False),
                                 enabled=self.config.get("auto_extract_formats"),
+                                flatten=self.config.get("auto_extract_flatten", True),
                             ),
                         )
                     except Exception as e:

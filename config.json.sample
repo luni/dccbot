@@ -59,6 +59,7 @@
   "auto_extract": false,
   "auto_extract_formats": ["tar", "zip", "rar", "7z"],
   "auto_extract_delete_archives": false,
+  "auto_extract_flatten": true,
   "auto_extract_max_depth": 3,
   "allow_private_ips": false,
   "passive_dcc": false,
