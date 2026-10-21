@@ -205,7 +205,7 @@ async def test_websocket_handler_help_command(api_client):
     data = msg.json()
     assert data["status"] == "ok"
     assert "available websocket commands" in data["message"].lower()
-    for command in ("help", "join", "part", "msg", "msgjoin", "info", "queue", "cancelqueue"):
+    for command in ("help", "join", "part", "msg", "msgjoin", "info", "queue", "cancelqueue", "nick"):
         assert f"/{command}" in data["message"].lower()
     await ws.close()
 
@@ -238,6 +238,7 @@ async def test_websocket_handler_help_with_command(api_client):
         ("info", "usage: /info"),
         ("queue", "usage: /queue"),
         ("cancelqueue", "usage: /cancelqueue <server> <target> [index-or-message]"),
+        ("nick", "usage: /nick <server> <newnick>"),
     ],
 )
 async def test_websocket_handler_help_with_specific_commands(api_client, command, expected):
@@ -417,6 +418,60 @@ async def test_websocket_handler_cancelqueue_unknown_server(ws_session):
     assert data["status"] == "error"
     assert "not connected" in data["message"].lower()
     mock_bot_manager.get_bot.assert_not_called()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_nick_not_enough_args(ws_session):
+    """Test websocket /nick command with insufficient arguments."""
+    ws, _ = ws_session
+    await ws.send_str("/nick onlyone")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not enough arguments" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_nick_invalid_nick(ws_session):
+    """Test websocket /nick rejects malformed nicknames."""
+    ws, _ = ws_session
+    await ws.send_str("/nick server -badnick")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "invalid nickname" in data["message"].lower()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_nick_unknown_server(ws_session):
+    """Test /nick on an unconnected server errors out without connecting."""
+    ws, mock_bot_manager = ws_session
+    mock_bot_manager.bots = {}
+    mock_bot_manager.get_bot = AsyncMock()
+    await ws.send_str("/nick nowhere newbot")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "error"
+    assert "not connected" in data["message"].lower()
+    mock_bot_manager.get_bot.assert_not_called()
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_nick_queues_command(ws_session):
+    """Test websocket /nick queues a nick command on the bot."""
+    ws, mock_bot_manager = ws_session
+    mock_bot = MagicMock()
+    mock_bot.queue_command = AsyncMock()
+    mock_bot_manager.bots = {"server": mock_bot}
+    await ws.send_str("/nick Server NewBot9")
+    msg = await ws.receive(timeout=2)
+    data = msg.json()
+    assert data["status"] == "ok"
+    mock_bot.queue_command.assert_awaited_once_with({"command": "nick", "nick": "NewBot9"})
     await ws.close()
 
 

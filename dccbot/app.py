@@ -12,6 +12,7 @@ from aiohttp import web
 from aiohttp_apispec import docs, request_schema, response_schema, setup_aiohttp_apispec, validation_middleware
 from marshmallow import Schema, fields, validate
 
+from dccbot.command_pipeline import NICK_RE
 from dccbot.manager import IRCBotManager, cleanup_background_tasks, start_background_tasks
 from dccbot.transfers import ensure_transfer_defaults, transfer_speeds
 
@@ -59,6 +60,11 @@ WS_COMMAND_HELP = {
         "description": "Cancel queued xdcc send requests for a target bot. With no third "
         "argument, cancels everything queued for it; otherwise cancels a single item, "
         "matched by its 1-based position in the queue or by a substring of its message.",
+    },
+    "nick": {
+        "usage": "/nick <server> <newnick>",
+        "example": "/nick irc.example.net dccbot2",
+        "description": "Change the bot's nickname on a server.",
     },
 }
 
@@ -126,6 +132,25 @@ class PartRequestSchema(Schema):
         validate=validate.Length(min=1),
         metadata={
             "description": "Reason for parting the channel",
+        },
+    )
+
+
+class NickRequestSchema(Schema):
+    """Schema for the /nick endpoint."""
+
+    server = fields.Str(
+        required=True,
+        validate=validate.Length(min=1),
+        metadata={
+            "description": "IRC server address",
+        },
+    )
+    nick = fields.Str(
+        required=True,
+        validate=validate.Length(min=1),
+        metadata={
+            "description": "New nickname",
         },
     )
 
@@ -594,6 +619,22 @@ class IRCBotAPI:
         target = args.pop(0).lower().strip()
         await self._queue_send_command(server, target, " ".join(args), channels=[channels[0]])
 
+    async def _ws_nick(self, args: list[str], ws: web.WebSocketResponse) -> None:
+        """Handle the /nick websocket command."""
+        if len(args) < 2:
+            raise RuntimeError("Not enough arguments")
+        server = args.pop(0)
+        new_nick = args.pop(0).strip()
+        if not NICK_RE.match(new_nick):
+            raise RuntimeError(f"Invalid nickname: {new_nick}")
+        # Like /cancelqueue: only makes sense on an existing bot - get_bot()
+        # would spin up a fresh connection for a mistyped server just to rename it.
+        bot = self.bot_manager.bots.get(server.lower())
+        if bot is None:
+            raise RuntimeError(f"Not connected to server: {server}")
+        await bot.queue_command({"command": "nick", "nick": new_nick})
+        await ws.send_json({"status": "ok", "message": f"Requested nick change to {new_nick} on {server}."})
+
     async def _ws_info(self, args: list[str], ws: web.WebSocketResponse) -> None:
         """Handle the /info websocket command."""
         await self._send_transfer_snapshot(ws)
@@ -643,6 +684,7 @@ class IRCBotAPI:
                 "info": self._ws_info,
                 "queue": self._ws_queue,
                 "cancelqueue": self._ws_cancelqueue,
+                "nick": self._ws_nick,
             }
             handler = handlers.get(command or "")
             if handler is None:
@@ -715,6 +757,7 @@ class IRCBotAPI:
         """Set up routes for the aiohttp application."""
         self.app.router.add_post("/join", self.join)
         self.app.router.add_post("/part", self.part)
+        self.app.router.add_post("/nick", self.nick)
         self.app.router.add_post("/msg", self.msg)
         self.app.router.add_post("/shutdown", self.shutdown)
         self.app.router.add_post("/cancel", self.cancel)
@@ -805,6 +848,34 @@ class IRCBotAPI:
             return web.json_response({"status": "ok"})
         except Exception as e:
             logger.exception("Error in part request")
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+    @docs(
+        tags=["IRC Commands"],
+        summary="Change the bot's nickname",
+        description="Change the bot's nickname on a given IRC server.",
+        responses={
+            200: {"description": "Nick change queued successfully"},
+            422: {"description": "Invalid request or missing parameters"},
+        },
+    )
+    @request_schema(NickRequestSchema())
+    @response_schema(DefaultResponseSchema(), 200)
+    async def nick(self, request: web.Request) -> web.Response:
+        """Handle a nick change request."""
+        try:
+            data = request["data"]
+            new_nick = data["nick"].strip()
+            if not NICK_RE.match(new_nick):
+                return web.json_response({"status": "error", "message": f"Invalid nickname: {new_nick}"}, status=422)
+
+            bot = self.bot_manager.bots.get(data["server"].lower())
+            if bot is None:
+                return web.json_response({"status": "error", "message": f"Not connected to server: {data['server']}"}, status=400)
+            await bot.queue_command({"command": "nick", "nick": new_nick})
+            return web.json_response({"status": "ok"})
+        except Exception as e:
+            logger.exception("Error in nick request")
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     @docs(

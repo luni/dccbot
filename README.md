@@ -147,6 +147,7 @@ available at `http://localhost:8080/` by default.
 
 * `POST /join`: join a channel
 * `POST /part`: part a channel
+* `POST /nick`: change the bot's nickname on a server
 * `POST /msg`: send a message to a channel or user (queued per target, see `send_queue_*`)
 * `POST /cancel`: cancel a running transfer
 * `POST /shutdown`: shutdown the bot
@@ -178,6 +179,7 @@ Supported websocket commands:
 * `/info`
 * `/queue`
 * `/cancelqueue <server> <target> [index-or-message]`
+* `/nick <server> <newnick>`
 
 ### Browser Userscript for Easy Downloads
 

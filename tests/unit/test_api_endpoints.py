@@ -285,6 +285,60 @@ async def test_part_multiple_channels(api_client):
 
 
 @pytest.mark.asyncio
+async def test_nick_success(api_client):
+    """Test successful nick change request."""
+    client, mock_bot_manager = api_client
+
+    mock_bot = AsyncMock()
+    mock_bot_manager.bots = {"irc.example.com": mock_bot}
+
+    payload = {"server": "irc.example.com", "nick": "NewBot9"}
+    resp = await client.post("/nick", json=payload)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == {"status": "ok"}
+
+    mock_bot.queue_command.assert_called_once_with({"command": "nick", "nick": "NewBot9"})
+
+
+@pytest.mark.asyncio
+async def test_nick_request_invalid_nick(api_client):
+    """Test nick request with a malformed nickname."""
+    client, _ = api_client
+
+    payload = {"server": "irc.example.com", "nick": "bad nick"}
+    resp = await client.post("/nick", json=payload)
+    assert resp.status == 422
+    data = await resp.json()
+    assert data["status"] == "error"
+    assert "invalid nickname" in data["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_nick_request_missing_nick(api_client):
+    """Test nick request with missing nick field."""
+    client, _ = api_client
+
+    payload = {"server": "irc.example.com"}
+    resp = await client.post("/nick", json=payload)
+    assert resp.status == 422
+
+
+@pytest.mark.asyncio
+async def test_nick_request_unknown_server(api_client):
+    """Test nick request on a server with no connected bot."""
+    client, mock_bot_manager = api_client
+    mock_bot_manager.bots = {}
+
+    payload = {"server": "irc.example.com", "nick": "NewBot9"}
+    resp = await client.post("/nick", json=payload)
+    assert resp.status == 400
+    data = await resp.json()
+    assert data["status"] == "error"
+    assert "not connected" in data["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_msg_success(api_client):
     """Test successful message request."""
     client, mock_bot_manager = api_client

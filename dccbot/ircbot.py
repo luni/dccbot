@@ -21,7 +21,7 @@ from irc.connection import AioFactory
 
 from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
-from dccbot.command_pipeline import handle_part_command, handle_send_command
+from dccbot.command_pipeline import handle_nick_command, handle_part_command, handle_send_command
 from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, parse_dcc_accept, parse_dcc_send
 from dccbot.ssl_util import create_dcc_ssl_context
 from dccbot.transfer_handler import TransferHandler
@@ -503,8 +503,10 @@ class IRCBot(AioSimpleIRCClient):
                     - part: Part the channel.
                     - join: Join the channel.
                     - quit: Quit the server.
+                    - nick: Change the bot's nickname.
                 - channels (list of str): The channels to be processed. The channels are only required if the command is part or join.
                 - reason (str): The reason for the command. The reason is only required if the command is part or quit.
+                - nick (str): The new nickname. Only required if the command is nick.
 
         `send` commands don't go through this queue — use `queue_send()` instead, which
         throttles them per target-bot nick rather than serializing them with join/part.
@@ -863,6 +865,10 @@ class IRCBot(AioSimpleIRCClient):
         """Delegate part command to command pipeline."""
         await handle_part_command(self, data)
 
+    async def _handle_nick_command(self, data: dict[str, Any]) -> None:
+        """Delegate nick command to command pipeline."""
+        await handle_nick_command(self, data)
+
     async def process_command_queue(self) -> None:
         """Process commands from the command queue.
 
@@ -894,6 +900,7 @@ class IRCBot(AioSimpleIRCClient):
                 handlers: dict[str, Any] = {
                     "join": self._handle_join_command,
                     "part": self._handle_part_command,
+                    "nick": self._handle_nick_command,
                 }
                 handler = handlers.get(data["command"])
                 if handler is not None:
