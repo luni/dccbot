@@ -112,7 +112,9 @@ keys:
     `tar`, `zip`, `rar`, `7z` (default: all of them).
 * `auto_extract_delete_archives`: a boolean indicating to delete archive files
     (including all volumes of a multi-part rar set) after successful extraction
-    (default: false).
+    (default: false). When a pack announces an MD5 checksum, extraction is
+    deferred until after the hash check so the archive is never deleted before
+    it has been hashed.
 * `auto_extract_max_depth`: the maximum recursion depth for nested archives
     (default: 3).
 * `ssend_map`: a dictionary of users which support ssend (secure send). `xdcc send` command is

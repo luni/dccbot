@@ -778,6 +778,60 @@ async def test_extract_queue_processor_marks_failure(manager, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_md5_processor_chains_extract_for_archive(manager, tmp_path):
+    """After hashing, the MD5 processor queues eligible archives for extraction."""
+    archive = tmp_path / "pack.zip"
+    archive.write_bytes(b"pk-content")
+    manager.config["auto_extract"] = True
+
+    transfer_job = {
+        "id": "md5-extract-id",
+        "filename": "pack.zip",
+        "file_path": str(archive),
+        "md5": "abc",
+    }
+    manager.transfers = {"pack.zip": [{"id": "md5-extract-id"}]}
+
+    await manager.md5_check_queue.put(transfer_job)
+    task = asyncio.create_task(manager.check_queue_processor(asyncio.get_running_loop(), manager.md5_check_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert manager.transfers["pack.zip"][0]["file_md5"]
+    assert manager.extract_queue.qsize() == 1
+    assert await manager.extract_queue.get() is transfer_job
+
+
+@pytest.mark.asyncio
+async def test_md5_processor_skips_extract_when_disabled(manager, tmp_path):
+    """Without auto_extract the MD5 processor does not queue extraction."""
+    archive = tmp_path / "pack.zip"
+    archive.write_bytes(b"pk-content")
+
+    transfer_job = {
+        "id": "md5-no-extract-id",
+        "filename": "pack.zip",
+        "file_path": str(archive),
+        "md5": "abc",
+    }
+
+    await manager.md5_check_queue.put(transfer_job)
+    task = asyncio.create_task(manager.check_queue_processor(asyncio.get_running_loop(), manager.md5_check_queue))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert manager.extract_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
 async def test_extract_queue_processor_unexpected_error_not_stuck(manager, tmp_path):
     """An unexpected exception inside extract_recursive must not leave
     extract_status stuck at 'in_progress'."""

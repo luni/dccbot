@@ -11,7 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
-from dccbot.extract import SUPPORTED_FORMATS, extract_recursive
+from dccbot.extract import SUPPORTED_FORMATS, extract_recursive, is_extractable
 from dccbot.ircbot import IRCBot
 from dccbot.ssl_util import get_or_create_dcc_cert
 from dccbot.transfers import ensure_transfer_defaults
@@ -449,6 +449,12 @@ class IRCBotManager:
                         ensure_transfer_defaults(transfer_job["filename"], transfer)
                         if transfer["id"] == transfer_job["id"]:
                             transfer["file_md5"] = md5_hash
+
+                    # Archive extraction is deferred to here so the hash always
+                    # completes before delete_archives can remove the file.
+                    file_path = transfer_job.get("file_path")
+                    if self.config.get("auto_extract") and file_path and is_extractable(Path(file_path).name, self.config.get("auto_extract_formats")):
+                        await self.extract_queue.put(transfer_job)
                 finally:
                     # task_done pairs with the successful get() above; calling it
                     # in the outer except could raise ValueError when get() itself failed.

@@ -172,7 +172,14 @@ class TransferHandler:
             except Exception as e:
                 logger.error("Error renaming %s to %s: %s", file_path, target, e)
 
-        if self.bot.config.get("auto_extract") and is_extractable(os.path.basename(transfer["file_path"]), self.bot.config.get("auto_extract_formats")):
+        # Transfers with an announced MD5 are queued by the MD5 processor
+        # instead, so hashing always finishes before delete_archives can
+        # remove the archive.
+        if (
+            self.bot.config.get("auto_extract")
+            and not transfer.get("md5")
+            and is_extractable(os.path.basename(transfer["file_path"]), self.bot.config.get("auto_extract_formats"))
+        ):
             asyncio.create_task(self.bot._add_extract_queue_item(transfer))
 
     def _report_size_mismatch(self, transfer: dict, file_size: int) -> None:

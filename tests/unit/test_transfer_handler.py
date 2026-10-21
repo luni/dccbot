@@ -788,6 +788,32 @@ def test_mark_complete_enqueues_extract_for_archive(tmp_path):
     mock_create_task.assert_called_once_with(bot._add_extract_queue_item.return_value)
 
 
+def test_mark_complete_defers_extract_when_md5_announced(tmp_path):
+    """With an announced MD5, extraction is queued by the MD5 processor
+    after hashing - not directly from _mark_complete."""
+    dcc = MagicMock()
+    file_path = tmp_path / "pack.tar"
+    file_path.write_bytes(b"x" * 4)
+    transfer = _make_transfer(size=4)
+    transfer["bytes_received"] = 4
+    transfer["file_path"] = str(file_path)
+    transfer["filename"] = "pack.tar"
+    transfer["md5"] = "deadbeef"
+    bot = _make_bot_with_transfer(dcc, transfer)
+    bot.config = {"auto_extract": True}
+    bot._add_extract_queue_item = MagicMock()
+    handler = TransferHandler(bot)
+    event = MagicMock()
+    event.arguments = []
+
+    with patch("asyncio.create_task") as mock_create_task:
+        handler.on_dcc_disconnect(dcc, event)
+
+    # Only the MD5 job is queued; extraction follows after hashing.
+    bot._add_extract_queue_item.assert_not_called()
+    mock_create_task.assert_called_once_with(bot._add_md5_check_queue_item.return_value)
+
+
 def test_mark_complete_skips_extract_for_non_archive(tmp_path):
     """auto_extract does not queue non-archive filenames."""
     dcc = MagicMock()
