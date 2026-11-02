@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed448, ed25519, padding, rsa
+from cryptography.x509.oid import SignatureAlgorithmOID
 
 logger = logging.getLogger(__name__)
 
@@ -116,3 +118,89 @@ def create_dcc_ssl_context(server: bool, cert_path: str, key_path: str) -> ssl.S
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
+
+def create_unverified_tls_context() -> ssl.SSLContext:
+    """Create a client TLS context with certificate verification disabled.
+
+    Returns:
+        An ``ssl.SSLContext`` that accepts any certificate.
+
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def is_self_signed_cert(cert: x509.Certificate) -> bool:
+    """Return True when the certificate is self-issued and its self-signature verifies."""
+    if cert.issuer != cert.subject:
+        return False
+    public_key = cert.public_key()
+    signature_hash = cert.signature_hash_algorithm
+    try:
+        if isinstance(public_key, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
+            public_key.verify(cert.signature, cert.tbs_certificate_bytes)
+        elif signature_hash is None:
+            logger.warning("Certificate signature algorithm %s has no hash", cert.signature_algorithm_oid)
+            return False
+        elif isinstance(public_key, rsa.RSAPublicKey):
+            if cert.signature_algorithm_oid == SignatureAlgorithmOID.RSASSA_PSS:
+                public_key.verify(
+                    cert.signature,
+                    cert.tbs_certificate_bytes,
+                    padding.PSS(mgf=padding.MGF1(signature_hash), salt_length=padding.PSS.MAX_LENGTH),
+                    signature_hash,
+                )
+            else:
+                public_key.verify(cert.signature, cert.tbs_certificate_bytes, padding.PKCS1v15(), signature_hash)
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            public_key.verify(cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(signature_hash))
+        elif isinstance(public_key, dsa.DSAPublicKey):
+            public_key.verify(cert.signature, cert.tbs_certificate_bytes, signature_hash)
+        else:
+            logger.warning("Unsupported public key type %s on certificate", type(public_key).__name__)
+            return False
+    except InvalidSignature:
+        return False
+    except Exception:
+        logger.warning("Could not verify certificate self-signature", exc_info=True)
+        return False
+    return True
+
+
+def verify_peer_self_signed(ssl_object: ssl.SSLObject | ssl.SSLSocket | None, server: str) -> None:
+    """Ensure the TLS peer presented a valid self-signed certificate.
+
+    The certificate must be self-issued, carry a valid self-signature, and
+    be inside its validity window. The hostname is intentionally not
+    compared: IRC networks served by a self-signed certificate frequently
+    use a node name (e.g. ``demigod.nl.eu.coreirc.net``) that differs from
+    the round-robin address the client connected to.
+
+    Args:
+        ssl_object: The transport's SSL object, from
+            ``transport.get_extra_info("ssl_object")``.
+        server: The server address, used in error messages.
+
+    Raises:
+        ssl.SSLCertVerificationError: When no certificate was presented, it
+            is not self-signed, its self-signature does not verify, or it is
+            outside its validity window.
+
+    """
+    der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
+    if not der:
+        raise ssl.SSLCertVerificationError(f"peer {server} did not provide a certificate")
+    try:
+        cert = x509.load_der_x509_certificate(der)
+    except ValueError as e:
+        raise ssl.SSLCertVerificationError(f"could not parse certificate from {server}") from e
+    if not is_self_signed_cert(cert):
+        raise ssl.SSLCertVerificationError(f"certificate from {server} is not self-signed")
+    now = datetime.now(UTC)
+    if now < cert.not_valid_before_utc:
+        raise ssl.SSLCertVerificationError(f"certificate from {server} is not yet valid")
+    if now > cert.not_valid_after_utc:
+        raise ssl.SSLCertVerificationError(f"certificate from {server} is expired")

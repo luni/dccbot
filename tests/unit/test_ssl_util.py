@@ -7,13 +7,22 @@ import ssl
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
-from dccbot.ssl_util import _default_cert_cache_dir, _generate_self_signed_cert, create_dcc_ssl_context, get_or_create_dcc_cert
+from dccbot.ssl_util import (
+    _default_cert_cache_dir,
+    _generate_self_signed_cert,
+    create_dcc_ssl_context,
+    create_unverified_tls_context,
+    get_or_create_dcc_cert,
+    is_self_signed_cert,
+    verify_peer_self_signed,
+)
 
 
 def _generate_pair(tmp_path: Path, common_name: str = "test") -> tuple[Path, Path]:
@@ -22,7 +31,8 @@ def _generate_pair(tmp_path: Path, common_name: str = "test") -> tuple[Path, Pat
     subject = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)])
     now = datetime.now(timezone.utc)
     cert = (
-        x509.CertificateBuilder()
+        x509
+        .CertificateBuilder()
         .subject_name(subject)
         .issuer_name(subject)
         .public_key(key.public_key())
@@ -233,3 +243,138 @@ def test_generate_self_signed_cert_creates_nested_dirs(tmp_path: Path) -> None:
     _generate_self_signed_cert(cert_path, key_path)
     assert cert_path.is_file()
     assert key_path.is_file()
+
+
+def _self_signed_cert(key=None, common_name: str = "irc.test.local", days: int = 30) -> x509.Certificate:
+    """Build a self-signed certificate for testing."""
+    key = key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)])
+    now = datetime.now(timezone.utc)
+    return (
+        x509
+        .CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=days))
+        .sign(key, hashes.SHA256())
+    )
+
+
+def _ssl_object_with_cert(cert: x509.Certificate | None) -> MagicMock:
+    """Return a mock ssl_object serving the certificate's DER bytes."""
+    ssl_object = MagicMock()
+    ssl_object.getpeercert.return_value = cert.public_bytes(serialization.Encoding.DER) if cert else None
+    return ssl_object
+
+
+def test_is_self_signed_cert_true_for_rsa() -> None:
+    """An RSA self-signed certificate is detected."""
+    assert is_self_signed_cert(_self_signed_cert()) is True
+
+
+def test_is_self_signed_cert_true_for_ecdsa() -> None:
+    """An ECDSA self-signed certificate is detected."""
+    key = ec.generate_private_key(ec.SECP384R1())
+    assert is_self_signed_cert(_self_signed_cert(key=key)) is True
+
+
+def test_is_self_signed_cert_false_for_ca_issued() -> None:
+    """A certificate issued by another key is not self-signed."""
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "leaf")]))
+        .issuer_name(x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "ca")]))
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .sign(ca_key, hashes.SHA256())
+    )
+    assert is_self_signed_cert(cert) is False
+
+
+def test_is_self_signed_cert_false_for_forged_self_signature() -> None:
+    """issuer == subject but signed by a different key is not self-signed."""
+    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    victim_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "forged")])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(victim_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .sign(other_key, hashes.SHA256())
+    )
+    assert is_self_signed_cert(cert) is False
+
+
+def test_create_unverified_tls_context() -> None:
+    """The unverified context disables hostname checks and verification."""
+    ctx = create_unverified_tls_context()
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.check_hostname is False
+    assert ctx.verify_mode == ssl.CERT_NONE
+
+
+def test_verify_peer_self_signed_accepts_self_signed() -> None:
+    """A valid self-signed certificate passes verification."""
+    verify_peer_self_signed(_ssl_object_with_cert(_self_signed_cert()), "irc.test.local")
+
+
+def test_verify_peer_self_signed_rejects_missing_cert() -> None:
+    """A missing peer certificate is rejected."""
+    with pytest.raises(ssl.SSLCertVerificationError, match="did not provide"):
+        verify_peer_self_signed(_ssl_object_with_cert(None), "irc.test.local")
+
+
+def test_verify_peer_self_signed_rejects_none_ssl_object() -> None:
+    """A missing ssl_object is rejected."""
+    with pytest.raises(ssl.SSLCertVerificationError, match="did not provide"):
+        verify_peer_self_signed(None, "irc.test.local")
+
+
+def test_verify_peer_self_signed_rejects_ca_issued() -> None:
+    """A CA-issued certificate is rejected even when it is otherwise valid."""
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "leaf")]))
+        .issuer_name(x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "ca")]))
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .sign(ca_key, hashes.SHA256())
+    )
+    with pytest.raises(ssl.SSLCertVerificationError, match="not self-signed"):
+        verify_peer_self_signed(_ssl_object_with_cert(cert), "irc.test.local")
+
+
+def test_verify_peer_self_signed_rejects_expired() -> None:
+    """An expired self-signed certificate is rejected."""
+    cert = _self_signed_cert(days=-1)
+    with pytest.raises(ssl.SSLCertVerificationError, match="expired"):
+        verify_peer_self_signed(_ssl_object_with_cert(cert), "irc.test.local")
+
+
+def test_verify_peer_self_signed_rejects_garbage_der() -> None:
+    """Unparseable DER data is rejected."""
+    ssl_object = MagicMock()
+    ssl_object.getpeercert.return_value = b"not a certificate"
+    with pytest.raises(ssl.SSLCertVerificationError, match="could not parse"):
+        verify_peer_self_signed(ssl_object, "irc.test.local")

@@ -82,6 +82,12 @@ keys:
   * `use_tls`: a boolean indicating whether to use tls when connecting to the
         server
   * `verify_ssl`: a boolean indicating whether to verify the server ssl certificate
+  * `allow_self_signed`: a boolean indicating whether to accept a self-signed
+        server certificate when normal verification fails. The certificate must
+        be self-issued, correctly self-signed, and within its validity period;
+        the hostname is not checked because self-signed network certs often use
+        a node name different from the round-robin server address (default:
+        false). Ignored when `verify_ssl` is false.
   * `random_nick`: a boolean indicating whether to use a random nickname when
         connecting to the server
   * `port`: the port to connect to, default: 6667

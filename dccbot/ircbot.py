@@ -23,7 +23,7 @@ from dccbot.aiodcc import AioDCCConnection, AioReactor
 from dccbot.aiodcc import NonStrictAioConnection as AioConnection
 from dccbot.command_pipeline import handle_nick_command, handle_part_command, handle_send_command
 from dccbot.dcc_parsing import DccAcceptPayload, DccSendPayload, is_valid_filename, parse_dcc_accept, parse_dcc_send
-from dccbot.ssl_util import create_dcc_ssl_context
+from dccbot.ssl_util import create_dcc_ssl_context, create_unverified_tls_context, verify_peer_self_signed
 from dccbot.transfer_handler import TransferHandler
 from dccbot.transfers import TERMINAL_TRANSFER_STATUSES, create_pending_transfer, create_transfer, ensure_transfer_defaults, get_incomplete_suffix
 
@@ -41,6 +41,18 @@ SEND_QUEUE_EXPAND_MAX = 500
 
 RECONNECT_DELAY = 5.0
 RECONNECT_MAX_DELAY = 120.0
+
+# X.509 verify codes for self-signed certificates.
+X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT = 18
+X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN = 19
+
+
+def _is_self_signed_cert_error(exc: ssl.SSLCertVerificationError) -> bool:
+    """Return True when the verification failure was caused by a self-signed certificate."""
+    if getattr(exc, "verify_code", None) in (X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT, X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN):
+        return True
+    return "self-signed" in str(getattr(exc, "verify_message", "") or exc)
+
 
 XDCC_RANGE_RE = re.compile(r"^xdcc\s+(s)?(send|batch)\s+(\S+)(?:\s+(.*))?$", re.I)
 XDCC_RANGE_SEGMENT_RE = re.compile(r"^#?(\d+)(?:-#?(\d+))?$")
@@ -127,6 +139,8 @@ class IRCBot(AioSimpleIRCClient):
             - nick: The IRC nickname to use.
             - nickserv_password: The password for nickserv.
             - use_tls: Whether to use TLS for the connection.
+            - allow_self_signed: Whether to accept a valid self-signed server
+              certificate when normal verification fails.
             - random_nick: Whether to generate a random nickname.
             - channels: A list of channels to join.
             - port: The port to connect to. Defaults to 6667.
@@ -194,6 +208,8 @@ class IRCBot(AioSimpleIRCClient):
                 - nick: The IRC nickname to use.
                 - nickserv_password: The password for nickserv.
                 - use_tls: Whether to use TLS for the connection.
+                - allow_self_signed: Whether to accept a valid self-signed
+                  server certificate when normal verification fails.
                 - random_nick: Whether to generate a random nickname.
                 - channels: A list of channels to join.
                 - port: The port to connect to. Defaults to 6667.
@@ -306,14 +322,12 @@ class IRCBot(AioSimpleIRCClient):
         """
         self._closing = False
         self.connection = AioConnection(self.reactor)
-        connect_factory = None
+        use_tls = bool(self.server_config.get("use_tls", False))
 
-        if self.server_config.get("use_tls", False):
+        if use_tls:
             # Initialize AioConnection with the custom connect_factory
             if not self.server_config.get("verify_ssl", True):
-                ssl_context = ssl.create_default_context()
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+                ssl_context = create_unverified_tls_context()
             else:
                 ssl_context = True
             connect_factory = AioFactory(ssl=ssl_context)
@@ -323,10 +337,43 @@ class IRCBot(AioSimpleIRCClient):
             port = self.server_config.get("port", 6667)
 
         try:
-            await self.connection.connect(self.server, port, self.nick, connect_factory=connect_factory)
+            try:
+                await self.connection.connect(self.server, port, self.nick, connect_factory=connect_factory)
+            except ssl.SSLCertVerificationError as exc:
+                if not use_tls or not self.server_config.get("allow_self_signed", False) or not _is_self_signed_cert_error(exc):
+                    raise
+                logger.info(
+                    "Certificate verification failed for %s (%s); retrying, allowing a self-signed certificate",
+                    self.server,
+                    getattr(exc, "verify_message", exc),
+                )
+                await self._connect_allow_self_signed(port)
             logger.info("Connecting to server: %s with nick: %s", self.server, self.nick)
         except Exception:
             logger.exception("Connection error to %s", self.server)
+            raise
+
+    async def _connect_allow_self_signed(self, port: int) -> None:
+        """Retry the TLS connection accepting only a valid self-signed server certificate.
+
+        Used when ``allow_self_signed`` is enabled and normal certificate
+        verification failed because the certificate is self-signed. The peer
+        certificate is checked manually after the handshake; on failure the
+        connection is dropped and the error propagates.
+
+        """
+        try:
+            await self.connection.connect(self.server, port, self.nick, connect_factory=AioFactory(ssl=create_unverified_tls_context()))
+            ssl_object = None
+            transport = getattr(self.connection, "transport", None)
+            if transport is not None:
+                ssl_object = transport.get_extra_info("ssl_object")
+            verify_peer_self_signed(ssl_object, self.server)
+            logger.warning("Accepted self-signed TLS certificate for %s (allow_self_signed)", self.server)
+        except Exception:
+            transport = getattr(self.connection, "transport", None)
+            if transport is not None:
+                transport.close()
             raise
 
     async def disconnect(self, reason: str | None = None) -> None:

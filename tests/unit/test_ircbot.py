@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import ssl
 import tempfile
 import time
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -145,6 +146,77 @@ async def test_connect_with_custom_port(bot_factory):
 
         call_args = mock_conn_instance.connect.call_args
         assert call_args[0][1] == 7000
+
+
+@pytest.mark.asyncio
+async def test_connect_tls_cert_error_retries_when_allow_self_signed(bot_factory):
+    """A self-signed cert error retries unverified and checks the peer cert."""
+    bot = bot_factory(server_config={"use_tls": True, "allow_self_signed": True}, allowed_mimetypes=None)
+
+    with patch("dccbot.ircbot.AioConnection") as mock_connection, patch("dccbot.ircbot.verify_peer_self_signed") as mock_verify:
+        mock_conn_instance = AsyncMock()
+        mock_conn_instance.connect.side_effect = [ssl.SSLCertVerificationError("self-signed certificate"), None]
+        mock_conn_instance.transport = MagicMock()
+        mock_connection.return_value = mock_conn_instance
+
+        await bot.connect()
+
+        assert mock_conn_instance.connect.call_count == 2
+        factory = mock_conn_instance.connect.call_args.kwargs["connect_factory"]
+        assert factory.connection_args["ssl"].verify_mode == ssl.CERT_NONE
+        mock_verify.assert_called_once_with(mock_conn_instance.transport.get_extra_info.return_value, "irc.example.com")
+
+
+@pytest.mark.asyncio
+async def test_connect_tls_cert_error_without_allow_self_signed(bot_factory):
+    """A self-signed cert error propagates without allow_self_signed."""
+    bot = bot_factory(server_config={"use_tls": True}, allowed_mimetypes=None)
+
+    with patch("dccbot.ircbot.AioConnection") as mock_connection:
+        mock_conn_instance = AsyncMock()
+        mock_conn_instance.connect.side_effect = ssl.SSLCertVerificationError("self-signed certificate")
+        mock_connection.return_value = mock_conn_instance
+
+        with pytest.raises(ssl.SSLCertVerificationError):
+            await bot.connect()
+
+        mock_conn_instance.connect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connect_allow_self_signed_ignores_other_cert_errors(bot_factory):
+    """Non-self-signed verification failures do not trigger the retry."""
+    bot = bot_factory(server_config={"use_tls": True, "allow_self_signed": True}, allowed_mimetypes=None)
+
+    with patch("dccbot.ircbot.AioConnection") as mock_connection:
+        mock_conn_instance = AsyncMock()
+        mock_conn_instance.connect.side_effect = ssl.SSLCertVerificationError("certificate has expired")
+        mock_connection.return_value = mock_conn_instance
+
+        with pytest.raises(ssl.SSLCertVerificationError):
+            await bot.connect()
+
+        mock_conn_instance.connect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connect_allow_self_signed_rejects_bad_peer_cert(bot_factory):
+    """A rejected peer certificate after retry closes the transport and raises."""
+    bot = bot_factory(server_config={"use_tls": True, "allow_self_signed": True}, allowed_mimetypes=None)
+
+    with (
+        patch("dccbot.ircbot.AioConnection") as mock_connection,
+        patch("dccbot.ircbot.verify_peer_self_signed", side_effect=ssl.SSLCertVerificationError("certificate is not self-signed")),
+    ):
+        mock_conn_instance = AsyncMock()
+        mock_conn_instance.connect.side_effect = [ssl.SSLCertVerificationError("self-signed certificate"), None]
+        mock_conn_instance.transport = MagicMock()
+        mock_connection.return_value = mock_conn_instance
+
+        with pytest.raises(ssl.SSLCertVerificationError, match="not self-signed"):
+            await bot.connect()
+
+        mock_conn_instance.transport.close.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,12 @@
           "#channel_a_chat"
         ]
       }
+    },
+    "irc.selfsigned.net": {
+      "nick": "MyBotNick",
+      "use_tls": true,
+      "port": 6697,
+      "allow_self_signed": true
     }
   },
   "default_server_config": {
