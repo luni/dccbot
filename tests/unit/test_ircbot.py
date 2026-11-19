@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import os
 import ssl
 import tempfile
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-from dccbot.ircbot import SEND_QUEUE_EXPAND_MAX, IRCBot
+from dccbot.ircbot import RECONNECT_DELAY, SEND_QUEUE_EXPAND_MAX, IRCBot
 from dccbot.transfers import create_pending_transfer, create_transfer
 
 
@@ -331,6 +332,7 @@ async def test_process_command_queue_handles_join(bot):
     bot.authenticated = True
     bot.authenticated_event.set()
     bot.server_config["channels"] = []
+    bot.connection = MagicMock()
 
     with (
         patch.object(bot, "_handle_authentication"),
@@ -2255,14 +2257,16 @@ async def test_on_disconnect_no_reconnect_without_work(bot):
 async def test_reconnect_retries_until_connected(bot):
     """_reconnect retries connect() with backoff until it succeeds."""
     bot.joined_channels["#chan"] = time.time()
+    bot._reconnect_delay = 0
     attempts = []
 
     async def flaky_connect():
         attempts.append(1)
         if len(attempts) < 3:
             raise OSError("connect failed")
+        bot.connection = MagicMock()
 
-    with patch.object(bot, "connect", side_effect=flaky_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+    with patch.object(bot, "connect", side_effect=flaky_connect):
         await bot._reconnect()
 
     assert len(attempts) == 3
@@ -2444,28 +2448,31 @@ async def test_reconnect_gives_up_after_max_attempts(bot):
     """_reconnect stops after reconnect_max_attempts failed connects."""
     bot.joined_channels["#chan"] = time.time()
     bot.config = {"reconnect_max_attempts": 3}
+    bot._reconnect_delay = 0
     attempts = []
 
     async def fail_connect():
         attempts.append(1)
         raise OSError("connect failed")
 
-    with patch.object(bot, "connect", side_effect=fail_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+    with patch.object(bot, "connect", side_effect=fail_connect):
         await bot._reconnect()
 
     assert len(attempts) == 3
 
 
 @pytest.mark.asyncio
-async def test_reconnect_disabled_with_zero_attempts(bot):
-    """reconnect_max_attempts=0 never attempts a connect."""
+async def test_reconnect_disabled_with_zero_attempts(bot, caplog):
+    """reconnect_max_attempts=0 never attempts a connect and says it is disabled."""
     bot.joined_channels["#chan"] = time.time()
     bot.config = {"reconnect_max_attempts": 0}
 
-    with patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
+    with caplog.at_level(logging.INFO), patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
         await bot._reconnect()
 
     connect_mock.assert_not_called()
+    assert "disabled" in caplog.text
+    assert "Giving up" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2486,21 +2493,216 @@ async def test_reconnect_max_attempts_invalid_falls_back_to_default(bot):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_attempt_counter_resets_per_drop(bot):
-    """Each _reconnect invocation gets a fresh attempt budget."""
+async def test_reconnect_attempt_budget_is_cumulative_across_drops(bot):
+    """A server that accepts the connection but drops us must not reset the budget.
+
+    Otherwise a rejection such as a G-Line turns into an endless reconnect loop:
+    the budget and backoff only reset once the connection fully registers.
+    """
     bot.joined_channels["#chan"] = time.time()
-    bot.config = {"reconnect_max_attempts": 2}
+    bot.config = {"reconnect_max_attempts": 4}
+    bot._reconnect_delay = 0
     attempts = []
 
     async def fail_connect():
         attempts.append(1)
         raise OSError("connect failed")
 
-    with patch.object(bot, "connect", side_effect=fail_connect), patch("dccbot.ircbot.RECONNECT_DELAY", 0):
+    with patch.object(bot, "connect", side_effect=fail_connect):
         await bot._reconnect()
         await bot._reconnect()
 
     assert len(attempts) == 4
+
+
+@pytest.mark.asyncio
+async def test_on_yourebannedcreep_sets_cooldown(bot):
+    """A network ban is logged with its reason and delays the next attempt."""
+    bot.connection = MagicMock()
+    bot.loop = asyncio.get_running_loop()
+    bot.joined_channels["#chan"] = time.time()
+
+    event = MagicMock()
+    event.arguments = ["yellgurl", "You have received a G-Line: not following the rules"]
+    bot.on_yourebannedcreep(bot.connection, event)
+
+    assert bot._banned is True
+    assert bot._ban_retry_at > time.time()
+
+    # A drop still schedules the reconnect loop - it just waits out the cooldown.
+    bot.on_disconnect(bot.connection, MagicMock())
+    assert bot._reconnect_task is not None
+
+    with patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
+        with patch("dccbot.ircbot.RECONNECT_MAX_DELAY", 0.05):
+            bot._ban_retry_at = time.time() + 0.05
+            start = time.time()
+            await bot._reconnect_task
+            assert time.time() - start >= 0.04
+    connect_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_queue_command_warns_when_banned(bot, caplog):
+    """Queueing work for a network we are banned from says so."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+    bot._banned = True
+    bot._ban_retry_at = time.time() + 60
+
+    with caplog.at_level(logging.WARNING), patch.object(bot, "_reconnect", new=AsyncMock()):
+        await bot.queue_command({"command": "join", "channels": ["#chan"]})
+
+    assert "banned" in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_on_welcome_resets_reconnect_budget(bot):
+    """A fully registered connection clears the ban and restores the budget."""
+    bot._banned = True
+    bot._ban_retry_at = time.time() + 999
+    bot._reconnect_attempts = 3
+    bot._reconnect_delay = 999
+
+    with patch.object(bot, "process_command_queue", AsyncMock()):
+        bot.on_welcome(bot.connection, MagicMock())
+    await asyncio.sleep(0)
+
+    assert bot._banned is False
+    assert bot._ban_retry_at == 0.0
+    assert bot._reconnect_attempts == 0
+    assert bot._reconnect_delay == RECONNECT_DELAY
+
+
+def test_on_yourebannedcreep_ignores_stale_connection(bot):
+    """A 465 from a replaced connection object does not flag the bot as banned."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.arguments = ["yellgurl", "G-lined"]
+
+    bot.on_yourebannedcreep(MagicMock(), event)
+
+    assert bot._banned is False
+
+
+@pytest.mark.asyncio
+async def test_reconnect_retries_when_connection_drops_during_connect(bot):
+    """A connect() whose transport is already dead counts as a failed attempt."""
+    bot.joined_channels["#chan"] = time.time()
+    bot._reconnect_delay = 0
+    calls = []
+
+    async def connect_then_drop():
+        calls.append(1)
+        bot.connection = MagicMock()
+        bot.connection.connected = len(calls) >= 2
+
+    with patch.object(bot, "connect", side_effect=connect_then_drop):
+        await bot._reconnect()
+
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_reconnect_skips_connect_when_work_drains_during_ban_wait(bot):
+    """Work that drains while waiting out a ban skips the connect attempt."""
+    bot.joined_channels["#chan"] = time.time()
+    bot._banned = True
+    bot._ban_retry_at = time.time() + 0.05
+    bot.config = {"reconnect_max_attempts": 3}
+
+    async def drain():
+        await asyncio.sleep(0.01)
+        bot.joined_channels.clear()
+
+    drainer = asyncio.create_task(drain())
+    with patch.object(bot, "connect", new=AsyncMock()) as connect_mock:
+        await bot._reconnect()
+    await drainer
+
+    connect_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_queue_command_warns_when_banned_cooldown_elapsed(bot, caplog):
+    """An expired ban cooldown warns without a bogus 'next attempt in 0s'."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    bot.loop = asyncio.get_running_loop()
+    bot._banned = True
+    bot._ban_retry_at = time.time() - 1
+
+    with caplog.at_level(logging.WARNING), patch.object(bot, "_reconnect", new=AsyncMock()):
+        await bot.queue_command({"command": "join", "channels": ["#chan"]})
+
+    assert "banned" in caplog.text.lower()
+    assert "next attempt" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_join_channels_returns_quickly_when_disconnected(bot):
+    """No join confirmation is awaited while the connection is down."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+
+    start = time.time()
+    await bot._join_channels(["#chan"])
+
+    assert time.time() - start < 5
+    assert "#chan" not in bot.joined_channels
+
+
+@pytest.mark.asyncio
+async def test_process_command_queue_proceeds_unauthenticated_when_connected(bot, caplog):
+    """A NickServ timeout on a live connection warns and keeps consuming."""
+    bot.connection = MagicMock()
+    bot.server_config["channels"] = []
+
+    with patch.object(bot, "_handle_authentication", new=AsyncMock(return_value=False)), caplog.at_level(logging.WARNING):
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(bot.process_command_queue(), timeout=0.5)
+
+    assert "proceeding anyway" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_command_queue_returns_when_disconnected(bot):
+    """A dead transport after the auth wait stops the consumer quietly."""
+    conn = MagicMock()
+    conn.connected = False
+    bot.connection = conn
+    bot.server_config["channels"] = []
+
+    with patch.object(bot, "_handle_authentication", new=AsyncMock(return_value=False)):
+        # Returns instead of blocking on command_queue.get().
+        await asyncio.wait_for(bot.process_command_queue(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_send_queued_command_proceeds_unauthenticated_when_connected(bot, caplog):
+    """Queued sends warn and go out anyway when NickServ never confirms."""
+    conn = MagicMock()
+    conn.connected = True
+    bot.connection = conn
+    sent = []
+
+    async def fake_send(_bot, data):
+        sent.append(data["message"])
+
+    with (
+        patch("dccbot.ircbot.handle_send_command", side_effect=fake_send),
+        patch.object(bot, "_handle_authentication", new=AsyncMock(return_value=False)),
+        patch.object(bot, "_wait_for_queued_transfer", new=AsyncMock()),
+        caplog.at_level(logging.WARNING),
+    ):
+        await bot._send_queued_command("nick", {"message": "xdcc send #1"})
+
+    assert sent == ["xdcc send #1"]
+    assert "proceeding anyway" in caplog.text
 
 
 def test_on_dcc_send_null_nick_does_not_crash(bot):

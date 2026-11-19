@@ -110,7 +110,10 @@ keys:
 * `reconnect_max_attempts`: how many times the bot retries connecting after the
     IRC connection drops while work is still pending, with exponential backoff
     between attempts (default: 5). Set to 0 to disable reconnecting. This option
-    can also be set per-server.
+    can also be set per-server. The budget and the backoff are cumulative across
+    drops and only reset once the bot has fully registered again, so a network
+    that accepts the connection and immediately rejects it (a G-Line) is logged
+    with its reason instead of being retried forever.
 * `auto_md5sum`: a boolean indicating to verify the md5sum of the file if
     the bot sends the md5sum as message on start of transfer or after successful transfer
 * `incomplete_suffix`: a string that is appended to the filename while downloading.

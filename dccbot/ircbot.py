@@ -248,8 +248,12 @@ class IRCBot(AioSimpleIRCClient):
         self.authenticated_event = asyncio.Event()
         self.authenticated = False
         self._closing = False
+        self._banned = False
+        self._ban_retry_at = 0.0
         self._command_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_attempts = 0
+        self._reconnect_delay = RECONNECT_DELAY
         self.config = bot_manager.config
         self.transfer_handler = TransferHandler(self)
 
@@ -454,36 +458,56 @@ class IRCBot(AioSimpleIRCClient):
         nothing is left to reconnect for - idle channels expire via cleanup()
         even while offline.
 
+        The budget and the backoff are cumulative across drops: a server that
+        accepts the TCP connection but immediately drops us (e.g. a G-Line)
+        must not reset them and turn this into an endless connect loop. They
+        reset once the connection is fully registered (on_welcome). A ban adds
+        an extra cooldown before the next attempt on top of the backoff.
+
         """
         max_attempts = self._get_reconnect_max_attempts()
-        delay = RECONNECT_DELAY
-        attempts = 0
-        while not self._closing and self._has_pending_work() and attempts < max_attempts:
-            attempts += 1
+        delay = self._reconnect_delay
+        while not self._closing and self._has_pending_work() and self._reconnect_attempts < max_attempts:
+            self._reconnect_attempts += 1
+            wait = self._ban_retry_at - time.time()
+            if wait > 0:
+                logger.info("Waiting out the ban on %s: next attempt in %.0fs", self.server, wait)
+                await asyncio.sleep(wait)
+                if self._closing or not self._has_pending_work():
+                    break
             try:
                 await self.connect()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                if attempts < max_attempts:
+                dropped = True
+            else:
+                # connection_lost can race ahead of this task resuming after a
+                # successful connect(); on_disconnect then sees a live task and
+                # schedules nothing. Treat it as a failed attempt here instead.
+                dropped = not getattr(self.connection, "connected", False)
+            if dropped:
+                if self._reconnect_attempts < max_attempts:
                     logger.warning(
                         "Reconnect to %s failed (attempt %d/%d); retrying in %.0fs",
                         self.server,
-                        attempts,
+                        self._reconnect_attempts,
                         max_attempts,
                         delay,
                     )
                     await asyncio.sleep(delay)
-                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                    delay = self._reconnect_delay = min(delay * 2, RECONNECT_MAX_DELAY)
             else:
                 logger.info("Reconnected to %s", self.server)
                 return
+        if self._closing:
+            return
         if not self._has_pending_work():
             logger.info("No pending work left for %s - not reconnecting", self.server)
-        elif attempts >= max_attempts:
-            logger.error("Giving up reconnecting to %s after %d failed attempt(s) - pending work remains", self.server, attempts)
-        else:
+        elif max_attempts <= 0:
             logger.info("Reconnecting to %s is disabled (reconnect_max_attempts=%d)", self.server, max_attempts)
+        elif self._reconnect_attempts >= max_attempts:
+            logger.error("Giving up reconnecting to %s after %d failed attempt(s) - pending work remains", self.server, self._reconnect_attempts)
 
     def _kick_reconnect(self) -> None:
         """Schedule a reconnect when new work arrives while the connection is down.
@@ -493,6 +517,12 @@ class IRCBot(AioSimpleIRCClient):
         (no further disconnect event fires). Kick it here instead.
 
         """
+        if self._banned:
+            remaining = self._ban_retry_at - time.time()
+            if remaining > 0:
+                logger.warning("Work queued for %s but we are banned from that network; next attempt in %.0fs", self.server, remaining)
+            else:
+                logger.warning("Work queued for %s but we are banned from that network", self.server)
         if (
             not self._closing
             and self.loop.is_running()
@@ -519,6 +549,10 @@ class IRCBot(AioSimpleIRCClient):
         if normalized_channel in self.joined_channels:
             return
 
+        if not getattr(self.connection, "connected", False):
+            logger.warning("Not joining %s: not connected to %s", channel, self.server)
+            return
+
         self.pending_join_failures.pop(normalized_channel, None)
         self.connection.join(channel)
         logger.info("Try to join channel: %s", channel)
@@ -534,6 +568,13 @@ class IRCBot(AioSimpleIRCClient):
         normalized_channel = channel.lower()
         if normalized_channel not in self.joined_channels:
             # If the channel is empty or the bot is not in the channel, do nothing
+            return
+
+        if not getattr(self.connection, "connected", False):
+            # The server already dropped us; just forget the channel so pending
+            # work drains instead of failing to send PART.
+            logger.warning("Not parting %s: not connected to %s", channel, self.server)
+            del self.joined_channels[normalized_channel]
             return
 
         self.connection.part(channel, reason or "")
@@ -725,14 +766,22 @@ class IRCBot(AioSimpleIRCClient):
         # for join/part, so bump it here to keep the server from idling out.
         self.last_active = sent_at
         # Hold queued sends while the connection is down; the reconnect loop
-        # brings it back as long as work is pending.
-        while not getattr(self.connection, "connected", False):
-            if self._closing:
-                return
-            await asyncio.sleep(1)
-        # After a reconnect, wait for NickServ auth again (no-op without a
-        # configured password or when already authenticated).
-        await self._handle_authentication()
+        # brings it back as long as work is pending. Sending on a dead
+        # transport raises, so only proceed once both are healthy.
+        while True:
+            while not getattr(self.connection, "connected", False):
+                if self._closing:
+                    return
+                await asyncio.sleep(1)
+            # After a reconnect, wait for NickServ auth again (no-op without a
+            # configured password or when already authenticated). A timeout on
+            # a live connection is best-effort - some networks never enforce
+            # auth - while a dead transport sends us back to waiting.
+            if await self._handle_authentication():
+                break
+            if getattr(self.connection, "connected", False):
+                logger.warning("NickServ authentication not confirmed on %s - proceeding anyway", self.server)
+                break
         await handle_send_command(self, data)
         await self._wait_for_queued_transfer(nick, sent_at)
 
@@ -809,14 +858,24 @@ class IRCBot(AioSimpleIRCClient):
         if cooldown > 0:
             await asyncio.sleep(cooldown)
 
-    async def _handle_authentication(self) -> None:
-        """Handle NickServ authentication if required."""
+    async def _handle_authentication(self) -> bool:
+        """Handle NickServ authentication if required.
+
+        Returns:
+            bool: False if authentication was needed but never confirmed within
+                the timeout. The connection may still be alive (e.g. NickServ is
+                down on a network that doesn't enforce auth), so callers should
+                check it before deciding whether to proceed.
+
+        """
         if self.server_config.get("nickserv_password") and self.authenticated is False:
             logging.debug("Waiting for NickServ authentication")
             try:
                 await asyncio.wait_for(self.authenticated_event.wait(), timeout=10)
             except TimeoutError:
                 logger.error("Timed out waiting for NickServ authentication")
+                return False
+        return True
 
     def _expand_channels(self, channels: list[str]) -> dict[str, str]:
         """Expand a channel list with any configured also_join channels."""
@@ -842,6 +901,10 @@ class IRCBot(AioSimpleIRCClient):
 
         retry = 0
         for retry in range(10):
+            if not getattr(self.connection, "connected", False):
+                # join_channel() already warned; no confirmation can arrive
+                # while offline, so don't wait out the retry loop.
+                return
             for normalized in list(waiting_channels):
                 if normalized in self.joined_channels:
                     waiting_channels.pop(normalized, None)
@@ -924,12 +987,22 @@ class IRCBot(AioSimpleIRCClient):
         bypass this queue entirely — see `queue_send()`.
 
         """
-        await self._handle_authentication()
+        authenticated = await self._handle_authentication()
+        if not getattr(self.connection, "connected", False):
+            # Connection already dropped; on_welcome restarts this consumer once
+            # it is back, so don't issue JOINs on a dead transport.
+            return
+        if not authenticated:
+            # A dead consumer on a live connection strands all queued work, so
+            # proceed - NickServ auth is best-effort on unenforced networks.
+            logger.warning("NickServ authentication not confirmed on %s - proceeding anyway", self.server)
 
         # Rejoin channels still tracked from a previous connection - after a
         # reconnect joined_channels is already populated, so join_channel()
         # would skip them; issue raw JOINs here instead.
         for normalized in list(self.joined_channels):
+            if not getattr(self.connection, "connected", False):
+                break
             self.connection.join(normalized)
 
         channels = self.server_config.get("channels", [])
@@ -970,6 +1043,12 @@ class IRCBot(AioSimpleIRCClient):
         """
         logger.info("Connected to server: %s", self.server)
 
+        # Fully registered: the reconnect budget and backoff start fresh again.
+        self._banned = False
+        self._ban_retry_at = 0.0
+        self._reconnect_attempts = 0
+        self._reconnect_delay = RECONNECT_DELAY
+
         # Authenticate with NickServ
         if self.server_config.get("nickserv_password"):
             self.connection.privmsg("NickServ", f"IDENTIFY {self.server_config['nickserv_password']}")
@@ -980,6 +1059,20 @@ class IRCBot(AioSimpleIRCClient):
         if self._command_task is not None:
             self._command_task.cancel()
         self._command_task = asyncio.create_task(self.process_command_queue())
+
+    def on_yourebannedcreep(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
+        """Handle ERR_YOUREBANNEDCREEP (465): the network will not let us in.
+
+        Logs the ban reason once and puts the network on a cooldown, so a
+        permanent rejection doesn't turn into an endless connect/drop loop.
+
+        """
+        if connection is not self.connection:
+            return
+        self._banned = True
+        self._ban_retry_at = time.time() + RECONNECT_MAX_DELAY
+        reason = event.arguments[-1] if event.arguments else "no reason given"
+        logger.error("Banned from %s: %s - backing off before the next attempt", self.server, reason)
 
     def on_nicknameinuse(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle ERR_NICKNAMEINUSE (433) by retrying with a random nick.
