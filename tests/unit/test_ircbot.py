@@ -519,13 +519,13 @@ async def test_cleanup_keeps_channel_with_active_transfer(bot, mock_bot_manager)
             {"server": bot.server, "nick": "sender", "status": "in_progress"},
         ]
     }
-    bot.joined_channels = {"#test": 1.0}
-    bot.bot_channel_map["sender"] = {"#test"}
+    bot.joined_channels = {"#temp": 1.0}
+    bot.bot_channel_map["sender"] = {"#temp"}
 
     await bot.cleanup(channel_idle_timeout=1, resume_timeout=1)
 
     bot.connection.part.assert_not_called()
-    assert "#test" in bot.joined_channels
+    assert "#temp" in bot.joined_channels
 
 
 @pytest.mark.asyncio
@@ -537,13 +537,27 @@ async def test_cleanup_parts_channel_after_transfer_completes(bot, mock_bot_mana
             {"server": bot.server, "nick": "sender", "status": "completed"},
         ]
     }
-    bot.joined_channels = {"#test": 1.0}
-    bot.bot_channel_map["sender"] = {"#test"}
+    bot.joined_channels = {"#temp": 1.0}
+    bot.bot_channel_map["sender"] = {"#temp"}
 
     await bot.cleanup(channel_idle_timeout=1, resume_timeout=1)
 
     bot.connection.part.assert_called_once()
-    assert "#test" not in bot.joined_channels
+    assert "#temp" not in bot.joined_channels
+
+
+@pytest.mark.asyncio
+async def test_cleanup_never_parts_configured_channel(bot_factory, mock_bot_manager):
+    """Configured primary channels are permanent and never idle out."""
+    bot = bot_factory(server_config={"channels": ["#test"]}, manager=mock_bot_manager)
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {}
+    bot.joined_channels = {"#test": 1.0}
+
+    await bot.cleanup(channel_idle_timeout=1, resume_timeout=1)
+
+    bot.connection.part.assert_not_called()
+    assert "#test" in bot.joined_channels
 
 
 def test_on_privmsg_transfer_completed_accepts_uppercase_md5(bot, mock_bot_manager):

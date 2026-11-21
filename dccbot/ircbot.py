@@ -1615,7 +1615,7 @@ class IRCBot(AioSimpleIRCClient):
         if command == "VERSION":
             return f"VERSION {self.get_version()}"
         if command == "PING":
-            return f"PING {arg}".rstrip()
+            return f"PING {arg}" if arg else "PING"
         if command == "TIME":
             return f"TIME {time.ctime()}"
         if command == "CLIENTINFO":
@@ -2121,11 +2121,13 @@ class IRCBot(AioSimpleIRCClient):
                 if not isinstance(last_active, (int, float)) or now - last_active > channel_idle_timeout:
                     idle_channels.append(channel)
 
-            # Part idle channels. While disconnected there is no way to send
+            # Part idle channels. Configured primary channels are permanent
+            # and never idle out. While disconnected there is no way to send
             # PART (the server already dropped us) - just forget the channel
             # so pending work drains and the reconnect loop can give up.
+            primaries = {c.lower() for c in self.server_config.get("channels", [])}
             for channel in idle_channels:
-                if self._channel_has_active_transfer(channel):
+                if channel in primaries or self._channel_has_active_transfer(channel):
                     continue
                 if getattr(self.connection, "connected", False):
                     await self.part_channel(channel, "Idle timeout")
