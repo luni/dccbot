@@ -973,8 +973,13 @@ class IRCBot(AioSimpleIRCClient):
         self.transfer_handler._touch_nick(nick)
 
     def _update_channel_mapping(self, user: str, channels: list[str]) -> None:
-        """Update bot's channel mapping for a user and bump activity for the channels."""
-        self.bot_channel_map.setdefault(user, set()).update(channels)
+        """Update bot's channel mapping for a user and bump activity for the channels.
+
+        The mapping includes also_join channels so that transfer activity
+        keeps them from being parted by the idle cleanup while a download
+        is running.
+        """
+        self.bot_channel_map.setdefault(user, set()).update(self._expand_channels(channels))
         self._touch_channels_for_nick(user)
 
     async def _handle_join_command(self, data: dict[str, Any]) -> None:

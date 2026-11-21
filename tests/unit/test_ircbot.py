@@ -793,6 +793,16 @@ def test_update_channel_mapping_does_not_create_phantom_channels(bot):
     assert "#test2" not in bot.joined_channels
 
 
+def test_update_channel_mapping_includes_also_join(bot_factory):
+    """Test _update_channel_mapping expands also_join channels."""
+    bot = bot_factory(server_config={"also_join": {"#main": ["#extra"]}})
+    bot.joined_channels = {"#main": 1.0, "#extra": 1.0}
+    bot._update_channel_mapping("testuser", ["#main"])
+    assert bot.bot_channel_map["testuser"] == {"#main", "#extra"}
+    assert bot.joined_channels["#main"] > 1.0
+    assert bot.joined_channels["#extra"] > 1.0
+
+
 def test_update_channel_mapping_existing_user(bot):
     """Test _update_channel_mapping with existing user."""
     bot.joined_channels = {"#test1": 1.0, "#test2": 1.0}
