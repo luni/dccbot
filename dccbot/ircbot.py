@@ -927,6 +927,30 @@ class IRCBot(AioSimpleIRCClient):
                 expanded[normalized] = original
         return expanded
 
+    def _channel_has_active_transfer(self, normalized: str) -> bool:
+        """Return True when a mapped nick has a non-terminal transfer.
+
+        Used by cleanup() so a channel is not parted while a download is
+        queued, connecting, or in progress - even during quiet periods
+        with no traffic to refresh the idle timestamp.
+        """
+        nicks = {nick for nick, channels in self.bot_channel_map.items() if normalized in channels}
+        if not nicks:
+            return False
+        for transfers in self.bot_manager.transfers.values():
+            if not isinstance(transfers, list):
+                continue
+            for transfer in transfers:
+                if not isinstance(transfer, dict):
+                    continue
+                if (
+                    transfer.get("server") == self.server
+                    and (transfer.get("nick") or "").lower() in nicks
+                    and transfer.get("status") not in TERMINAL_TRANSFER_STATUSES
+                ):
+                    return True
+        return False
+
     def _forget_channel(self, normalized: str) -> None:
         """Drop a channel from joined_channels and all nick channel mappings.
 
@@ -2068,6 +2092,10 @@ class IRCBot(AioSimpleIRCClient):
         if self._maybe_handle_nickserv_auth(sender, message):
             return
 
+        # Traffic from a mapped XDCC bot counts as channel activity so slow
+        # queues do not idle out the channel before the DCC offer arrives.
+        self._touch_channels_for_nick(normalized_sender)
+
         self._handle_md5_completion(normalized_sender, message)
         self._handle_pack_announcement(normalized_sender, message)
         self._handle_send_denied(sender, message)
@@ -2097,6 +2125,8 @@ class IRCBot(AioSimpleIRCClient):
             # PART (the server already dropped us) - just forget the channel
             # so pending work drains and the reconnect loop can give up.
             for channel in idle_channels:
+                if self._channel_has_active_transfer(channel):
+                    continue
                 if getattr(self.connection, "connected", False):
                     await self.part_channel(channel, "Idle timeout")
                 else:

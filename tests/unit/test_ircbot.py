@@ -481,6 +481,71 @@ def test_on_privmsg_transfer_completed_normalizes_sparse_transfer(bot, mock_bot_
     assert transfer["filename"] == "movie.mkv"
 
 
+def test_on_privmsg_touches_mapped_channels(bot):
+    """Privmsgs from a mapped nick count as channel activity."""
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#test": 1.0}
+    bot.bot_channel_map["sender"] = {"#test"}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "Sender"
+    event.arguments = ["some message"]
+
+    bot.on_privmsg(bot.connection, event)
+
+    assert bot.joined_channels["#test"] > 1.0
+
+
+def test_on_privmsg_unmapped_nick_does_not_touch_channels(bot):
+    """Privmsgs from unmapped nicks leave channel timestamps alone."""
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#test": 1.0}
+    event = MagicMock()
+    event.source = MagicMock()
+    event.source.nick = "stranger"
+    event.arguments = ["some message"]
+
+    bot.on_privmsg(bot.connection, event)
+
+    assert bot.joined_channels["#test"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_channel_with_active_transfer(bot, mock_bot_manager):
+    """Idle channels with an in-flight transfer are not parted."""
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {
+        "file.mkv": [
+            {"server": bot.server, "nick": "sender", "status": "in_progress"},
+        ]
+    }
+    bot.joined_channels = {"#test": 1.0}
+    bot.bot_channel_map["sender"] = {"#test"}
+
+    await bot.cleanup(channel_idle_timeout=1, resume_timeout=1)
+
+    bot.connection.part.assert_not_called()
+    assert "#test" in bot.joined_channels
+
+
+@pytest.mark.asyncio
+async def test_cleanup_parts_channel_after_transfer_completes(bot, mock_bot_manager):
+    """Once the transfer is terminal the idle channel is parted normally."""
+    bot.connection = MagicMock()
+    mock_bot_manager.transfers = {
+        "file.mkv": [
+            {"server": bot.server, "nick": "sender", "status": "completed"},
+        ]
+    }
+    bot.joined_channels = {"#test": 1.0}
+    bot.bot_channel_map["sender"] = {"#test"}
+
+    await bot.cleanup(channel_idle_timeout=1, resume_timeout=1)
+
+    bot.connection.part.assert_called_once()
+    assert "#test" not in bot.joined_channels
+
+
 def test_on_privmsg_transfer_completed_accepts_uppercase_md5(bot, mock_bot_manager):
     """MD5 completion notices should accept uppercase hex and store lowercase."""
     bot.connection = MagicMock()
