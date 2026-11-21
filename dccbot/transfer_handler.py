@@ -7,7 +7,7 @@ import logging
 import os
 import struct
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import irc.client_aio
@@ -26,6 +26,9 @@ class TransferHandler:
     def __init__(self, bot: IRCBot) -> None:
         """Initialize transfer handler for a specific IRC bot instance."""
         self.bot = bot
+        # Lazily opened unbuffered output files, keyed by DCC connection.
+        # Opening per data chunk costs several syscalls on the hot path.
+        self._files: dict[AioDCCConnection, Any] = {}
 
     def _touch_nick(self, nick: str) -> None:
         """Bump activity timestamps for channels associated with a nick.
@@ -42,7 +45,15 @@ class TransferHandler:
                 self.bot.joined_channels[channel] = now
 
     def _touch_channel_activity(self, transfer: dict) -> None:
-        """Bump the activity timestamp for channels associated with this nick."""
+        """Bump the activity timestamp for channels associated with this nick.
+
+        Throttled to once per second - updating dict timestamps on every
+        data chunk is wasted work on the hot path.
+        """
+        now = time.time()
+        if now - transfer.get("last_channel_touch", 0) < 1:
+            return
+        transfer["last_channel_touch"] = now
         self._touch_nick(transfer["nick"])
 
     def _update_progress(self, transfer: dict) -> None:
@@ -73,6 +84,7 @@ class TransferHandler:
         transfer["status"] = status
         transfer["error"] = error
         transfer["connected"] = False
+        self._close_transfer_file(dcc)
         try:
             dcc.disconnect()
         except Exception:
@@ -104,11 +116,32 @@ class TransferHandler:
         self._abort_transfer(dcc, transfer, f"Invalid MIME type ({mime_type})")
         return False
 
+    def _get_transfer_file(self, dcc: AioDCCConnection, transfer: dict) -> Any:
+        """Return the lazily opened unbuffered output file for a transfer.
+
+        The file is opened once in raw mode (buffering=0) so each write()
+        still reaches the kernel immediately - same durability as the old
+        open/write/close-per-chunk path, minus the repeated open/close.
+        """
+        f = self._files.get(dcc)
+        if f is None:
+            f = open(transfer["file_path"], "ab", buffering=0)
+            self._files[dcc] = f
+        return f
+
+    def _close_transfer_file(self, dcc: AioDCCConnection) -> None:
+        """Close and drop the output file handle for a DCC connection."""
+        f = self._files.pop(dcc, None)
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                logger.exception("Error closing transfer file")
+
     def _write_chunk_or_disconnect(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> bool:
         """Append the chunk to the file or mark the transfer as failed."""
         try:
-            with open(transfer["file_path"], "ab") as f:
-                f.write(data)
+            self._get_transfer_file(dcc, transfer).write(data)
         except Exception as e:
             error = f"Error writing to file {transfer['file_path']}: {e}"
             logger.error(error)
@@ -201,6 +234,7 @@ class TransferHandler:
 
     def _finalize_transfer(self, dcc: AioDCCConnection, transfer: dict) -> None:
         """Check the output file and finalize the transfer state."""
+        self._close_transfer_file(dcc)
         if transfer.get("status") == "cancelled":
             self.bot.current_transfers.pop(dcc, None)
             return
@@ -230,6 +264,7 @@ class TransferHandler:
         dcc = connection
         if dcc not in self.bot.current_transfers:
             logger.debug("Received DCC disconnect from unknown connection")
+            self._close_transfer_file(dcc)
             return
 
         transfer = self.bot.current_transfers[dcc]
