@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from dccbot.aiodcc import AioDCCConnection
     from dccbot.ircbot import IRCBot
 from dccbot.extract import is_extractable
-from dccbot.transfers import get_incomplete_suffix, transfer_speeds
+from dccbot.transfers import TERMINAL_TRANSFER_STATUSES, get_incomplete_suffix, transfer_speeds
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ class TransferHandler:
         # Lazily opened unbuffered output files, keyed by DCC connection.
         # Opening per data chunk costs several syscalls on the hot path.
         self._files: dict[AioDCCConnection, Any] = {}
+        self._reserved_paths: set[str] = set()
 
     def _touch_nick(self, nick: str) -> None:
         """Bump activity timestamps for channels associated with a nick.
@@ -150,6 +151,44 @@ class TransferHandler:
                 f.close()
             except Exception:
                 logger.exception("Error closing transfer file")
+
+    def flush_transfer_files(self) -> None:
+        """Flush all open transfer files so on-disk sizes are current.
+
+        Required before resume bookkeeping reads file sizes from disk -
+        buffered bytes would otherwise make the resume offset too low.
+        """
+        for f in list(self._files.values()):
+            try:
+                f.flush()
+            except Exception:
+                logger.exception("Error flushing transfer file")
+
+    def path_in_use(self, path: str) -> bool:
+        """Return True when an active transfer is already writing this file."""
+        path = os.path.normpath(path)
+        if path in self._reserved_paths:
+            return True
+        for transfer in self.bot.current_transfers.values():
+            if (
+                isinstance(transfer, dict)
+                and os.path.normpath(transfer.get("file_path", "")) == path
+                and transfer.get("status") not in TERMINAL_TRANSFER_STATUSES
+            ):
+                return True
+        return False
+
+    def reserve_path(self, path: str) -> None:
+        """Reserve an output path until its transfer is registered.
+
+        Covers the window in passive DCC setup between the path check and
+        the transfer landing in ``current_transfers``.
+        """
+        self._reserved_paths.add(os.path.normpath(path))
+
+    def release_path(self, path: str) -> None:
+        """Drop a path reservation made by ``reserve_path``."""
+        self._reserved_paths.discard(os.path.normpath(path))
 
     def _write_chunk_or_disconnect(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> bool:
         """Append the chunk to the file or mark the transfer as failed."""

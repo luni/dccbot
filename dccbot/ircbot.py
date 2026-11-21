@@ -1389,6 +1389,9 @@ class IRCBot(AioSimpleIRCClient):
             candidates.append(local_download_path + incomplete_suffix)
             new_path = local_download_path + incomplete_suffix
 
+        # Buffered writes lag behind on disk; flush first so sizes are exact.
+        self.transfer_handler.flush_transfer_files()
+
         state = LocalFileState(new_path=new_path)
         for path in candidates:
             try:
@@ -1660,6 +1663,11 @@ class IRCBot(AioSimpleIRCClient):
         """
         nick = nick.lower()
 
+        # A second writer on the same path would interleave/corrupt the file.
+        if self.transfer_handler.path_in_use(download_path):
+            logger.warning("Rejected %s: file already being downloaded to %s", filename, download_path)
+            return
+
         dcc_msg = "Receiving file via DCC" if not use_ssl else "Receiving file via SSL DCC"
         logger.info("[%s] %s %s (connecting to %s:%d), size: %d bytes", nick, dcc_msg, filename, peer_address, peer_port, size)
 
@@ -1859,73 +1867,85 @@ class IRCBot(AioSimpleIRCClient):
             if not file_path and incomplete_suffix:
                 local_download_path += incomplete_suffix
 
-            # Ensure the download directory exists before the listener is
-            # bound and advertised to the peer so failures cannot leak it.
-            download_dir = os.path.dirname(local_download_path)
+            # A second writer on the same path would corrupt the file.
+            if self.transfer_handler.path_in_use(local_download_path):
+                logger.warning("Rejected %s: file already being downloaded to %s", filename, local_download_path)
+                dcc.disconnect()
+                return
+
+            # Reserve before the first await so a concurrent passive setup
+            # for the same path fails its own check.
+            self.transfer_handler.reserve_path(local_download_path)
             try:
-                if download_dir:
-                    os.makedirs(download_dir, exist_ok=True)
-            except OSError as e:
-                logger.error("[%s] Cannot create download directory for %s: %s", nick, filename, e)
-                dcc.disconnect()
-                return
+                # Ensure the download directory exists before the listener is
+                # bound and advertised to the peer so failures cannot leak it.
+                download_dir = os.path.dirname(local_download_path)
+                try:
+                    if download_dir:
+                        os.makedirs(download_dir, exist_ok=True)
+                except OSError as e:
+                    logger.error("[%s] Cannot create download directory for %s: %s", nick, filename, e)
+                    dcc.disconnect()
+                    return
 
-            try:
-                ssl_context = self._get_dcc_ssl_context(server=True) if use_ssl else None
-                if listen_ip and port_range:
-                    await dcc.listen(addr=listen_ip, port=port_range, ssl=ssl_context)
-                elif listen_ip:
-                    await dcc.listen(addr=listen_ip, ssl=ssl_context)
-                elif port_range:
-                    await dcc.listen(port=port_range, ssl=ssl_context)
-                else:
-                    await dcc.listen(ssl=ssl_context)
-            except Exception as e:
-                logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
-                dcc.disconnect()
-                return
+                try:
+                    ssl_context = self._get_dcc_ssl_context(server=True) if use_ssl else None
+                    if listen_ip and port_range:
+                        await dcc.listen(addr=listen_ip, port=port_range, ssl=ssl_context)
+                    elif listen_ip:
+                        await dcc.listen(addr=listen_ip, ssl=ssl_context)
+                    elif port_range:
+                        await dcc.listen(port=port_range, ssl=ssl_context)
+                    else:
+                        await dcc.listen(ssl=ssl_context)
+                except Exception as e:
+                    logger.error("[%s] Failed to start passive DCC listener for %s: %s", nick, filename, e)
+                    dcc.disconnect()
+                    return
 
-            if dcc.localaddress is None or dcc.localport is None:
-                logger.error("Passive DCC listen succeeded but localaddress/localport not set")
-                dcc.disconnect()
-                return
+                if dcc.localaddress is None or dcc.localport is None:
+                    logger.error("Passive DCC listen succeeded but localaddress/localport not set")
+                    dcc.disconnect()
+                    return
 
-            try:
-                ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
-                verb = "SSEND" if use_ssl else "SEND"
-                parts = [ip_numstr, str(dcc.localport), str(size)]
-                if token is not None:
-                    parts.append(str(token))
-                self.connection.ctcp_reply(nick, _format_dcc_message(verb, filename, *parts))
-            except Exception as e:
-                logger.error("[%s] Failed to advertise passive DCC listener for %s: %s", nick, filename, e)
-                dcc.disconnect()
-                return
-            logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
+                try:
+                    ip_numstr = irc.client.ip_quad_to_numstr(dcc.localaddress)
+                    verb = "SSEND" if use_ssl else "SEND"
+                    parts = [ip_numstr, str(dcc.localport), str(size)]
+                    if token is not None:
+                        parts.append(str(token))
+                    self.connection.ctcp_reply(nick, _format_dcc_message(verb, filename, *parts))
+                except Exception as e:
+                    logger.error("[%s] Failed to advertise passive DCC listener for %s: %s", nick, filename, e)
+                    dcc.disconnect()
+                    return
+                logger.info("[%s] Passive DCC listening on %s:%d for %s", nick, dcc.localaddress, dcc.localport, filename)
 
-            now = time.time()
-            transfer_item = create_transfer(
-                nick=nick,
-                server=self.server,
-                peer_address=dcc.localaddress,
-                peer_port=dcc.localport,
-                file_path=local_download_path,
-                filename=filename,
-                size=size,
-                offset=offset,
-                use_ssl=use_ssl,
-                completed=False,
-                now=now,
-            )
+                now = time.time()
+                transfer_item = create_transfer(
+                    nick=nick,
+                    server=self.server,
+                    peer_address=dcc.localaddress,
+                    peer_port=dcc.localport,
+                    file_path=local_download_path,
+                    filename=filename,
+                    size=size,
+                    offset=offset,
+                    use_ssl=use_ssl,
+                    completed=False,
+                    now=now,
+                )
 
-            # Merge with existing pending transfer if available
-            transfer_item = self._register_transfer(filename, transfer_item, now)
+                # Merge with existing pending transfer if available
+                transfer_item = self._register_transfer(filename, transfer_item, now)
 
-            self.current_transfers[dcc] = transfer_item
+                self.current_transfers[dcc] = transfer_item
 
-            timeout = self._get_passive_dcc_timeout()
-            if timeout > 0:
-                self.loop.create_task(self._wait_passive_timeout(dcc, transfer_item, timeout))
+                timeout = self._get_passive_dcc_timeout()
+                if timeout > 0:
+                    self.loop.create_task(self._wait_passive_timeout(dcc, transfer_item, timeout))
+            finally:
+                self.transfer_handler.release_path(local_download_path)
 
         self.loop.create_task(_setup())
 

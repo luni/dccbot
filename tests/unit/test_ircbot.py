@@ -1491,6 +1491,45 @@ def test_init_dcc_connection_preserves_pending_md5(bot, mock_bot_manager):
     mock_loop.create_task.assert_called_once()
 
 
+def test_init_dcc_connection_rejects_parallel_same_path(bot, mock_bot_manager):
+    """A second active transfer on the same file path is rejected."""
+    bot.bot_manager = mock_bot_manager
+    mock_bot_manager.transfers = {}
+    bot.dcc = MagicMock()
+    bot.loop = MagicMock()
+    bot._connect_dcc = MagicMock()
+
+    bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
+    assert bot.dcc.call_count == 1
+
+    # A different nick offering the same file path must not start a second writer.
+    bot.init_dcc_connection("other", "127.0.0.2", 5001, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
+    assert bot.dcc.call_count == 1
+
+
+def test_init_dcc_connection_allows_same_path_after_terminal(bot, mock_bot_manager):
+    """A path is free again once the earlier transfer is terminal."""
+    bot.bot_manager = mock_bot_manager
+    mock_bot_manager.transfers = {}
+    bot.dcc = MagicMock()
+    bot.loop = MagicMock()
+    bot._connect_dcc = MagicMock()
+
+    bot.init_dcc_connection("sender", "127.0.0.1", 5000, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
+    first = next(iter(bot.current_transfers.values()))
+    first["status"] = "failed"
+
+    bot.init_dcc_connection("other", "127.0.0.2", 5001, "test.txt", "/tmp/downloads/test.txt", 1024, 0, False, False)
+    assert bot.dcc.call_count == 2
+
+
+def test_local_file_state_flushes_transfer_files(bot, tmp_path):
+    """_local_file_state flushes buffered writers before scanning sizes."""
+    bot.transfer_handler.flush_transfer_files = MagicMock()
+    bot._local_file_state("test.txt", 1024)
+    bot.transfer_handler.flush_transfer_files.assert_called_once()
+
+
 def test_init_dcc_connection_creates_download_directory(bot, mock_bot_manager, tmp_path):
     """Test active DCC init creates the download directory if missing."""
     bot.connection = MagicMock()

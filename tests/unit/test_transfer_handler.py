@@ -989,3 +989,38 @@ def test_on_dccmsg_overshoot_mid_transfer_fails():
     assert "more data than declared" in transfer["error"]
     dcc.disconnect.assert_called_once()
     assert dcc not in bot.current_transfers
+
+
+def test_path_in_use_active_transfer():
+    """An in-flight transfer marks its output path as in use."""
+    dcc = MagicMock()
+    transfer = _make_transfer()
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+
+    assert handler.path_in_use("/tmp/file.bin")
+    assert handler.path_in_use("/tmp//file.bin")
+    assert not handler.path_in_use("/tmp/other.bin")
+
+
+def test_path_in_use_terminal_transfer_releases():
+    """Terminal transfers no longer hold their output path."""
+    dcc = MagicMock()
+    transfer = _make_transfer()
+    transfer["status"] = "failed"
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+
+    assert not handler.path_in_use("/tmp/file.bin")
+
+
+def test_path_in_use_reserved_path():
+    """Reserved paths (passive setup window) count as in use until released."""
+    bot = MagicMock()
+    bot.current_transfers = {}
+    handler = TransferHandler(bot)
+
+    handler.reserve_path("/tmp/file.bin")
+    assert handler.path_in_use("/tmp/file.bin")
+    handler.release_path("/tmp/file.bin")
+    assert not handler.path_in_use("/tmp/file.bin")
