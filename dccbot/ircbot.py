@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import math
 import os
+import platform
 import random
 import re
 import socket
@@ -41,6 +42,15 @@ SEND_QUEUE_EXPAND_MAX = 500
 
 RECONNECT_DELAY = 5.0
 RECONNECT_MAX_DELAY = 120.0
+
+# Version string reported by the simulated irssi client.
+IRSSI_VERSION = "1.4.5"
+
+# CTCP types the simulated irssi client claims to support.
+CTCP_CLIENTINFO = "ACTION DCC CLIENTINFO FINGER PING SOURCE TIME USERINFO VERSION"
+
+# Where a simulated irssi client points for CTCP SOURCE requests.
+IRSSI_SOURCE = "https://github.com/irssi/irssi"
 
 # X.509 verify codes for self-signed certificates.
 X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT = 18
@@ -261,10 +271,11 @@ class IRCBot(AioSimpleIRCClient):
     def get_version() -> str:
         """Return the bot version.
 
-        Used when answering a CTCP VERSION request.
+        Used when answering a CTCP VERSION request. The bot reports itself
+        as an irssi client to blend in with regular IRC users.
 
         """
-        return "dccbot 1.0"
+        return f"irssi v{IRSSI_VERSION} - running on {platform.system()} {platform.machine()}"
 
     @staticmethod
     def _generate_random_nick(base_nick: str) -> str:
@@ -1468,15 +1479,13 @@ class IRCBot(AioSimpleIRCClient):
     def on_ctcp(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Handle CTCP messages.
 
-        This method handles two types of CTCP messages: DCC and PING.
+        This method handles DCC messages as well as standard CTCP queries
+        (VERSION, PING, TIME, CLIENTINFO, FINGER, USERINFO, SOURCE), which
+        are answered like an irssi client would.
 
         The DCC message is sent by the server to the bot when the bot should
         accept a DCC file transfer. The message contains the file name, peer
         address, peer port, and file size.
-
-        The PING message is sent by the server to the bot when the server wants
-        the bot to respond with a CTCP PONG message. This is used to keep the
-        connection alive.
 
         Args:
             connection (irc.client_aio.AioConnection): The connection to the IRC server.
@@ -1489,8 +1498,13 @@ class IRCBot(AioSimpleIRCClient):
             logger.warning("Invalid DCC event: %s", event)
             return
 
-        # Only handle DCC messages
         if event.arguments[0] != "DCC":
+            reply = self._ctcp_reply(event)
+            if reply is not None:
+                nick = getattr(event.source, "nick", None) or ""
+                if nick:
+                    connection.ctcp_reply(nick, reply)
+                return
             return self.on_privmsg(connection, event)
 
         if len(event.arguments) < 2:
@@ -1510,6 +1524,38 @@ class IRCBot(AioSimpleIRCClient):
             return self.on_dcc_send(connection, event, use_ssl)
 
         logger.warning("Unknown DCC event: %s", event)
+
+    def _ctcp_reply(self, event: irc.client_aio.Event) -> str | None:
+        """Build a CTCP reply for a non-DCC CTCP request.
+
+        The replies mimic the defaults of an irssi client so the bot does
+        not stand out during anti-bot checks. Returns None for CTCP types
+        that are not handled.
+
+        Args:
+            event (irc.client_aio.Event): The CTCP event. ``arguments[0]``
+                holds the CTCP command and ``arguments[1]`` the optional
+                argument string.
+
+        """
+        command = event.arguments[0]
+        arg = event.arguments[1] if len(event.arguments) > 1 else ""
+
+        if command == "VERSION":
+            return f"VERSION {self.get_version()}"
+        if command == "PING":
+            return f"PING {arg}".rstrip()
+        if command == "TIME":
+            return f"TIME {time.ctime()}"
+        if command == "CLIENTINFO":
+            return f"CLIENTINFO {CTCP_CLIENTINFO}"
+        if command == "FINGER":
+            return f"FINGER {self.nick}"
+        if command == "USERINFO":
+            return f"USERINFO {self.nick}"
+        if command == "SOURCE":
+            return f"SOURCE {IRSSI_SOURCE}"
+        return None
 
     def init_dcc_connection(
         self,

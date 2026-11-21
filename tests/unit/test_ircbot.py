@@ -91,7 +91,7 @@ def test_ircbot_random_nick(bot_factory):
 def test_get_version():
     """Test get_version static method."""
     version = IRCBot.get_version()
-    assert "dccbot" in version.lower()
+    assert "irssi" in version.lower()
 
 
 def test_generate_random_nick():
@@ -803,14 +803,57 @@ def test_update_channel_mapping_existing_user(bot):
 
 
 def test_on_ctcp_non_dcc(bot):
-    """Test on_ctcp with non-DCC message."""
+    """Test on_ctcp with an unhandled non-DCC CTCP type."""
     bot.connection = MagicMock()
     event = MagicMock()
-    event.arguments = ["PING"]
+    event.arguments = ["SOUND"]
 
     with patch.object(bot, "on_privmsg") as mock_privmsg:
         bot.on_ctcp(bot.connection, event)
         mock_privmsg.assert_called_once()
+
+
+def test_on_ctcp_version(bot):
+    """Test on_ctcp replies to a VERSION request."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.arguments = ["VERSION"]
+    event.source.nick = "requester"
+
+    bot.on_ctcp(bot.connection, event)
+
+    bot.connection.ctcp_reply.assert_called_once()
+    nick, reply = bot.connection.ctcp_reply.call_args[0]
+    assert nick == "requester"
+    assert reply.startswith("VERSION ")
+    assert "irssi" in reply.lower()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_prefix"),
+    [
+        (["PING", "12345"], "PING 12345"),
+        (["PING"], "PING"),
+        (["TIME"], "TIME "),
+        (["CLIENTINFO"], "CLIENTINFO "),
+        (["FINGER"], "FINGER "),
+        (["USERINFO"], "USERINFO "),
+        (["SOURCE"], "SOURCE "),
+    ],
+)
+def test_on_ctcp_replies(bot, arguments, expected_prefix):
+    """Test on_ctcp replies to standard CTCP queries."""
+    bot.connection = MagicMock()
+    event = MagicMock()
+    event.arguments = arguments
+    event.source.nick = "requester"
+
+    bot.on_ctcp(bot.connection, event)
+
+    bot.connection.ctcp_reply.assert_called_once()
+    nick, reply = bot.connection.ctcp_reply.call_args[0]
+    assert nick == "requester"
+    assert reply.startswith(expected_prefix)
 
 
 def test_on_ctcp_invalid(bot):
