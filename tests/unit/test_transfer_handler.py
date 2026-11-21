@@ -400,7 +400,75 @@ def test_on_dccmsg_accumulates_bytes_across_chunks():
             handler.on_dccmsg(dcc, event)
 
     assert transfer["bytes_received"] == 6
+    # The second chunk arrived in the same burst - its ACK is coalesced.
+    handler._ack_flush_timeout(dcc, transfer)
     dcc.send_bytes.assert_called_with(struct.pack("!I", 6))
+
+
+def test_ack_coalescing_skips_burst_acks():
+    """Back-to-back chunks produce a single pending coalesced ACK."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=1 << 20)
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+
+    with patch("builtins.open", mock_open()):
+        for chunk in (b"a", b"b", b"c"):
+            event = MagicMock()
+            event.arguments = [chunk]
+            handler.on_dccmsg(dcc, event)
+
+    # First chunk ACKs immediately, the rest are coalesced.
+    assert dcc.send_bytes.call_count == 1
+    bot.loop.call_later.assert_called_once()
+
+    handler._ack_flush_timeout(dcc, transfer)
+    assert dcc.send_bytes.call_count == 2
+    dcc.send_bytes.assert_called_with(struct.pack("!I", 3))
+
+
+def test_ack_coalescing_disabled_when_sender_waits():
+    """A stalled flush disables coalescing for the transfer."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=1 << 20)
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+
+    with patch("builtins.open", mock_open()):
+        event = MagicMock()
+        event.arguments = [b"a"]
+        handler.on_dccmsg(dcc, event)
+        event.arguments = [b"b"]
+        handler.on_dccmsg(dcc, event)
+
+    # Simulate the flush firing after the burst ended with no new chunk.
+    transfer["last_chunk_time"] = time.time() - 1
+    handler._ack_flush_timeout(dcc, transfer)
+    assert transfer["no_ack_coalesce"] is True
+
+    # Next chunk ACKs immediately again.
+    transfer["last_chunk_time"] = time.time() - 0.001
+    dcc.send_bytes.reset_mock()
+    with patch("builtins.open", mock_open()):
+        event.arguments = [b"c"]
+        handler.on_dccmsg(dcc, event)
+    dcc.send_bytes.assert_called_once()
+
+
+def test_ack_final_chunk_always_sent_immediately():
+    """The completing chunk ACKs without waiting for a flush."""
+    dcc = MagicMock()
+    transfer = _make_transfer(size=4)
+    bot = _make_bot_with_transfer(dcc, transfer)
+    handler = TransferHandler(bot)
+
+    with patch("builtins.open", mock_open()):
+        for chunk in (b"ab", b"cd"):
+            event = MagicMock()
+            event.arguments = [chunk]
+            handler.on_dccmsg(dcc, event)
+
+    dcc.send_bytes.assert_called_with(struct.pack("!I", 4))
 
 
 def test_on_dccmsg_passes_chunk_data_to_mime_check():

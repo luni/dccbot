@@ -19,6 +19,16 @@ from dccbot.transfers import get_incomplete_suffix, transfer_speeds
 
 logger = logging.getLogger(__name__)
 
+# Chunks arriving faster than this mean the sender is streaming without
+# waiting for individual ACKs, so ACKs (which are cumulative) can be
+# coalesced into a trailing flush.
+ACK_COALESCE_WINDOW = 0.002
+ACK_FLUSH_DELAY = 0.02
+
+# User-space write buffer: chunks are small, so accumulating them
+# cuts the number of write() syscalls substantially.
+FILE_WRITE_BUFFER_SIZE = 256 * 1024
+
 
 class TransferHandler:
     """Encapsulates DCC transfer data path behavior."""
@@ -61,6 +71,9 @@ class TransferHandler:
         if transfer["size"] <= 0:
             return
         now = time.time()
+        if now - transfer.get("last_progress_check", 0.0) < 0.5:
+            return
+        transfer["last_progress_check"] = now
         percent = int(100 * (transfer["bytes_received"] + transfer["offset"]) / transfer["size"])
         if transfer["percent"] + 10 > percent and now - transfer["last_progress_update"] < 5:
             return
@@ -117,15 +130,15 @@ class TransferHandler:
         return False
 
     def _get_transfer_file(self, dcc: AioDCCConnection, transfer: dict) -> Any:
-        """Return the lazily opened unbuffered output file for a transfer.
+        """Return the lazily opened buffered output file for a transfer.
 
-        The file is opened once in raw mode (buffering=0) so each write()
-        still reaches the kernel immediately - same durability as the old
-        open/write/close-per-chunk path, minus the repeated open/close.
+        The file is opened once with a large user-space buffer. At most
+        FILE_WRITE_BUFFER_SIZE bytes stay unflushed, which resume handles
+        fine (the resume offset comes from the on-disk file size).
         """
         f = self._files.get(dcc)
         if f is None:
-            f = open(transfer["file_path"], "ab", buffering=0)
+            f = open(transfer["file_path"], "ab", buffering=FILE_WRITE_BUFFER_SIZE)
             self._files[dcc] = f
         return f
 
@@ -150,7 +163,45 @@ class TransferHandler:
         return True
 
     def _send_ack(self, dcc: AioDCCConnection, transfer: dict) -> None:
-        """Send the appropriate 32- or 64-bit acknowledgement."""
+        """Acknowledge received bytes, coalescing ACKs during bursts.
+
+        DCC ACKs are cumulative, so while chunks arrive in a burst the
+        next ACK fully supersedes a skipped one. The trailing flush
+        guarantees a final ACK; if it fires and no new chunk arrived,
+        the sender was probably waiting for ACKs and coalescing is
+        disabled for the rest of this transfer.
+        """
+        ack = transfer["bytes_received"] + transfer["offset"]
+        complete = transfer["size"] > 0 and ack >= transfer["size"]
+        now = time.time()
+        last_chunk = transfer.get("last_chunk_time", 0.0)
+        transfer["last_chunk_time"] = now
+
+        if (
+            not complete
+            and not transfer.get("no_ack_coalesce")
+            and last_chunk
+            and now - last_chunk < ACK_COALESCE_WINDOW
+        ):
+            if transfer.get("ack_flush_handle") is None:
+                transfer["ack_flush_handle"] = self.bot.loop.call_later(
+                    ACK_FLUSH_DELAY, self._ack_flush_timeout, dcc, transfer
+                )
+            return
+        self._do_ack(dcc, transfer)
+
+    def _ack_flush_timeout(self, dcc: AioDCCConnection, transfer: dict) -> None:
+        """Send a coalesced ACK after the burst pauses."""
+        transfer["ack_flush_handle"] = None
+        if time.time() - transfer.get("last_chunk_time", 0.0) >= ACK_FLUSH_DELAY * 0.5:
+            transfer["no_ack_coalesce"] = True
+        self._do_ack(dcc, transfer)
+
+    def _do_ack(self, dcc: AioDCCConnection, transfer: dict) -> None:
+        """Send the appropriate 32- or 64-bit acknowledgement now."""
+        handle = transfer.pop("ack_flush_handle", None)
+        if handle is not None:
+            handle.cancel()
         ack = transfer["bytes_received"] + transfer["offset"]
         if transfer["size"] >= 1024 * 1024 * 1024 * 4:
             dcc.send_bytes(struct.pack("!Q", ack))
