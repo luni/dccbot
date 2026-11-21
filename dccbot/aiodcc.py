@@ -3,6 +3,7 @@ import logging
 import socket
 import ssl
 from asyncio.transports import Transport
+from typing import Any
 
 import irc.client
 import irc.client_aio
@@ -89,6 +90,9 @@ class AioDCCConnection(irc.client.DCCConnection):
     connected: bool
     peeraddress: str
     peerport: int
+    # Optional fast-path callback invoked as raw_handler(dcc, chunk) for
+    # every received data chunk, bypassing the irc event machinery.
+    raw_handler: Any = None
 
     async def connect(  # type: ignore
         self, address: str, port: int, connect_factory: irc.connection.AioFactory | None = None, transfer_item: dict | None = None
@@ -274,6 +278,20 @@ class AioDCCConnection(irc.client.DCCConnection):
                 return
         else:
             chunks = [new_data]
+
+        # Fast path for file transfers: deliver the chunk straight to the
+        # registered handler, skipping Event creation and the reactor's
+        # mutex/sorted dispatch. Per-chunk overhead adds up at high rates.
+        raw_handler = getattr(self, "raw_handler", None)
+        if raw_handler is not None:
+            for chunk in chunks:
+                try:
+                    raw_handler(self, chunk)
+                except Exception:
+                    log.exception("Error handling DCC event")
+                    self.disconnect()
+                    return
+            return
 
         command = "dccmsg"
         prefix = self.peeraddress

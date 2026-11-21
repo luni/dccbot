@@ -1674,6 +1674,7 @@ class IRCBot(AioSimpleIRCClient):
 
         # Create a new DCC connection
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
+        dcc.raw_handler = self.transfer_handler.on_raw_chunk
 
         try:
             if use_ssl:
@@ -1850,6 +1851,7 @@ class IRCBot(AioSimpleIRCClient):
         logger.info("[%s] Setting up passive DCC for %s, size: %d bytes", nick, filename, size)
 
         dcc: AioDCCConnection = self.dcc("raw")  # type: ignore
+        dcc.raw_handler = self.transfer_handler.on_raw_chunk
 
         async def _setup() -> None:
             local_download_path = file_path or os.path.join(self.download_path, filename)

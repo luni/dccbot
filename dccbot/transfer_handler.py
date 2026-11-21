@@ -157,17 +157,26 @@ class TransferHandler:
         else:
             dcc.send_bytes(struct.pack("!I", ack))
 
-    def on_dccmsg(self, connection: AioDCCConnection, event: irc.client_aio.Event) -> None:
-        """Handle incoming DCC data chunk."""
-        dcc = connection
-        if dcc not in self.bot.current_transfers:
-            logger.debug("Received DCC message from unknown connection")
-            return
+    def on_raw_chunk(self, dcc: AioDCCConnection, data: bytes) -> None:
+        """Handle a DCC data chunk on the fast path.
 
-        transfer = self.bot.current_transfers[dcc]
+        Registered as ``dcc.raw_handler`` so process_data() can deliver
+        chunks directly, bypassing irc Event/dispatcher machinery.
+        """
+        transfer = self.bot.current_transfers.get(dcc)
+        if transfer is None:
+            logger.debug("Received DCC data from unknown connection")
+            return
         transfer["connected"] = True
         transfer["status"] = "in_progress"
-        data = event.arguments[0]
+        self._handle_chunk(dcc, transfer, data)
+
+    def on_dccmsg(self, connection: AioDCCConnection, event: irc.client_aio.Event) -> None:
+        """Handle incoming DCC data chunk."""
+        self.on_raw_chunk(connection, event.arguments[0])
+
+    def _handle_chunk(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> None:
+        """Validate, write, and acknowledge one DCC data chunk."""
 
         # A peer sending more than the declared size would grow the file
         # unboundedly and overflow the 32-bit acknowledgement. Abort instead.
