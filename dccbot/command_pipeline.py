@@ -39,9 +39,13 @@ async def handle_send_command(bot: IRCBot, data: dict[str, Any]) -> None:
 
 
 async def handle_part_command(bot: IRCBot, data: dict[str, Any]) -> None:
-    """Handle part command by parting specified channels."""
+    """Handle part command by parting specified channels.
+
+    also_join channels attached to a parted primary are parted too, unless
+    another joined primary or the server config still claims them.
+    """
     if data.get("channels"):
-        for channel in data["channels"]:
+        for channel in bot._expand_part_channels(data["channels"]).values():
             await bot.part_channel(channel, data.get("reason"))
 
 

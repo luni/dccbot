@@ -585,13 +585,13 @@ class IRCBot(AioSimpleIRCClient):
             # The server already dropped us; just forget the channel so pending
             # work drains instead of failing to send PART.
             logger.warning("Not parting %s: not connected to %s", channel, self.server)
-            del self.joined_channels[normalized_channel]
+            self._forget_channel(normalized_channel)
             return
 
         self.connection.part(channel, reason or "")
         logger.info("Parted channel: %s (%s)", channel, reason)
         self.last_active = time.time()
-        del self.joined_channels[normalized_channel]
+        self._forget_channel(normalized_channel)
 
     async def queue_command(self, data: dict) -> None:
         """Queue a command to be processed by the bot.
@@ -899,6 +899,46 @@ class IRCBot(AioSimpleIRCClient):
                 expanded[also_join_channel.lower()] = also_join_channel
         return expanded
 
+    def _expand_part_channels(self, channels: list[str]) -> dict[str, str]:
+        """Expand a part list with also_join channels that are no longer needed.
+
+        An also_join channel is only parted along with its primary when no
+        other still-joined primary claims it and it is not a configured
+        primary channel itself.
+        """
+        expanded = {channel.lower(): channel for channel in channels}
+        also_join = self.server_config.get("also_join", {})
+        primaries = {channel.lower() for channel in self.server_config.get("channels", [])}
+
+        extras: dict[str, str] = {}
+        for channel in channels:
+            for extra in also_join.get(channel.lower(), []):
+                extras[extra.lower()] = extra
+
+        for normalized, original in extras.items():
+            if normalized in primaries:
+                continue
+            shared = any(
+                normalized in {e.lower() for e in extra_channels}
+                for primary, extra_channels in also_join.items()
+                if primary in self.joined_channels and primary not in expanded
+            )
+            if not shared:
+                expanded[normalized] = original
+        return expanded
+
+    def _forget_channel(self, normalized: str) -> None:
+        """Drop a channel from joined_channels and all nick channel mappings.
+
+        Keeping stale mappings would let nick activity keep parted or kicked
+        also_join channels artificially warm and never idle out.
+        """
+        self.joined_channels.pop(normalized, None)
+        for nick in [n for n, chans in self.bot_channel_map.items() if normalized in chans]:
+            self.bot_channel_map[nick].discard(normalized)
+            if not self.bot_channel_map[nick]:
+                del self.bot_channel_map[nick]
+
     async def _join_channels(self, channels: list[str]) -> None:
         """Join specified channels and wait for confirmation.
 
@@ -1019,6 +1059,8 @@ class IRCBot(AioSimpleIRCClient):
         for normalized in list(self.joined_channels):
             if not getattr(self.connection, "connected", False):
                 break
+            if normalized in self.banned_channels:
+                continue
             self.connection.join(normalized)
 
         channels = self.server_config.get("channels", [])
@@ -1181,7 +1223,7 @@ class IRCBot(AioSimpleIRCClient):
         channel_name = event.target.lower()
         if channel_name in self.joined_channels:
             logger.info("Left channel %s: %s", event.target, event.arguments)
-            del self.joined_channels[channel_name]
+            self._forget_channel(channel_name)
 
     def on_join(self, connection: AioConnection, event: irc.client_aio.Event) -> None:
         """Process operations after receiving a JOIN message from the server.
@@ -1219,7 +1261,7 @@ class IRCBot(AioSimpleIRCClient):
         logger.info("Kicked from channel %s: %s", event.target, event.arguments)
         channel_name = event.target.lower()
         if channel_name in self.joined_channels:
-            del self.joined_channels[channel_name]
+            self._forget_channel(channel_name)
 
     @staticmethod
     def is_valid_filename(path: str, filename: str) -> bool:
@@ -2058,7 +2100,7 @@ class IRCBot(AioSimpleIRCClient):
                 if getattr(self.connection, "connected", False):
                     await self.part_channel(channel, "Idle timeout")
                 else:
-                    del self.joined_channels[channel]
+                    self._forget_channel(channel)
 
         for _, resume_queue in self.resume_queue.items():
             for resume_item in list(resume_queue):

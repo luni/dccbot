@@ -775,6 +775,64 @@ async def test_handle_part_command(bot):
     bot.connection.part.assert_called_once_with("#test", "Goodbye")
 
 
+@pytest.mark.asyncio
+async def test_handle_part_command_parts_also_join(bot_factory):
+    """Test part command also parts also_join channels of the primary."""
+    bot = bot_factory(server_config={"also_join": {"#main": ["#extra"]}})
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#main": 1.0, "#extra": 1.0}
+
+    await bot._handle_part_command({"channels": ["#main"]})
+
+    parted = {call.args[0] for call in bot.connection.part.call_args_list}
+    assert parted == {"#main", "#extra"}
+    assert "#extra" not in bot.joined_channels
+
+
+@pytest.mark.asyncio
+async def test_handle_part_command_keeps_shared_also_join(bot_factory):
+    """Test part command keeps an also_join channel claimed by another joined primary."""
+    bot = bot_factory(server_config={"also_join": {"#main": ["#extra"], "#other": ["#extra"]}})
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#main": 1.0, "#other": 1.0, "#extra": 1.0}
+
+    await bot._handle_part_command({"channels": ["#main"]})
+
+    parted = {call.args[0] for call in bot.connection.part.call_args_list}
+    assert parted == {"#main"}
+    assert "#extra" in bot.joined_channels
+
+
+@pytest.mark.asyncio
+async def test_handle_part_command_keeps_configured_primary(bot_factory):
+    """Test part command keeps an also_join channel that is a configured channel."""
+    bot = bot_factory(server_config={"channels": ["#extra"], "also_join": {"#main": ["#extra"]}})
+    bot.connection = MagicMock()
+    bot.joined_channels = {"#main": 1.0, "#extra": 1.0}
+
+    await bot._handle_part_command({"channels": ["#main"]})
+
+    parted = {call.args[0] for call in bot.connection.part.call_args_list}
+    assert parted == {"#main"}
+    assert "#extra" in bot.joined_channels
+
+
+def test_forget_channel_clears_nick_mappings(bot):
+    """Test _forget_channel removes the channel from bot_channel_map."""
+    bot.joined_channels = {"#main": 1.0, "#extra": 1.0}
+    bot.bot_channel_map["testuser"] = {"#main", "#extra"}
+    bot.bot_channel_map["otheruser"] = {"#other"}
+
+    bot._forget_channel("#main")
+
+    assert bot.bot_channel_map["testuser"] == {"#extra"}
+    assert bot.bot_channel_map["otheruser"] == {"#other"}
+
+    bot._forget_channel("#extra")
+
+    assert "testuser" not in bot.bot_channel_map
+
+
 def test_update_channel_mapping(bot):
     """Test _update_channel_mapping only touches channels the bot has joined."""
     bot.joined_channels = {"#test1": 1.0, "#test2": 1.0}
