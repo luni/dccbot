@@ -7,7 +7,7 @@ import logging
 import os
 import struct
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, BinaryIO
 
 if TYPE_CHECKING:
     import irc.client_aio
@@ -38,7 +38,7 @@ class TransferHandler:
         self.bot = bot
         # Lazily opened unbuffered output files, keyed by DCC connection.
         # Opening per data chunk costs several syscalls on the hot path.
-        self._files: dict[AioDCCConnection, Any] = {}
+        self._files: dict[AioDCCConnection, BinaryIO] = {}
         self._reserved_paths: set[str] = set()
 
     def _touch_nick(self, nick: str) -> None:
@@ -130,7 +130,7 @@ class TransferHandler:
         self._abort_transfer(dcc, transfer, f"Invalid MIME type ({mime_type})")
         return False
 
-    def _get_transfer_file(self, dcc: AioDCCConnection, transfer: dict) -> Any:
+    def _get_transfer_file(self, dcc: AioDCCConnection, transfer: dict) -> BinaryIO:
         """Return the lazily opened buffered output file for a transfer.
 
         The file is opened once with a large user-space buffer. At most
@@ -216,16 +216,9 @@ class TransferHandler:
         last_chunk = transfer.get("last_chunk_time", 0.0)
         transfer["last_chunk_time"] = now
 
-        if (
-            not complete
-            and not transfer.get("no_ack_coalesce")
-            and last_chunk
-            and now - last_chunk < ACK_COALESCE_WINDOW
-        ):
+        if not complete and not transfer.get("no_ack_coalesce") and last_chunk and now - last_chunk < ACK_COALESCE_WINDOW:
             if transfer.get("ack_flush_handle") is None:
-                transfer["ack_flush_handle"] = self.bot.loop.call_later(
-                    ACK_FLUSH_DELAY, self._ack_flush_timeout, dcc, transfer
-                )
+                transfer["ack_flush_handle"] = self.bot.loop.call_later(ACK_FLUSH_DELAY, self._ack_flush_timeout, dcc, transfer)
             return
         self._do_ack(dcc, transfer)
 
@@ -267,7 +260,6 @@ class TransferHandler:
 
     def _handle_chunk(self, dcc: AioDCCConnection, transfer: dict, data: bytes) -> None:
         """Validate, write, and acknowledge one DCC data chunk."""
-
         # A peer sending more than the declared size would grow the file
         # unboundedly and overflow the 32-bit acknowledgement. Abort instead.
         expected = transfer["size"] - transfer["offset"] - transfer["bytes_received"]
